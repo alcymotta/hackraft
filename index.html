@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hackraft</title>
+  <!-- Ícone da aba: bloquinho de grama pixelado (SVG embutido) -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Crect width='8' height='8' fill='%238b5a2b'/%3E%3Crect width='8' height='3' fill='%234caf3a'/%3E%3Crect y='3' width='1' height='1' fill='%234caf3a'/%3E%3Crect x='3' y='3' width='2' height='1' fill='%234caf3a'/%3E%3Crect x='7' y='3' width='1' height='1' fill='%234caf3a'/%3E%3Crect x='2' y='5' width='1' height='1' fill='%236b4220'/%3E%3Crect x='5' y='6' width='1' height='1' fill='%236b4220'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+  <!-- O importmap precisa vir ANTES do script de módulo -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- O mundo 3D é desenhado aqui -->
+  <canvas id="tela"></canvas>
+
+  <!-- Tom azul quando a câmera está debaixo d'água -->
+  <div id="submerso" class="oculto"></div>
+
+  <!-- Mira no centro -->
+  <div id="mira"></div>
+
+  <!-- Debug (F3) -->
+  <pre id="debug" class="oculto"></pre>
+
+  <!-- Aviso que some sozinho -->
+  <div id="mensagem" class="oculto"></div>
+
+  <!-- Hotbar -->
+  <div id="hud-inferior">
+    <div id="nome-item"></div>
+    <div id="hotbar" class="grade-espacos"></div>
+  </div>
+
+  <!-- Inventário (tecla E) -->
+  <div id="inventario" class="fundo-tela oculto">
+    <div class="painel painel-inventario">
+      <h2 class="titulo-painel">Inventário</h2>
+      <div id="inv-grade" class="grade-espacos"></div>
+      <div class="separador"></div>
+      <div id="inv-hotbar" class="grade-espacos"></div>
+    </div>
+  </div>
+  <!-- Nome do item sob o mouse -->
+  <div id="dica" class="oculto"></div>
+  <!-- Pilha "na mão", que segue o mouse -->
+  <div id="mao" class="oculto"></div>
+
+  <!-- Tela inicial -->
+  <div id="tela-inicial" class="fundo-tela oculto">
+    <div class="conteudo-central">
+      <h1 class="logo">HACKRAFT</h1>
+      <p class="subtitulo">Construa, explore e divirta-se!</p>
+      <div class="botoes">
+        <button id="btn-jogar" class="botao">Jogar</button>
+        <button id="btn-novo-inicial" class="botao">Novo mundo</button>
+      </div>
+      <div class="painel caixa-controles">
+        <h3>Controles</h3>
+        <ul class="lista-controles"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tela de pausa -->
+  <div id="tela-pausa" class="fundo-tela oculto">
+    <div class="conteudo-central">
+      <h1 class="titulo-pausa">Jogo pausado</h1>
+      <div class="botoes">
+        <button id="btn-continuar" class="botao">Continuar</button>
+      </div>
+      <div class="painel linha-volume">
+        <label for="volume">Volume</label>
+        <input id="volume" type="range" min="0" max="100" step="1" value="70">
+        <button id="btn-mudo" class="botao botao-pequeno">Som ligado</button>
+      </div>
+      <div class="botoes">
+        <button id="btn-novo-pausa" class="botao">Novo mundo</button>
+      </div>
+      <div class="painel caixa-controles">
+        <h3>Controles</h3>
+        <ul class="lista-controles"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Carregando -->
+  <div id="carregando">
+    <p id="carregando-texto">Carregando...</p>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+  <script>
+    // Bloqueia o menu do botão direito na página toda
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
+  </script>
+</body>
+</html>

@@ -18,10 +18,15 @@ export const CONFIG = {
   ALTURA_MUNDO: 96,         // altura máxima do mundo, em blocos
   NIVEL_MAR: 30,            // altura da água dos lagos e mares
   DISTANCIA_RENDER: 6,      // quantos chunks em volta do jogador ficam visíveis
-  CHUNKS_POR_QUADRO: 2,     // quantos chunks são montados por quadro (mais = carrega rápido, mas pode travar)
+  CHUNKS_POR_QUADRO: 3,     // quantos chunks são montados por quadro (mais = carrega rápido, mas pode travar)
   NEVOA_INICIO: 0.55,       // a névoa começa nesta fração da distância visível
   NEVOA_FIM: 0.95,          // e fica total nesta fração
   CAMERA_LONGE: 1000,       // até onde a câmera enxerga (o céu fica dentro disso)
+  ORCAMENTO_CHUNKS_MS: 8,   // tempo máximo (milissegundos) por quadro gasto montando chunks
+  LUZ_CAVERNA: 0.3,         // brilho mínimo dentro de cavernas (0 = escuro total)
+  LUZ_MINIMA_BLOCOS: 0.04,  // brilho mínimo dos blocos, mesmo no escuro
+  ALFA_AGUA: 0.7,           // opacidade da água (1 = opaca)
+  AFUNDAR_AGUA: 0.1,        // quanto a superfície da água fica abaixo do topo do bloco
 
   // ----- Jogador -----
   GRAVIDADE: 28,            // blocos por segundo², puxando para baixo
@@ -35,7 +40,19 @@ export const CONFIG = {
   ALTURA_OLHOS: 1.62,
   SENSIBILIDADE_MOUSE: 0.0022,
   CAMPO_DE_VISAO: 75,       // em graus
-  DISTANCIA_3A_PESSOA: 4,   // distância da câmera na terceira pessoa (F5)
+  DISTANCIA_3A_PESSOA: 4,   // distância da câmera na terceira pessoa (tecla V ou F5)
+  INTERVALO_COLOCAR: 0.25,  // segundos entre blocos colocados segurando o botão direito
+  ESPERA_APOS_QUEBRAR: 0.15, // pausa (segundos) depois de quebrar um bloco
+  INTERVALO_GOLPE: 0.25,    // segundos entre os sons de golpe ao quebrar
+  DISTANCIA_PASSO: 2.0,     // blocos andados entre um som de passo e outro
+  ACEL_CHAO: 60,            // quão rápido o jogador ganha velocidade no chão
+  ACEL_AR: 15,              // idem, no ar (menos controle)
+  ACEL_AGUA: 20,            // idem, na água
+  GRAVIDADE_AGUA: 6,        // gravidade dentro da água (bem menor)
+  ARRASTO_AGUA: 3,          // freio vertical da água
+  VEL_SUBIR_AGUA: 3.5,      // velocidade de subida nadando (Space)
+  VEL_MAX_QUEDA: 55,        // velocidade máxima de queda
+  Y_ABISMO: -10,            // abaixo disso o jogador volta ao ponto de nascimento
 
   // ----- Inventário -----
   TAMANHO_PILHA: 64,        // quantos itens iguais cabem num espaço

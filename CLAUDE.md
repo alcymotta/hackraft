@@ -125,12 +125,12 @@ Esta seção é a "combinação" entre os módulos. Quem escreve um módulo segu
 - Arquivos opcionais: `assets/sounds/sons.json` mapeia um evento (`"passo_grama"`, `"quebrar_pedra"`, ...) para uma lista de arquivos. O que estiver faltando é sintetizado com WebAudio.
 
 ### player.js
-`export class Jogador` com `constructor({ camera, scene, mundo, inventario, ui, som, personagem })`:
+`export class Jogador` com `constructor({ camera, scene, mundo, inventario, ui, som, personagem, texturas })` (`texturas` é usado para as rachaduras):
 - `posicao` (`Vector3`, nos pés), `velocidade`, `yaw`, `pitch`, `noChao`, `naAgua`, `modoCamera` (`'primeira'` ou `'terceira'`)
 - `atualizar(dt)`
 - `teletransportar(x, y, z)`
 - `serializar()` → `{ pos: [x, y, z], yaw, pitch }`; `carregar(dados)`
-- Trata WASD, espaço (pular/nadar), Shift (correr), F5 (câmera) e os botões do mouse. Só age quando `ui.mouseTravado && !ui.menuAberto`.
+- Trata WASD, espaço (pular/nadar), Shift (correr), V ou F5 (câmera; em notebooks o F5 pode ser o "Atualizar" do sistema, que não dá para bloquear) e os botões do mouse. Só age quando `ui.mouseTravado && !ui.menuAberto`.
 
 ### save.js
 `salvarJogo(estado)`, `carregarJogo()` → estado ou `null`, `apagarJogo()`. Chave: `CONFIG.CHAVE_SAVE`.
@@ -151,7 +151,7 @@ Cria o renderer (canvas `#tela`, sem antialias, pixelRatio ≤ 2), a cena e a c�
 
 ## Fases
 - [x] Fase 0: preparação (agentes, /planejar, Git, estrutura)
-- [ ] Fase 1: mundo e movimento
+- [x] Fase 1: mundo e movimento
 - [ ] Fase 2: multiplayer
 - [ ] Fase 3: personagem e roupinhas
 - [ ] Fase 4: chat e comandos (+ /hacker)

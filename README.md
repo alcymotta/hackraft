@@ -21,7 +21,7 @@ Abrir o `index.html` com duplo clique não funciona.
 - **Botão direito**: colocar bloco
 - **1-9** ou **roda do mouse**: escolher o bloco da barra
 - **E**: abrir/fechar o inventário
-- **F5**: trocar a câmera
+- **V** (ou **F5**): trocar a câmera. Em alguns notebooks o F5 recarrega a página; nesse caso use o V ou **Fn+F5**.
 - **F3**: mostrar informações (debug)
 - **M**: mudo
 - **Esc**: pausar
