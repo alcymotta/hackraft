@@ -1,0 +1,4 @@
+{
+  "_leia": "Para trocar uma textura gerada por um PNG seu, coloque assets/textures/<nome>.png (ex.: pedra.png, 16x16) e acrescente o nome na lista substituir.",
+  "substituir": []
+}

@@ -1,0 +1,3 @@
+{
+  "_leia": "Mapeie cada evento para uma lista de arquivos .ogg desta pasta. Exemplo: \"passo_grama\": [\"assets/sounds/footstep_grass_000.ogg\"]. Eventos: passo_<tipo>, quebrar_<tipo>, colocar_<tipo>, golpe_<tipo>; tipos: grama, terra, pedra, areia, madeira, folhas, agua. O que faltar é sintetizado pelo jogo."
+}
