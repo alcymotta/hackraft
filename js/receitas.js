@@ -13,6 +13,8 @@ export const RECEITAS = [
   { id: 'porta', resultado: { item: 'porta', qtd: 1 }, ingredientes: [{ item: 'tabuas', qtd: 6 }] },
   { id: 'vidro', resultado: { item: 'vidro', qtd: 1 }, ingredientes: [{ item: 'areia', qtd: 1 }] },
   { id: 'tijolos', resultado: { item: 'tijolos', qtd: 4 }, ingredientes: [{ item: 'pedra', qtd: 2 }, { item: 'terra', qtd: 2 }] },
+  // Fase 9: a forja (funde metais, forja e melhora equipamentos)
+  { id: 'forja', resultado: { item: 'forja', qtd: 1 }, ingredientes: [{ item: 'pedra', qtd: 8 }, { item: 'carvao', qtd: 4 }] },
 ];
 
 // Quanto o inventário tem de um item (somando todas as pilhas)

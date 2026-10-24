@@ -1696,6 +1696,57 @@ export class InterfaceJogo {
     }, TEMPO_MENSAGEM);
   }
 
+  // ------------------------------------------------------------------
+  // Fase 7: barrinha de "comendo" sob a mira e aviso "+N XP"
+  // ------------------------------------------------------------------
+
+  /** Cria (uma vez) os elementos da barra de comer e injeta o CSS dos avisos de XP */
+  _criarElementosFase7() {
+    if (this.elComendo) return;
+    const estilo = document.createElement('style');
+    estilo.textContent =
+      '@keyframes xp-sobe { 0% { opacity: 0; transform: translate(-50%, 6px); }' +
+      ' 15% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -34px); } }' +
+      '.aviso-xp { position: fixed; left: 50%; bottom: 120px; z-index: 7; pointer-events: none;' +
+      ' font-family: var(--fonte-pixel); font-size: 14px; color: #8dff6a;' +
+      ' text-shadow: 2px 2px 0 #1f3f1f; animation: xp-sobe 1.4s ease-out forwards; }';
+    document.head.appendChild(estilo);
+
+    // Barra pequena logo abaixo da mira (a mira fica no centro da tela)
+    const caixa = document.createElement('div');
+    caixa.className = 'oculto';
+    caixa.style.cssText = 'position:fixed;left:50%;top:calc(50% + 24px);width:60px;height:7px;' +
+      'transform:translateX(-50%);background:rgba(0,0,0,0.6);border:2px solid #000;' +
+      'z-index:7;pointer-events:none;';
+    const enchimento = document.createElement('div');
+    enchimento.style.cssText = 'height:100%;width:0%;background:#e8a23a;';
+    caixa.appendChild(enchimento);
+    document.body.appendChild(caixa);
+    this.elComendo = caixa;
+    this.elComendoBarra = enchimento;
+  }
+
+  /** Mostra o progresso de comer (0 a 1). Valor 0 ou null esconde a barra. */
+  mostrarComendo(fracao) {
+    this._criarElementosFase7();
+    if (!fracao || fracao <= 0) {
+      if (!this.elComendo.classList.contains('oculto')) this.elComendo.classList.add('oculto');
+      return;
+    }
+    this.elComendo.classList.remove('oculto');
+    this.elComendoBarra.style.width = (Math.min(1, fracao) * 100).toFixed(0) + '%';
+  }
+
+  /** Aviso discreto "+N XP" que sobe perto da hotbar e some sozinho */
+  mostrarXp(qtd) {
+    this._criarElementosFase7();
+    const el = document.createElement('div');
+    el.className = 'aviso-xp';
+    el.textContent = '+' + qtd + ' XP';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1500);
+  }
+
   definirSubmerso(sim) {
     this.elSubmerso.classList.toggle('oculto', !sim);
   }

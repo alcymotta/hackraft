@@ -8,6 +8,31 @@
 
 import { SLOTS_EQUIPAMENTO, slotDoItem, obterItem } from './items.js';
 
+// Nomes com melhoria: 'peitoral_ferro+2' (a melhoria vai de +1 a +5)
+const sufixo = (nome) => /^(.*)\+([1-5])$/.exec(String(nome ?? ''));
+const nomeBaseLocal = (nome) => { const m = sufixo(nome); return m ? m[1] : nome; };
+const melhoriaLocal = (nome) => { const m = sufixo(nome); return m ? Number(m[2]) : 0; };
+
+/**
+ * Definição do item, entendendo o sufixo +N. Se o items.js já entende o sufixo,
+ * ele devolve a definição pronta (com defesa/dano somados). Se não, usa a do item
+ * base e soma a melhoria aqui (defesa + ceil(N/2)).
+ */
+function defDoItem(nome) {
+  if (!nome) return null;
+  const direto = obterItem(nome);
+  if (direto) return direto;
+  const n = melhoriaLocal(nome);
+  const base = n ? obterItem(nomeBaseLocal(nome)) : null;
+  if (!base) return null;
+  return { ...base, melhoria: n, defesa: base.defesa != null ? base.defesa + Math.ceil(n / 2) : base.defesa };
+}
+
+/** Espaço do item (com ou sem sufixo) */
+function slotDe(nome) {
+  return slotDoItem(nome) ?? slotDoItem(nomeBaseLocal(nome));
+}
+
 export class Equipamento {
   constructor() {
     this.espacos = {};
@@ -20,7 +45,7 @@ export class Equipamento {
 
   /** O item existe e é do tipo certo para esse espaço? */
   podeEquipar(slot, item) {
-    return slot in this.espacos && !!obterItem(item) && slotDoItem(item) === slot;
+    return slot in this.espacos && !!defDoItem(item) && slotDe(item) === slot;
   }
 
   /** Coloca o item no espaço. Devolve o item que estava lá (ou null). Item inválido: não faz nada e devolve o próprio item. */
@@ -45,14 +70,14 @@ export class Equipamento {
   /** Soma os bônus da roupa e das armaduras (mesmo escondidas) */
   bonus() {
     const total = { velocidade: 0, defesa: 0, silencioso: false };
-    const roupa = obterItem(this.espacos.roupa);
+    const roupa = defDoItem(this.espacos.roupa);
     if (roupa && roupa.bonus) {
       total.defesa += roupa.bonus.defesa ?? 0;
       total.velocidade += roupa.bonus.velocidade ?? 0;
       if (roupa.bonus.silencioso) total.silencioso = true;
     }
     for (const parte of ['capacete', 'peitoral', 'calca', 'botas']) {
-      const peca = obterItem(this.espacos[parte]);
+      const peca = defDoItem(this.espacos[parte]); // já com a melhoria
       if (peca) total.defesa += peca.defesa ?? 0;
     }
     return total;
@@ -63,18 +88,22 @@ export class Equipamento {
     const material = (slot) => {
       if (this.esconderArmadura) return null;
       if (slot === 'capacete' && this.esconderCapacete) return null;
-      return obterItem(this.espacos[slot])?.material ?? null;
+      const nome = this.espacos[slot];
+      const mat = defDoItem(nome)?.material ?? null;
+      if (!mat) return null;
+      const n = melhoriaLocal(nome);
+      return n ? `${mat}+${n}` : mat; // 'ferro' ou 'ferro+2'
     };
     return {
-      roupa: this.roupaForcada ?? obterItem(this.espacos.roupa)?.visual ?? null,
+      roupa: this.roupaForcada ?? defDoItem(this.espacos.roupa)?.visual ?? null,
       armadura: {
         capacete: material('capacete'),
         peitoral: material('peitoral'),
         calca: material('calca'),
         botas: material('botas'),
       },
-      mao: obterItem(this.espacos.mao)?.visual ?? null,
-      acessorio: obterItem(this.espacos.acessorio)?.visual ?? null,
+      mao: this.espacos.mao ? (defDoItem(this.espacos.mao) ? this.espacos.mao : null) : null, // nome da espada, com sufixo
+      acessorio: defDoItem(this.espacos.acessorio)?.visual ?? null,
     };
   }
 

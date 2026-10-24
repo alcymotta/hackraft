@@ -84,6 +84,13 @@
 //     poderes    { lista }   (Fase 5)
 //                Os poderes que estão ativos em mim (nomes, no máximo 8).
 //                Mandado quando a lista muda. Serve para a aura dos outros.
+//     atacarMob  { id, dano, dir: [x, y, z], ataque, efeito? }   (Fase 7)
+//                "Bati no mob `id`". `ataque` = 'golpe' (mão/espada) ou o poder
+//                'fogo' | 'raio' | 'gelo'; `efeito` = { queimar: s } ou
+//                { lento: s } (poderes). O anfitrião confere: o mob existe e
+//                está vivo, dano entre 0 e 50, distância do jogador até o mob
+//                de no máximo 6 blocos no golpe (32 nos poderes, que voam
+//                longe) e no máximo 12 ataques por segundo. Aí aplica.
 //     tchau      { }   "estou fechando a página" (vale nos dois sentidos)
 //
 //   Por que existe o `tchau`? Quando uma aba é fechada, o navegador do
@@ -143,10 +150,42 @@
 //     poderes    { id, lista }
 //                Poderes ativos do jogador `id` (aura). O anfitrião também
 //                manda, ao entrar alguém, os poderes de quem já estava na sala.
+//     mobs       { t, dados }   (Fase 7, ~10 vezes por segundo)
+//                Estado de todos os mobs vivos. `t` = relógio do anfitrião
+//                (ms, performance.now) e `dados` = Float32Array com 8 números
+//                por mob: [id, tipo, x, y, z, yaw, flags, vida, ...], onde `tipo`
+//                é o índice em ORDEM_TIPOS (mobs.js), `vida` vai de 0 a 1 e
+//                `flags` tem bits: 1 andando, 2 atacando, 4 queimando, 8 lento,
+//                16 subindo parede, 32 no ar, 64 nadando; os bits 8 a 11 são
+//                um contador de golpes (quando muda, o mob apanhou: pisca).
+//                40 mobs = ~1,3 KB por mensagem. O cliente desenha 100 ms
+//                "no passado", andando suave entre duas mensagens.
+//     mobNovo    { id, mob, x, y, z, yaw, vida }   (Fase 7)
+//                Nasceu um mob. `mob` é o nome do tipo ('porco', 'zumbi'...).
+//                (O contrato chamava de `tipo`, mas `tipo` já é o nome da mensagem.)
+//     mobRemovido { id, morreu }   (Fase 7)
+//                O mob saiu do jogo. `morreu` = true: toca a animação de morte
+//                (tomba e fica vermelho); false: some na hora (ficou longe).
+//     dano       { qtd, de: [x, y, z], efeito? }   (Fase 7)
+//                Só para o jogador atingido: um mob em `de` bateu em você.
+//                `qtd` vem SEM o desconto da armadura (quem recebe aplica).
+//     xp         { qtd }   (Fase 7) só para quem matou o mob
+//   O `bemvindo` (Fase 7) leva também `mobs: [[id, mob, x, y, z, yaw, vida], ...]`
+//   com os mobs que já estão no mundo.
 //
 // PROTOCOLO VERSÃO 4 (Fase 5): acrescentou `efeito` e `poderes`.
 // PROTOCOLO VERSÃO 5 (Fase 6): `bloco` com `e`, `blocos` (lote), `bauAbrir`,
 //   `bauConteudo`, `bauEspaco`, e o `mods` com 5 números por bloco.
+// PROTOCOLO VERSÃO 6 (Fase 7): `mobs`, `mobNovo`, `mobRemovido`, `atacarMob`,
+//   `dano`, `xp` e a lista `mobs` no `bemvindo`.
+//
+// MOBS (Fase 7): quem simula é o Mobs (mobs.js) do anfitrião. A Rede só
+//   transporta. O Mobs se registra com `rede.registrarMobs(mobs)` (no
+//   construtor dele) e usa: enviarEstadoMobs, enviarMobNovo,
+//   enviarMobRemovido, enviarDanoJogador, enviarXp, soltarDrop (anfitrião) e
+//   enviarAtacarMob (cliente). A Rede chama no Mobs: exportarParaRede,
+//   posicaoMob, aplicarAtaqueRemoto (anfitrião) e receberNovo, receberEstado,
+//   receberRemovido, receberDanoDaRede, receberXp (cliente).
 //
 // BAÚS (Fase 6): o conteúdo mora no anfitrião (classe Baus, baus.js). A Rede só
 //   transporta: `rede.aoBau(fn)` registra o ouvinte do Baus, que recebe
@@ -190,7 +229,7 @@ import { Equipamento } from './equipamento.js';
 import { quantoCabe } from './itens_chao.js';
 
 const PREFIXO_ID = 'hackraft-';
-const VERSAO_PROTOCOLO = 5;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5, 5 = Fase 6)
+const VERSAO_PROTOCOLO = 6;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5, 5 = Fase 6, 6 = Fase 7)
 const MAX_QTD_ITEM = 64;             // maior pilha aceita numa mensagem de item
 const VEL_MAX_ITEM = 20;             // maior velocidade aceita para um item solto
 const DIST_SOLTAR = 8;               // o cliente só solta itens até 8 blocos de onde está
@@ -543,6 +582,67 @@ function limparListaPoderes(lista) {
   return r;
 }
 
+// ----- Mobs (Fase 7) -----
+const CAMPOS_MOB = 8;                // números por mob na mensagem `mobs`
+const MAX_MOBS_REDE = 64;            // máximo de mobs aceitos numa mensagem `mobs` / no bemvindo
+const ID_MOB_MAX = 16777216;         // 2^24: o maior inteiro que o Float32 guarda sem erro
+const DANO_MAX_ATAQUE = 50;          // dano máximo aceito num `atacarMob`
+const DIST_GOLPE_MOB = 6;            // golpe (mão/espada): o alcance é 4; 6 dá folga para o atraso da rede
+const DIST_PODER_MOB = 32;           // poderes voam até 30 blocos
+const ATAQUES_MOB_POR_SEGUNDO = 12;  // o raio acerta até 3 mobs de uma vez
+const TIPOS_ATAQUE_MOB = new Set(['golpe', 'fogo', 'raio', 'gelo']);
+const DANO_MAX_JOGADOR = 100;        // `dano` aceito pelo cliente
+const XP_MAX = 10000;
+
+/** Id de mob: inteiro de 1 a 2^24 */
+function idMobValido(id) {
+  return Number.isInteger(id) && id >= 1 && id < ID_MOB_MAX;
+}
+
+/** Nome do tipo de mob: só letras minúsculas e _ (quem confere se existe é o mobs.js) */
+function nomeMobValido(n) {
+  return typeof n === 'string' && n.length >= 1 && n.length <= 32 && /^[a-z_0-9]+$/.test(n);
+}
+
+/** Efeito de ataque/dano: { queimar?, lento? } com segundos de 0 a 10, ou null */
+function lerEfeitoMob(e) {
+  if (!e || typeof e !== 'object') return null;
+  const r = {};
+  let tem = false;
+  if (ehNumero(e.queimar) && e.queimar > 0) { r.queimar = Math.min(10, e.queimar); tem = true; }
+  if (ehNumero(e.lento) && e.lento > 0) { r.lento = Math.min(10, e.lento); tem = true; }
+  return tem ? r : null;
+}
+
+/** Float32Array vindo da rede (ArrayBuffer ou view) com múltiplo de 8 números, ou null */
+function lerEstadoMobs(dados) {
+  let f = null;
+  if (dados instanceof ArrayBuffer) {
+    if (dados.byteLength % 4 !== 0) return null;
+    f = new Float32Array(dados);
+  } else if (ArrayBuffer.isView(dados)) {
+    if (dados.byteLength % 4 !== 0) return null;
+    // copia: o Float32Array precisa começar num múltiplo de 4 bytes
+    f = new Float32Array(dados.buffer.slice(dados.byteOffset, dados.byteOffset + dados.byteLength));
+  } else if (Array.isArray(dados)) {
+    f = Float32Array.from(dados);
+  } else {
+    return null;
+  }
+  if (f.length % CAMPOS_MOB !== 0 || f.length > MAX_MOBS_REDE * CAMPOS_MOB) return null;
+  return f;
+}
+
+/** Mob novo (mensagem mobNovo ou item da lista do bemvindo) conferido, ou null */
+function lerMobNovo(id, mob, x, y, z, yaw, vida) {
+  if (!idMobValido(id) || !nomeMobValido(mob) || !posicaoValida(x, y, z)) return null;
+  return {
+    id, mob, x, y, z,
+    yaw: ehNumero(yaw) ? yaw : 0,
+    vida: ehNumero(vida) ? Math.min(1, Math.max(0, vida)) : 1,
+  };
+}
+
 /** Objeto de estado (posição) reaproveitado para cada jogador */
 function novoEstado() {
   return { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false };
@@ -722,6 +822,11 @@ export class Rede {
     this._msgPos = { tipo: 'pos', id: '', x: NaN, y: NaN, z: NaN, yaw: NaN, pitch: NaN, noAr: false, quebrando: false };
     this._msgHora = { tipo: 'hora', hora: 0 };
     this._relogio = null;
+
+    // --- Mobs (Fase 7) ---
+    this.mobs = null;                 // Mobs (mobs.js): se registra com registrarMobs()
+    this._mobsPendentes = new Map();  // (cliente) mobs que chegaram antes de o Mobs existir: id → dados
+    this._msgMobs = { tipo: 'mobs', t: 0, dados: null }; // mensagem reaproveitada (anfitrião)
 
     this._cancelarOuvinteBloco = null;
     this._aoFecharPagina = null;
@@ -947,6 +1052,8 @@ export class Rede {
       pdIni: 0,               // limite de mensagens "poderes": início da janela de 1 s
       pdN: 0,
       efN: 0,                 // e quantos já passaram nela
+      amIni: 0,               // limite de `atacarMob` (Fase 7): início da janela de 1 s
+      amN: 0,
     };
     this.clientes.set(cli.id, cli);
     conn.on('data', (msg) => this._dadosDoCliente(cli, msg));
@@ -1018,6 +1125,9 @@ export class Rede {
           return;
         case 'poderes':
           if (cli.pronto) this._poderesDoCliente(cli, msg);
+          return;
+        case 'atacarMob':
+          if (cli.pronto) this._atacarMobDoCliente(cli, msg);
           return;
         case 'tchau':
           this._clienteSaiu(cli);
@@ -1155,6 +1265,29 @@ export class Rede {
     this._avisarTodos({ tipo: 'poderes', id: cli.id, lista }, cli);
   }
 
+  /**
+   * Um cliente bateu num mob (Fase 7). Tudo é conferido aqui antes de o
+   * Mobs aplicar: o mob existe e está vivo, o dano é razoável, o jogador
+   * está perto o bastante e não está mandando ataques demais.
+   */
+  _atacarMobDoCliente(cli, m) {
+    const mobs = this.mobs;
+    if (!mobs || !idMobValido(m.id) || !ehNumero(m.dano) || m.dano <= 0 || m.dano > DANO_MAX_ATAQUE) return;
+    const ataque = TIPOS_ATAQUE_MOB.has(m.ataque) ? m.ataque : 'golpe';
+    if (!cli.temEstado) return; // ainda não sabemos onde ele está
+    if (!this._efeitoPermitido(cli, 'amIni', 'amN', ATAQUES_MOB_POR_SEGUNDO)) return;
+    const p = typeof mobs.posicaoMob === 'function' ? mobs.posicaoMob(m.id) : null; // centro do corpo
+    if (!p) return; // não existe (ou já está morrendo)
+    // Distância dos olhos do jogador até o centro do mob
+    const e = cli.estado;
+    const dx = p.x - e.x, dy = p.y - (e.y + CONFIG.ALTURA_OLHOS), dz = p.z - e.z;
+    const max = ataque === 'golpe' ? DIST_GOLPE_MOB : DIST_PODER_MOB;
+    if (dx * dx + dy * dy + dz * dz > max * max) return;
+    const dir = limparVetor(m.dir, LIMITE_VETOR); // { x, y, z } ou [x, y, z] (ou null)
+    const d = Array.isArray(dir) ? { x: dir[0], y: dir[1], z: dir[2] } : dir;
+    mobs.aplicarAtaqueRemoto(cli.id, m.id, m.dano, d, ataque, lerEfeitoMob(m.efeito));
+  }
+
   /** Desenha o efeito de outro jogador (se o módulo de poderes existir) */
   _mostrarEfeito(e) {
     const p = this.poderes;
@@ -1235,6 +1368,7 @@ export class Rede {
       posAnfitriao: [p.x, p.y, p.z],
       jogadores: this._listaParaBemvindo(),
       itensChao: this.itensChao ? this.itensChao.exportar() : [],
+      mobs: this.mobs && typeof this.mobs.exportarParaRede === 'function' ? this.mobs.exportarParaRede() : [],
       totalMods: total,
       lotes,
     });
@@ -1564,6 +1698,15 @@ export class Rede {
         case 'aparencia': this._aparenciaDoAnfitriao(msg); return;
         case 'efeito': this._efeitoDoAnfitriao(msg); return;
         case 'poderes': this._poderesDoAnfitriao(msg); return;
+        case 'mobs': this._mobsDoAnfitriao(msg); return;
+        case 'mobNovo': this._mobNovoDoAnfitriao(msg); return;
+        case 'mobRemovido': this._mobRemovidoDoAnfitriao(msg); return;
+        case 'dano': this._danoDoAnfitriao(msg); return;
+        case 'xp':
+          if (this.ligado && this.mobs && Number.isInteger(msg.qtd) && msg.qtd > 0 && msg.qtd <= XP_MAX) {
+            this.mobs.receberXp(msg.qtd);
+          }
+          return;
         case 'tchau':
           if (this._entrada) this._entrada.falhar(erroRede('O anfitrião fechou a sala.', 'tchau'));
           else this._perdeuAnfitriao();
@@ -1617,6 +1760,16 @@ export class Rede {
         if (!d || typeof d !== 'object' || !Array.isArray(d.pos) || d.pos.length !== 3) continue;
         const it = lerItemNovo({ id: d.id, item: d.item, qtd: d.qtd, x: d.pos[0], y: d.pos[1], z: d.pos[2] });
         if (it) this._itensPendentes.set(it.id, it);
+      }
+    }
+
+    // Mobs que já estão no mundo (Fase 7): criados quando o Mobs se registrar
+    this._mobsPendentes.clear();
+    if (Array.isArray(msg.mobs)) {
+      for (const d of msg.mobs.slice(0, MAX_MOBS_REDE)) {
+        if (!Array.isArray(d) || d.length < 5) continue;
+        const mob = lerMobNovo(d[0], d[1], d[2], d[3], d[4], d[5], d[6]);
+        if (mob) this._mobsPendentes.set(mob.id, mob);
       }
     }
 
@@ -2245,6 +2398,153 @@ export class Rede {
     } else {
       this._enviar(this.conexaoAnfitriao, { tipo: 'poderes', lista: this._meusPoderes });
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Mobs (Fase 7): quem simula é o Mobs do anfitrião; a Rede só transporta
+  // ------------------------------------------------------------------
+
+  /**
+   * O Mobs (mobs.js) se registra aqui no construtor dele. No cliente, os
+   * mobs que chegaram antes (no bemvindo ou em mobNovo, enquanto o mundo
+   * era montado) são entregues agora.
+   */
+  registrarMobs(mobs) {
+    this.mobs = mobs || null;
+    if (this.mobs && this.modo === 'cliente') {
+      for (const d of this._mobsPendentes.values()) this._entregarMobNovo(d);
+    }
+    this._mobsPendentes.clear();
+  }
+
+  /** (Anfitrião) true se há pelo menos um cliente na sala */
+  get temClientes() {
+    if (this.modo !== 'anfitriao') return false;
+    for (const c of this.clientes.values()) if (c.pronto) return true;
+    return false;
+  }
+
+  /**
+   * (Anfitrião) Manda o estado de todos os mobs: `t` = performance.now() e
+   * `dados` = Float32Array com 8 números por mob (veja o cabeçalho). A
+   * mensagem é reaproveitada: o PeerJS copia os dados na hora do envio.
+   */
+  enviarEstadoMobs(t, dados) {
+    if (this.modo !== 'anfitriao' || this.encerrado) return;
+    const msg = this._msgMobs;
+    msg.t = t;
+    msg.dados = dados;
+    this._avisarTodos(msg);
+    msg.dados = null;
+  }
+
+  /** (Anfitrião) Nasceu um mob */
+  enviarMobNovo(id, mob, x, y, z, yaw, vida = 1) {
+    if (this.modo !== 'anfitriao' || this.encerrado) return;
+    this._avisarTodos({ tipo: 'mobNovo', id, mob, x, y, z, yaw, vida });
+  }
+
+  /** (Anfitrião) O mob saiu do jogo (morreu = toca a animação de morte) */
+  enviarMobRemovido(id, morreu) {
+    if (this.modo !== 'anfitriao' || this.encerrado) return;
+    this._avisarTodos({ tipo: 'mobRemovido', id, morreu: !!morreu });
+  }
+
+  /**
+   * (Anfitrião) Um mob bateu no jogador `idJogador` (um cliente). `de` =
+   * [x, y, z] do mob (o empurrão é para longe dele). A armadura é descontada
+   * por quem recebe. Devolve true se mandou.
+   */
+  enviarDanoJogador(idJogador, qtd, de, efeito = null) {
+    if (this.modo !== 'anfitriao' || this.encerrado) return false;
+    const c = this.clientes.get(idJogador);
+    if (!c || !c.pronto) return false;
+    const msg = { tipo: 'dano', qtd, de };
+    const ef = lerEfeitoMob(efeito);
+    if (ef) msg.efeito = ef;
+    this._enviar(c.conn, msg);
+    return true;
+  }
+
+  /** (Anfitrião) O cliente `idJogador` matou um mob e ganhou XP */
+  enviarXp(idJogador, qtd) {
+    if (this.modo !== 'anfitriao' || this.encerrado) return false;
+    const c = this.clientes.get(idJogador);
+    if (!c || !c.pronto) return false;
+    this._enviar(c.conn, { tipo: 'xp', qtd });
+    return true;
+  }
+
+  /**
+   * (Cliente) Bati no mob `id`. `dir` = direção do golpe ({ x, y, z }, pode ser
+   * um Vector3 reaproveitado: os números são copiados aqui). `ataque` =
+   * 'golpe' | 'fogo' | 'raio' | 'gelo'; `efeito` = { queimar } ou { lento }.
+   */
+  enviarAtacarMob(id, dano, dir, ataque = 'golpe', efeito = null) {
+    if (this.modo !== 'cliente' || this._caiu || this.encerrado) return false;
+    const msg = { tipo: 'atacarMob', id, dano, ataque, dir: dir ? [dir.x, dir.y, dir.z] : null };
+    const ef = lerEfeitoMob(efeito);
+    if (ef) msg.efeito = ef;
+    this._enviar(this.conexaoAnfitriao, msg);
+    return true;
+  }
+
+  /**
+   * (Anfitrião ou sozinho) Põe no chão o drop de um mob. Igual ao soltarItem,
+   * mas sem dono: qualquer um pega na hora e o item é puxado para quem passa.
+   */
+  soltarDrop(item, qtd, x, y, z, vx = 0, vy = 0, vz = 0) {
+    if (this.modo === 'cliente' || !this.itensChao || !itemValido(item) ||
+        !Number.isInteger(qtd) || qtd < 1 || !posicaoValida(x, y, z)) return false;
+    for (let resto = qtd; resto > 0; resto -= MAX_QTD_ITEM) {
+      this._criarItem(item, Math.min(resto, MAX_QTD_ITEM), x, y, z,
+        velocidadeItem(vx), velocidadeItem(vy), velocidadeItem(vz), '');
+    }
+    return true;
+  }
+
+  /** (Cliente) Entrega um mob novo ao Mobs (erros do Mobs não derrubam a rede) */
+  _entregarMobNovo(d) {
+    try {
+      this.mobs.receberNovo(d.id, d.mob, d.x, d.y, d.z, d.yaw, d.vida);
+    } catch (e) {
+      console.warn('Hackraft: mob novo ignorado', e);
+    }
+  }
+
+  /** Estado dos mobs (~10 vezes por segundo) */
+  _mobsDoAnfitriao(msg) {
+    if (!this.mobs || !ehNumero(msg.t)) return; // sem Mobs ainda: o próximo estado vem logo
+    const dados = lerEstadoMobs(msg.dados);
+    if (dados) this.mobs.receberEstado(msg.t, dados);
+  }
+
+  _mobNovoDoAnfitriao(msg) {
+    const d = lerMobNovo(msg.id, msg.mob, msg.x, msg.y, msg.z, msg.yaw, msg.vida);
+    if (!d) return;
+    if (!this.mobs) {
+      if (this._mobsPendentes.size < MAX_MOBS_REDE * 4) this._mobsPendentes.set(d.id, d);
+      return;
+    }
+    this._entregarMobNovo(d);
+  }
+
+  _mobRemovidoDoAnfitriao(msg) {
+    if (!idMobValido(msg.id)) return;
+    if (!this.mobs) {
+      this._mobsPendentes.delete(msg.id);
+      return;
+    }
+    this.mobs.receberRemovido(msg.id, msg.morreu === true);
+  }
+
+  /** Um mob me bateu (o anfitrião manda só para mim) */
+  _danoDoAnfitriao(msg) {
+    if (!this.ligado || !this.mobs) return;
+    if (!ehNumero(msg.qtd) || msg.qtd <= 0 || msg.qtd > DANO_MAX_JOGADOR) return;
+    const de = limparPontoMundo(msg.de);
+    if (!de) return;
+    this.mobs.receberDanoDaRede({ qtd: msg.qtd, de, efeito: lerEfeitoMob(msg.efeito) });
   }
 
   // ------------------------------------------------------------------

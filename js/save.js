@@ -15,6 +15,7 @@
 //               `jogadores[apelido].casa`
 //
 //   5 (Fase 5): `jogador.vida` (a vida do anfitrião vem do jogador.serializar)
+//   7 (Fase 7): `jogador.xpTotal` (dentro de `jogador`; a versão continua 6, mobs não são salvos)
 //   6 (Fase 6): + `baus` ("x,y,z" → 27 espaços) e as `modificacoes` passam a ter
 //               o estado do bloco: [x, y, z, id, estado]
 //

@@ -640,25 +640,40 @@ function camadaDaRoupa(nome) {
 export const MATERIAIS_ARMADURA = {
   couro: { rotulo: 'Couro', cor: '#8b5a2b', estilo: 'couro' },
   ferro: { rotulo: 'Ferro', cor: '#c4c8cf', estilo: 'metal' },
+  // Fase 9 (registrados mais abaixo, depois do cache de materiais)
 };
 
 /** Cria (ou troca) um material de armadura. Ex.: registrarMaterialArmadura('ouro', { rotulo:'Ouro', cor:'#f0c030', estilo:'metal' }) */
 export function registrarMaterialArmadura(nome, def) {
   MATERIAIS_ARMADURA[nome] = def;
-  const antigo = materiaisArmadura.get(nome);
-  if (antigo) { antigo.map.dispose(); antigo.dispose(); materiaisArmadura.delete(nome); }
+  // joga fora o material em cache e as variantes com melhoria ('nome+2'...)
+  for (const [k, m] of [...materiaisArmadura]) {
+    if (k !== nome && !k.startsWith(nome + '+')) continue;
+    if (k === nome) m.map.dispose();
+    m.dispose();
+    materiaisArmadura.delete(k);
+  }
+}
+
+/** Separa 'ferro+2' em { base: 'ferro', n: 2 }. Sem sufixo, n = 0. */
+export function separarMelhoria(nome) {
+  const m = /^(.*)\+([1-5])$/.exec(String(nome ?? ''));
+  return m ? { base: m[1], n: Number(m[2]) } : { base: String(nome ?? ''), n: 0 };
 }
 
 /**
  * Gera a textura de armadura (canvas 64x32, layout do Minecraft: cabeça,
  * corpo, braço e perna) a partir de uma cor base e de um estilo.
  */
-export function gerarTexturaArmadura(corBase, estilo = 'metal') {
+export function gerarTexturaArmadura(corBase, estilo = 'metal', corVeio = '#ff4a6a') {
   const canvas = criarCanvas(64, 32);
   const ctx = canvas.getContext('2d');
   const rnd = mulberry32(4242);
   const base = hexRGB(corBase);
-  const metal = estilo === 'metal';
+  const veio = hexRGB(corVeio);
+  // estilos: 'couro', 'metal', 'brilhante' (prata), 'faceta' (diamante), 'veios' (dracônio), 'escamas'
+  const metal = estilo !== 'couro';
+  const escamas = estilo === 'escamas';
   const px = (reg, i, j, c) => { ctx.fillStyle = rgbCss(c); ctx.fillRect(reg[0] + i, reg[1] + j, 1, 1); };
   const limpar = (reg, i, j, w, h) => ctx.clearRect(reg[0] + i, reg[1] + j, w, h);
 
@@ -669,7 +684,14 @@ export function gerarTexturaArmadura(corBase, estilo = 'metal') {
       for (let i = 0; i < w; i++) {
         let d = (rnd() - 0.5) * (metal ? 10 : 24);
         const borda = i === 0 || j === 0 || i === w - 1 || j === h - 1;
-        if (metal) {
+        if (escamas) {
+          // escamas: fileiras de "meias-luas"; a borda de baixo de cada escama é escura
+          const col = (i + ((j >> 1) & 1) * 2) % 4;
+          d = (rnd() - 0.5) * 14;
+          if (j % 2 === 1) d -= 34;            // linha de baixo da escama (sombra)
+          else if (col === 0) d -= 20;          // junta entre escamas
+          else if (col === 1) d += 22;          // brilho no alto da escama
+        } else if (metal) {
           if (j === 0) d += 24; else if (i === 0) d += 14;
           if (j === h - 1) d -= 30; else if (i === w - 1) d -= 20;
           if (frente && i - j === 1) d += 12;           // brilho em diagonal
@@ -678,10 +700,20 @@ export function gerarTexturaArmadura(corBase, estilo = 'metal') {
         } else if (w >= 6 && h >= 6 && (i === 1 || j === 1 || i === w - 2 || j === h - 2) && (i + j) % 2 === 0) {
           d += 40;                                       // costura tracejada
         }
-        px(reg, i, j, clarear(base, d));
+        let cor = clarear(base, d);
+        if (estilo === 'brilhante') {
+          cor = clarear(cor, 14);
+          if ((i - j + 24) % 6 === 0) cor = clarear(cor, 40);      // listras de reflexo
+        } else if (estilo === 'faceta') {
+          cor = clarear(cor, [18, -4, -22][((i >> 1) + (j >> 1)) % 3]); // facetas de gema
+          if ((i * 7 + j * 3) % 11 === 0) cor = [235, 255, 255];        // brilhinhos
+        } else if (estilo === 'veios') {
+          if ((i * 3 + j * 5 + (j >> 1) * 2) % 13 === 0 && !borda) cor = clarear(veio, (rnd() - 0.5) * 30); // veios brilhantes
+        }
+        px(reg, i, j, cor);
       }
     }
-    if (metal && w >= 4 && h >= 4) {                     // rebites nos cantos
+    if (metal && !escamas && w >= 4 && h >= 4) {                     // rebites nos cantos
       [[1, 1], [w - 2, 1], [1, h - 2], [w - 2, h - 2]].forEach(([i, j]) => px(reg, i, j, clarear(base, 52)));
     }
   };
@@ -733,22 +765,75 @@ export function gerarTexturaArmadura(corBase, estilo = 'metal') {
   return canvas;
 }
 
-// Materiais Three.js por material de armadura (compartilhados entre os bonecos)
+// ---------------------------------------------------------------------
+// Brilho pulsante (melhorias +N): materiais registrados aqui têm o brilho
+// (emissiveIntensity) ou a opacidade recalculados algumas vezes por segundo.
+// ---------------------------------------------------------------------
+const pulsos = [];            // { mat, prop, base, vel, amp }
+let ultimoPulso = 0;
+function registrarPulso(mat, prop, base, vel = 2.5, amp = 0.25) {
+  pulsos.push({ mat, prop, base, vel, amp });
+}
+function atualizarPulsos() {
+  const agora = performance.now();
+  if (agora - ultimoPulso < 16) return; // uma vez por quadro, mesmo com vários bonecos
+  ultimoPulso = agora;
+  const t = agora / 1000;
+  for (let i = 0; i < pulsos.length; i++) {
+    const p = pulsos[i];
+    p.mat[p.prop] = p.base * (1 - p.amp + p.amp * (0.5 + 0.5 * Math.sin(t * p.vel + i)));
+  }
+}
+
+// Material "aura" do +5: contorno brilhante (faces de trás de uma caixa maior)
+const cacheAura = new Map();
+function materialAura(cor) {
+  let m = cacheAura.get(cor);
+  if (!m) {
+    m = new THREE.MeshBasicMaterial({
+      color: cor, side: THREE.BackSide, transparent: true, opacity: 0.55,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    registrarPulso(m, 'opacity', 0.55, 3, 0.4);
+    cacheAura.set(cor, m);
+  }
+  return m;
+}
+
+// Materiais Three.js por material de armadura (compartilhados entre os bonecos).
+// O nome pode ter sufixo: 'ferro+2' = ferro com melhoria 2 (brilho 0.15 x N).
 const materiaisArmadura = new Map();
 function materialDaArmadura(nome) {
   let m = materiaisArmadura.get(nome);
   if (!m) {
-    const def = MATERIAIS_ARMADURA[nome];
-    const tex = new THREE.CanvasTexture(gerarTexturaArmadura(def.cor, def.estilo));
-    tex.magFilter = THREE.NearestFilter;
-    tex.minFilter = THREE.NearestFilter;
-    tex.generateMipmaps = false;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    m = new THREE.MeshLambertMaterial({ map: tex, alphaTest: 0.5 });
+    const { base, n } = separarMelhoria(nome);
+    const def = MATERIAIS_ARMADURA[base];
+    if (n === 0) {
+      const tex = new THREE.CanvasTexture(gerarTexturaArmadura(def.cor, def.estilo, def.veio));
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.generateMipmaps = false;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      m = new THREE.MeshLambertMaterial({ map: tex, alphaTest: 0.5 });
+    } else {
+      m = materialDaArmadura(base).clone(); // mesma textura, com brilho próprio
+      m.emissive = new THREE.Color(def.brilho ?? def.cor);
+      m.emissiveIntensity = 0.15 * n;
+      registrarPulso(m, 'emissiveIntensity', 0.15 * n);
+    }
     materiaisArmadura.set(nome, m);
   }
   return m;
 }
+
+// Materiais da Fase 9
+registrarMaterialArmadura('cobre', { rotulo: 'Cobre', cor: '#c8693a', estilo: 'metal' });
+registrarMaterialArmadura('prata', { rotulo: 'Prata', cor: '#b9c6da', estilo: 'brilhante' });
+registrarMaterialArmadura('ouro', { rotulo: 'Ouro', cor: '#f0c430', estilo: 'metal' });
+registrarMaterialArmadura('diamante', { rotulo: 'Diamante', cor: '#4fe3e6', estilo: 'faceta' });
+registrarMaterialArmadura('draconio', { rotulo: 'Dracônio', cor: '#4a1a3a', estilo: 'veios', veio: '#ff4a6a', brilho: '#ff3a6a' });
+registrarMaterialArmadura('escama_dragao', { rotulo: 'Escama de dragão', cor: '#8c1a1a', estilo: 'escamas', brilho: '#ff4a2a' });
+registrarMaterialArmadura('escama_hidra', { rotulo: 'Escama de hidra', cor: '#2a8f86', estilo: 'escamas', brilho: '#40ffe0' });
 
 // ---------------------------------------------------------------------
 // Geometrias e materiais compartilhados (cache)
@@ -834,6 +919,40 @@ function geoCapa(metade) {
     geosCapa[metade] = g;
   }
   return geosCapa[metade];
+}
+
+// ---------------------------------------------------------------------
+// ESPADAS (Fase 9): uma por material. O modelo é o da espada de madeira, só
+// muda a cor. lamina/fio/sombra = tons da lâmina; emissive = brilho próprio.
+// ---------------------------------------------------------------------
+const CABO = { pomo: '#2a1c10', cabo: '#3a2a1c' };
+export const VISUAIS_ARMA = {
+  espada_madeira: { rotulo: 'Espada de madeira', pomo: '#4a2e16', cabo: '#5a3a1e', guarda: '#7a5230', lamina: '#c8a064', fio: '#e6cc94', sombra: '#a07a46' },
+  espada_cobre: { rotulo: 'Espada de cobre', ...CABO, guarda: '#8a4a26', lamina: '#d27a45', fio: '#f0a070', sombra: '#a85a30' },
+  espada_ferro: { rotulo: 'Espada de ferro', ...CABO, guarda: '#5a5e66', lamina: '#cfd3da', fio: '#f2f4f8', sombra: '#9ea3ad' },
+  espada_prata: { rotulo: 'Espada de prata', ...CABO, guarda: '#7a8498', lamina: '#cfdcf0', fio: '#ffffff', sombra: '#a4b2cc', reflexo: '#e8f2ff' },
+  espada_ouro: { rotulo: 'Espada de ouro', ...CABO, guarda: '#b8901e', lamina: '#f4cc3a', fio: '#fff0a0', sombra: '#c49a20' },
+  espada_diamante: { rotulo: 'Espada de diamante', ...CABO, guarda: '#2a9ea0', lamina: '#58e8ea', fio: '#c8ffff', sombra: '#2fb8bc' },
+  espada_draconio: { rotulo: 'Espada de dracônio', ...CABO, guarda: '#2a1030', lamina: '#6a2a9a', fio: '#ff3040', sombra: '#b01828' },
+  espada_dragao: { rotulo: 'Espada de dragão', ...CABO, guarda: '#5a1010', lamina: '#c42020', fio: '#ff7a1a', sombra: '#8a1010', emissive: { cor: '#ff7a1a', int: 0.55, vel: 5, amp: 0.4 } },
+  espada_hidra: { rotulo: 'Espada de hidra', ...CABO, guarda: '#14504a', lamina: '#2fa59a', fio: '#7af0e0', sombra: '#1f7a72', reflexo: '#c8fff4' },
+};
+
+// Material de uma peça da lâmina: Lambert na cor, com brilho pulsante se a
+// espada tem brilho próprio (dragão) e/ou melhoria (0.15 x N). Em cache.
+const cacheLamina = new Map();
+function materialLamina(cor, v, n) {
+  const baseBrilho = (v.emissive ? v.emissive.int : 0) + 0.15 * n;
+  if (baseBrilho <= 0) return materialCor(cor);
+  const corBrilho = v.emissive?.cor ?? cor;
+  const chave = cor + '|' + corBrilho + '|' + baseBrilho;
+  let m = cacheLamina.get(chave);
+  if (!m) {
+    m = new THREE.MeshLambertMaterial({ color: cor, emissive: corBrilho, emissiveIntensity: baseBrilho });
+    registrarPulso(m, 'emissiveIntensity', baseBrilho, v.emissive?.vel ?? 2.5, v.emissive?.amp ?? 0.25);
+    cacheLamina.set(chave, m);
+  }
+  return m;
 }
 
 // ---------------------------------------------------------------------
@@ -975,12 +1094,14 @@ export class Personagem {
     }
     if (ap.armadura !== undefined) {
       for (const parte of PARTES_ARMADURA) {
-        const nome = ap.armadura && MATERIAIS_ARMADURA[ap.armadura[parte]] ? ap.armadura[parte] : null;
+        // aceita 'ferro' ou 'ferro+2' (material + melhoria)
+        const nome = ap.armadura && MATERIAIS_ARMADURA[separarMelhoria(ap.armadura[parte]).base] ? ap.armadura[parte] : null;
         if (nome !== this._armadura[parte]) { this._armadura[parte] = nome; this._montarArmadura(parte); }
       }
     }
     if (ap.mao !== undefined) {
-      const m = ap.mao === 'espada_madeira' ? ap.mao : null;
+      // aceita 'espada_ferro+2' (espada + melhoria)
+      const m = ap.mao && VISUAIS_ARMA[separarMelhoria(ap.mao).base] ? ap.mao : null;
       if (m !== this._mao) { this._mao = m; this._montarMao(); }
     }
     if (ap.acessorio !== undefined) {
@@ -1086,12 +1207,21 @@ export class Personagem {
     const nome = this._armadura[parte];
     if (!nome) return;
     const mat = materialDaArmadura(nome);
+    const { base: matBase, n } = separarMelhoria(nome);
+    const def = MATERIAIS_ARMADURA[matBase];
     const lista = this._armaduraMalhas[parte];
     const novaMalha = (chave, w, h, d, caixaUV, opc, pai, y) => {
       const m = new THREE.Mesh(geoCaixa('arm_' + chave, w, h, d, caixaUV, { tw: 64, th: 32, ...opc }), mat);
       m.position.y = y * ESCALA;
       pai.add(m);
       lista.push(m);
+      if (n >= 5) { // +5: contorno brilhante um pouco maior
+        const aura = new THREE.Mesh(m.geometry, materialAura(def.brilho ?? def.cor));
+        aura.position.copy(m.position);
+        aura.scale.setScalar(1.14);
+        pai.add(aura);
+        lista.push(aura);
+      }
     };
     switch (parte) {
       case 'capacete':
@@ -1115,19 +1245,36 @@ export class Personagem {
     }
   }
 
-  // Item da mão direita: espada de madeira pixelada
+  // Item da mão direita: espada pixelada, na cor do material (+ brilho da melhoria)
   _montarMao() {
     limparGrupo(this.grupoMao);
-    if (this._mao !== 'espada_madeira') return;
+    if (!this._mao) return;
+    const { base, n } = separarMelhoria(this._mao);
+    const v = VISUAIS_ARMA[base];
     // A espada é feita apontando para +Y e depois deitada para a frente (-Z)
     const e = new THREE.Group();
-    caixa(e, '#4a2e16', 1.8, 1.2, 1.8, 0, -1.2, 0);       // pomo
-    caixa(e, '#5a3a1e', 1.2, 3.6, 1.2, 0, 0.8, 0);        // cabo
-    caixa(e, '#7a5230', 1.8, 1, 5, 0, 3, 0);              // guarda
-    caixa(e, '#c8a064', 1, 9.5, 2.4, 0, 8.3, 0);          // lâmina (chata: de lado aparece larga)
-    caixa(e, '#e6cc94', 1.1, 9, 0.8, 0, 8.3, 0.8);        // brilho do fio
-    caixa(e, '#a07a46', 1.1, 9, 0.8, 0, 8.3, -0.8);       // sombra do outro fio
-    caixa(e, '#c8a064', 1, 1.2, 1.4, 0, 13.6, 0);         // ponta
+    const peca = (mat, w, h, d, x, y, z) => {
+      const m = new THREE.Mesh(GEO_CUBO, mat);
+      m.scale.set(w * ESCALA, h * ESCALA, d * ESCALA);
+      m.position.set(x * ESCALA, y * ESCALA, z * ESCALA);
+      e.add(m);
+      if (n >= 5) { // +5: contorno brilhante (caixa 1.2 px maior)
+        const a = new THREE.Mesh(GEO_CUBO, materialAura(v.emissive?.cor ?? v.lamina));
+        a.scale.set((w + 1.2) * ESCALA, (h + 1.2) * ESCALA, (d + 1.2) * ESCALA);
+        a.position.copy(m.position);
+        e.add(a);
+      }
+    };
+    const fixo = (cor) => materialCor(cor);
+    const lam = (cor) => materialLamina(cor, v, n);
+    peca(fixo(v.pomo), 1.8, 1.2, 1.8, 0, -1.2, 0);       // pomo
+    peca(fixo(v.cabo), 1.2, 3.6, 1.2, 0, 0.8, 0);        // cabo
+    peca(fixo(v.guarda), 1.8, 1, 5, 0, 3, 0);            // guarda
+    peca(lam(v.lamina), 1, 9.5, 2.4, 0, 8.3, 0);         // lâmina (chata: de lado aparece larga)
+    peca(lam(v.fio), 1.1, 9, 0.8, 0, 8.3, 0.8);          // brilho do fio
+    peca(lam(v.sombra), 1.1, 9, 0.8, 0, 8.3, -0.8);      // sombra do outro fio
+    peca(lam(v.lamina), 1, 1.2, 1.4, 0, 13.6, 0);        // ponta
+    if (v.reflexo) peca(lam(v.reflexo), 1.15, 5, 0.5, 0, 9, 0.2); // reflexo (hidra)
     e.rotation.x = -Math.PI / 2 + 0.3;
     this.grupoMao.add(e);
   }
@@ -1189,6 +1336,7 @@ export class Personagem {
    */
   animar(dt, velHorizontal, noAr) {
     this._tempo += dt;
+    atualizarPulsos(); // brilho das melhorias +N
     const vel = Math.max(0, velHorizontal);
 
     // O balanço acompanha a distância percorrida (vel * dt)

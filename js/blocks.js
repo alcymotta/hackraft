@@ -36,6 +36,14 @@ export const B = {
   TOCHA: 23,
   BAU: 24,
   MINERIO_CARVAO: 25,
+  // Metais e forja (Fase 9)
+  MINERIO_COBRE: 26,
+  MINERIO_FERRO: 27,
+  MINERIO_PRATA: 28,
+  MINERIO_OURO: 29,
+  MINERIO_DIAMANTE: 30,
+  MINERIO_DRACONIO: 31,
+  FORJA: 32,
 };
 
 // BLOCOS[id] devolve a descrição completa do bloco
@@ -73,6 +81,8 @@ const porNome = new Map();
  *  - juntarIguais: não desenha a face entre dois blocos iguais (vidro). Padrão false.
  *  - interativo: o botão direito usa o bloco em vez de colocar outro (baú, porta). Padrão false.
  *  - texturaFrente: nome da textura da face da frente (baú). null = sem frente própria.
+ *  - dropExtra: lista de drops sorteados ao quebrar, além do `item`:
+ *    [{ item: 'maca', chance: 0.08 }] (chance de 0 a 1, 1 item por acerto). Padrão [].
  */
 function registrar(id, def) {
   const bloco = {
@@ -96,6 +106,7 @@ function registrar(id, def) {
     juntarIguais: def.juntarIguais ?? false,
     interativo: def.interativo ?? false,
     texturaFrente: def.texturaFrente ?? null,
+    dropExtra: def.dropExtra ?? [],
   };
   BLOCOS[id] = bloco;
   SOLIDO[id] = bloco.solido ? 1 : 0;
@@ -141,6 +152,7 @@ registrar(B.TRONCO, {
 registrar(B.FOLHAS, {
   nome: 'folhas', rotulo: 'Folhas', texturas: igual('folhas'),
   opaco: false, recorte: true, dureza: 0.2, som: 'folhas',
+  dropExtra: [{ item: 'maca', chance: 0.08 }],
 });
 registrar(B.ROCHA_MATRIZ, {
   nome: 'rocha_matriz', rotulo: 'Rocha-matriz', texturas: igual('rocha_matriz'),
@@ -214,6 +226,32 @@ registrar(B.BAU, {
 registrar(B.MINERIO_CARVAO, {
   nome: 'minerio_carvao', rotulo: 'Minério de carvão', texturas: igual('minerio_carvao'),
   dureza: 1.5, som: 'pedra', item: 'carvao',
+});
+
+// Minérios de metal (Fase 9): [chave em B, nome, rótulo, dureza, item que cai, raio-X?, cor do raio-X, brilha?]
+// Só o diamante e o dracônio aparecem no raio-X; só o dracônio brilha e dá luz.
+const METAIS_BLOCOS = [
+  ['MINERIO_COBRE', 'minerio_cobre', 'Minério de cobre', 2, 'cobre_bruto', false, null, false],
+  ['MINERIO_FERRO', 'minerio_ferro', 'Minério de ferro', 2.5, 'ferro_bruto', false, null, false],
+  ['MINERIO_PRATA', 'minerio_prata', 'Minério de prata', 3, 'prata_bruta', false, null, false],
+  ['MINERIO_OURO', 'minerio_ouro', 'Minério de ouro', 3, 'ouro_bruto', false, null, false],
+  ['MINERIO_DIAMANTE', 'minerio_diamante', 'Minério de diamante', 4, 'diamante', true, '#4fe8ff', false],
+  ['MINERIO_DRACONIO', 'minerio_draconio', 'Minério de dracônio', 5, 'draconio_bruto', true, '#e0306e', true],
+];
+for (const [chave, nome, rotulo, dureza, item, xray, corXray, brilha] of METAIS_BLOCOS) {
+  registrar(B[chave], {
+    nome, rotulo, texturas: igual(nome),
+    dureza, som: 'pedra', item,
+    xray, corXray,
+    brilho: brilha, luz: brilha ? 3 : 0,
+  });
+}
+// Forja: fornalha com bigorna em cima, boca acesa na frente
+registrar(B.FORJA, {
+  nome: 'forja', rotulo: 'Forja',
+  texturas: { topo: 'forja_topo', lado: 'forja_lado', baixo: 'forja_lado' },
+  texturaFrente: 'forja_frente',
+  interativo: true, dureza: 2, som: 'pedra', item: 'forja',
 });
 
 /** Devolve o id do bloco a partir do nome (ou undefined se não existir) */

@@ -56,3 +56,24 @@ Desde a Fase 3, o Claude segue direto até a Fase 11 sem parar a cada fase, como
   - comer é segurar o botão direito com a comida na mão;
   - não existe fome, para ficar simples: comida só cura.
 - **Monstros ao amanhecer:** pegam fogo e somem.
+## Fase 8: monstros RPG
+- **Onde estão os chefões:** "Ninho do Dragão" (num pico alto) e "Covil da Hidra" (num lago escuro), 1 de cada a cada região de 12×12 chunks. O chefão aparece quando alguém chega perto, no máximo uma vez por dia de jogo.
+- **Lua Vermelha:** cerca de 1 a cada 8 noites, com céu avermelhado, mais monstros e chance de chefão aparecer perto dos jogadores.
+- **Níveis:** cada nível dá +1 coração (até 20 corações) e +1 de força no golpe.
+- **Moedas:** os orcs soltam moedas, que vão servir no alfaiate (Fase 10).
+- **Ovo de dragão:** só o dragão solta. Ele é usado na Fase 11 para conquistar o filhote de dragão.
+## Fase 9: forja e melhorias
+- **Fases em paralelo:** a Fase 9 foi feita junto com o fim da Fase 7, porque não depende dos mobs.
+- **Uma só "Forja":** ela faz o papel da bigorna e da fornalha. Funde minério bruto com carvão em barra, forja espadas e armaduras, e melhora itens.
+- **Melhorias de +1 a +5:** nunca falham, e cada nível deixa o item mais brilhante.
+- **Como a melhoria é guardada:** fica no nome do item (ex.: "espada_ferro+2"). Assim ela vai junto quando o item é guardado no baú ou dado ao outro jogador.
+- **Itens de chefão:** as escamas do dragão e da hidra viram armaduras especiais, e também servem para melhorar os itens de chefão.
+## Fase 10: alfaiate
+- **Mesa do alfaiate:** em vez de um personagem-alfaiate numa vila (que exigiria gerar vilas), o alfaiate é uma mesa que você mesmo constrói. Nela dá para costurar roupas com materiais ou comprá-las com moedas dos orcs.
+- **Tecido:** é feito de fio de seda (que vem das aranhas).
+- **Bônus novos:** o mago faz os poderes durarem 30% a mais, o astronauta pula mais e aguenta quedas maiores, e o pirata nada mais rápido.
+
+## Fase 11: montarias
+- **Fogueira em vez de lava:** como o mundo não tem lava, o ovo de dragão é chocado perto de uma fogueira por 1 dia de jogo (5 minutos).
+- **Aranha gigante:** precisa estar enfraquecida (menos de 30% de vida) para tentar domar, como pedido.
+- **Sela obrigatória:** toda montaria precisa de sela para montar, e a sela é feita de couro de orc.

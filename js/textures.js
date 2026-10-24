@@ -10,7 +10,7 @@
 
 import * as THREE from 'three';
 import { BLOCOS, NOMES_TEXTURAS, texturaDaFace } from './blocks.js';
-import { obterItem } from './items.js';
+import { obterItem, MATERIAIS_EQUIP } from './items.js';
 
 const T = 16; // tamanho de cada textura, em pixels
 
@@ -588,6 +588,122 @@ for (const [nome, hex] of Object.entries(COR_MINERIOS)) {
 }
 
 // ---------------------------------------------------------------------
+// Fase 9: minérios de metal e forja
+// ---------------------------------------------------------------------
+// Metais: pedra com manchinhas de metal (cada um na sua cor)
+/** Pedra com 5 a 7 manchas maiores de metal (2x2 ou 3x2), com luz e sombra */
+function minerioMetal(ctx, cor) {
+  pedraBase(ctx);
+  const ocupado = new Uint8Array(T * T);
+  const total = 5 + inteiro(3);
+  for (let n = 0, t = 0; n < total && t < 60; t++) {
+    const w = 2 + inteiro(2), h = 2;
+    const ox = 1 + inteiro(T - w - 1), oy = 1 + inteiro(T - h - 1);
+    let livre = true;
+    for (let y = oy - 1; y <= oy + h && livre; y++) for (let x = ox - 1; x <= ox + w; x++) {
+      if (x >= 0 && y >= 0 && x < T && y < T && ocupado[y * T + x]) { livre = false; break; }
+    }
+    if (!livre) continue;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (w === 3 && ((x === 0 && y === 1 && rnd() < 0.5) || (x === 2 && y === 0 && rnd() < 0.5))) continue; // canto irregular
+      ocupado[(oy + y) * T + ox + x] = 1;
+      const c = x === 0 && y === 0 ? tom(cor, 60) : (y === h - 1 || x === w - 1) ? tom(cor, -50) : tom(cor, (rnd() - 0.5) * 24);
+      pixel(ctx, ox + x, oy + y, c);
+    }
+    n++;
+  }
+}
+RECEITAS.minerio_cobre = (ctx) => minerioMetal(ctx, [214, 118, 62]);
+RECEITAS.minerio_ferro = (ctx) => minerioMetal(ctx, [222, 176, 150]);
+RECEITAS.minerio_prata = (ctx) => minerioMetal(ctx, [214, 228, 246]);
+RECEITAS.minerio_ouro = (ctx) => minerioMetal(ctx, [250, 206, 56]);
+// Diamante: cristais ciano facetados
+RECEITAS.minerio_diamante = (ctx) => minerioCristal(ctx, [72, 224, 236]);
+// Dracônio: cristais roxo-avermelhados, cortados por veios escuros
+RECEITAS.minerio_draconio = (ctx) => {
+  minerioCristal(ctx, [172, 40, 104]);
+  for (let i = 0; i < 4; i++) rachadura(ctx, inteiro(T), inteiro(T), 5 + inteiro(4), [74, 14, 46]);
+  for (let i = 0; i < 6; i++) pixel(ctx, inteiro(T), inteiro(T), [236, 84, 120]); // faíscas
+};
+
+/** Parede de pedra com tijolos (fileiras alternadas, rejunte escuro) */
+function tijolosDePedra(ctx) {
+  const pedra = [112, 110, 112];
+  const rejunte = [60, 58, 62];
+  for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) pixel(ctx, x, y, tom(rejunte, (rnd() - 0.5) * 8));
+  for (let fila = 0; fila < 4; fila++) {
+    const desloc = (fila % 2) * 4;
+    for (let b = -1; b < 3; b++) {
+      const x0 = b * 8 + desloc;
+      const tomBloco = (rnd() - 0.5) * 22;
+      for (let y = fila * 4; y < fila * 4 + 3; y++) {
+        for (let x = x0; x < x0 + 7; x++) {
+          const borda = y === fila * 4 ? 10 : y === fila * 4 + 2 ? -10 : 0;
+          pixel(ctx, x, y, tom(pedra, tomBloco + borda + (rnd() - 0.5) * 12));
+        }
+      }
+    }
+  }
+}
+
+Object.assign(RECEITAS, {
+  // Topo da forja: pedra escura com a bigorna vista de cima
+  forja_topo(ctx) {
+    ruidoBase(ctx, [78, 76, 80], 8);
+    for (let i = 0; i < T; i++) {
+      for (const k of [0, T - 1]) { pixel(ctx, i, k, [48, 46, 52]); pixel(ctx, k, i, [48, 46, 52]); }
+    }
+    const aco = [44, 46, 58];
+    // corpo da bigorna e a ponta (chifre) à esquerda
+    for (let y = 5; y <= 10; y++) for (let x = 5; x <= 13; x++) pixel(ctx, x, y, tom(aco, (y - 7) * -4 + (rnd() - 0.5) * 6));
+    for (let y = 6; y <= 9; y++) for (let x = 3; x <= 4; x++) pixel(ctx, x, y, tom(aco, -4));
+    pixel(ctx, 2, 7, aco); pixel(ctx, 2, 8, tom(aco, -8)); pixel(ctx, 1, 7, tom(aco, -10));
+    // brilho do metal e sombra
+    for (let x = 5; x <= 13; x++) pixel(ctx, x, 5, [128, 134, 150]);
+    for (let x = 3; x <= 12; x++) pixel(ctx, x, 6, [92, 98, 114]);
+    for (let x = 5; x <= 13; x++) pixel(ctx, x, 10, [26, 26, 34]);
+    pixel(ctx, 9, 8, [200, 204, 216]);
+    // brasa que ficou do ferro quente
+    pixel(ctx, 11, 8, [255, 140, 40]); pixel(ctx, 12, 8, [220, 90, 24]);
+    // sombra no chão
+    for (let x = 6; x <= 14; x++) pixel(ctx, x, 11, [58, 56, 62]);
+  },
+
+  // Lado da forja: parede de tijolos de pedra
+  forja_lado(ctx) {
+    tijolosDePedra(ctx);
+  },
+
+  // Frente da forja: tijolos e a boca da fornalha acesa
+  forja_frente(ctx) {
+    tijolosDePedra(ctx);
+    // moldura escura em volta da boca
+    for (let y = 3; y <= 14; y++) {
+      for (let x = 3; x <= 12; x++) {
+        if (y === 3 && (x < 5 || x > 10)) continue;
+        pixel(ctx, x, y, [38, 36, 40]);
+      }
+    }
+    // boca em arco, com brasa: escura em cima e cada vez mais quente embaixo
+    const brasa = [[70, 22, 10], [110, 30, 12], [170, 52, 14], [226, 100, 20], [250, 150, 36], [255, 206, 80]];
+    for (let y = 4; y <= 13; y++) {
+      const x0 = y === 4 ? 6 : y === 5 ? 5 : 4;
+      const x1 = 15 - x0;
+      const nivel = Math.min(brasa.length - 1, Math.max(0, Math.floor((y - 4) / 10 * brasa.length + (rnd() - 0.5) * 1.2)));
+      for (let x = x0; x <= x1; x++) {
+        const n = Math.min(brasa.length - 1, Math.max(0, nivel + (rnd() < 0.25 ? 1 : 0) - (rnd() < 0.15 ? 1 : 0)));
+        pixel(ctx, x, y, brasa[n]);
+      }
+    }
+    // chamas amarelas e lenha no fundo
+    for (const [x, y] of [[6, 11], [9, 10], [11, 12], [7, 12], [8, 9]]) pixel(ctx, x, y, [255, 232, 130]);
+    for (let x = 5; x <= 10; x++) pixel(ctx, x, 13, [80, 40, 20]);
+    // brilho no chão em frente
+    for (let x = 4; x <= 11; x++) pixel(ctx, x, 14, [150, 70, 30]);
+  },
+});
+
+// ---------------------------------------------------------------------
 // Geração de uma textura (canvas 16x16)
 // ---------------------------------------------------------------------
 function novoCanvas(tam = T) {
@@ -861,6 +977,11 @@ function contornar(g) {
 
 /** Converte a grade em dataURL 48x48, sem suavizar */
 function grade48(g) {
+  return grade48Canvas(g).toDataURL('image/png');
+}
+
+/** Igual a grade48, mas devolve o canvas (para desenhar mais coisas por cima) */
+function grade48Canvas(g) {
   const pequeno = novoCanvas();
   const pctx = pequeno.getContext('2d');
   for (let y = 0; y < T; y++) {
@@ -873,7 +994,7 @@ function grade48(g) {
   const ctx = grande.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(pequeno, 0, 0, 48, 48);
-  return grande.toDataURL('image/png');
+  return grande;
 }
 
 // --- Camiseta (roupas) ---
@@ -958,10 +1079,9 @@ const ROUPA_ICONE = {
 };
 
 // --- Armaduras ---
-const COR_MATERIAL = {
-  couro: [150, 98, 58],
-  ferro: [206, 210, 218],
-};
+// Cor de cada material (vem da MATERIAIS_EQUIP, em items.js)
+const COR_MATERIAL = {};
+for (const [nome, m] of Object.entries(MATERIAIS_EQUIP)) COR_MATERIAL[nome] = m.cor;
 
 function pecaArmadura(g, parte, material) {
   const cor = COR_MATERIAL[material] ?? [160, 160, 172];
@@ -999,12 +1119,57 @@ function pecaArmadura(g, parte, material) {
         if (c && (x + y) % 5 === 0 && ((x * 3 + y) % 2 === 0)) g[y * T + x] = tom(c, 28);
       }
     }
-  } else if (material === 'ferro') {
-    // rebites cinza-escuros
+  } else if (material === 'ferro' || material === 'cobre' || material === 'prata') {
+    // rebites escuros (a prata ganha também pontinhos de brilho)
     for (let y = 0; y < T; y++) {
       for (let x = 0; x < T; x++) {
         const c = g[y * T + x];
-        if (c && (x * 5 + y * 3) % 11 === 0) g[y * T + x] = tom(c, -45);
+        if (!c) continue;
+        if ((x * 5 + y * 3) % 11 === 0) g[y * T + x] = tom(c, -45);
+        else if (material === 'prata' && (x * 3 + y * 7) % 13 === 0) g[y * T + x] = tom(c, 40);
+      }
+    }
+  } else if (material === 'ouro') {
+    // brilhos dourados e frisos
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const c = g[y * T + x];
+        if (!c) continue;
+        if ((x * 3 + y * 5) % 9 === 0) g[y * T + x] = tom(c, 45);
+        else if ((x * 5 + y * 3) % 17 === 0) g[y * T + x] = tom(c, -40);
+      }
+    }
+  } else if (material === 'diamante') {
+    // facetas: diagonais claras e escuras, com cintilar branco
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const c = g[y * T + x];
+        if (!c) continue;
+        const f = (x + y) % 6;
+        if (f === 0) g[y * T + x] = tom(c, 55);
+        else if (f === 3) g[y * T + x] = tom(c, -38);
+        if ((x * 7 + y * 5) % 23 === 0) g[y * T + x] = [255, 255, 255];
+      }
+    }
+  } else if (material === 'draconio') {
+    // veios vermelhos brilhantes
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const c = g[y * T + x];
+        if (!c) continue;
+        if ((x * 2 + y * 3) % 7 === 0) g[y * T + x] = [250, 96, 120];
+        else if ((x + y * 2) % 9 === 0) g[y * T + x] = tom(c, -52);
+      }
+    }
+  } else if (material === 'escama_dragao' || material === 'escama_hidra') {
+    // escamas: fileiras de arcos (pixel escuro embaixo, claro em cima)
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const c = g[y * T + x];
+        if (!c) continue;
+        const dx = (x + (y >> 1) * 2) % 4;
+        if (y % 2 === 1 && dx !== 1) g[y * T + x] = tom(c, -42);
+        else if (y % 2 === 0 && dx === 1) g[y * T + x] = tom(c, 40);
       }
     }
   }
@@ -1012,9 +1177,44 @@ function pecaArmadura(g, parte, material) {
 
 // --- Espada de madeira (diagonal, cabo embaixo à esquerda) ---
 function espadaMadeira(g) {
-  const lamina = [196, 154, 92];
+  espadaDeCor(g, [196, 154, 92], [128, 88, 48]);
+}
+
+/**
+ * Espada de qualquer material (visual = 'espada_<material>'): lâmina na cor
+ * do material, cabo marrom. As de chefão ganham enfeites (chamas / gotas).
+ */
+function espadaIcone(g, visual) {
+  if (visual === 'espada_dragao') {
+    espadaDeCor(g, [214, 40, 30], [240, 190, 60]);
+    // chamas subindo pela lâmina
+    for (const [x, y, c] of [[8, 6, [255, 150, 30]], [10, 3, [255, 190, 50]], [12, 1, [255, 220, 90]],
+      [7, 7, [255, 120, 24]], [11, 4, [255, 140, 30]], [13, 0, [255, 236, 130]], [9, 5, [255, 220, 90]], [14, 2, [255, 150, 30]]]) {
+      ponto(g, x, y, c);
+    }
+    return;
+  }
+  if (visual === 'espada_hidra') {
+    espadaDeCor(g, [40, 176, 156], [34, 96, 84]);
+    // gotas de veneno
+    for (const [x, y] of [[9, 10], [12, 8], [6, 7], [11, 6], [13, 4]]) ponto(g, x, y, [140, 255, 120]);
+    ponto(g, 9, 11, [90, 210, 90]); ponto(g, 12, 9, [90, 210, 90]);
+    return;
+  }
+  const material = visual.replace(/^espada_/, '');
+  const cor = COR_MATERIAL[material] ?? [200, 200, 210];
+  espadaDeCor(g, cor, tom(cor, -62));
+  if (material === 'draconio') {
+    for (const i of [1, 3, 5, 7]) ponto(g, 6 + i, 9 - i, [255, 110, 150]); // veios brilhantes
+  } else if (material === 'diamante') {
+    ponto(g, 8, 7, [255, 255, 255]); ponto(g, 11, 4, [255, 255, 255]); ponto(g, 13, 2, [220, 255, 255]);
+  } else if (material === 'ouro' || material === 'prata') {
+    ponto(g, 9, 6, [255, 255, 255]); ponto(g, 12, 3, tom(cor, 60));
+  }
+}
+
+function espadaDeCor(g, lamina, guarda) {
   const cabo = [96, 62, 34];
-  const guarda = [128, 88, 48];
   for (let i = 0; i < 9; i++) {
     const x = 6 + i;
     const y = 9 - i;
@@ -1167,17 +1367,232 @@ function portaIcone(g) {
   ponto(g, 10, 9, [40, 40, 46]); ponto(g, 10, 10, [60, 60, 66]);
 }
 
+// --- Fase 7: comidas e materiais dos mobs ---
+// Desenha uma forma a partir de linhas de texto ('X' = pinta) com degradê de luz
+function formaTexto(g, linhas, x0, y0, cor) {
+  linhas.forEach((linha, j) => {
+    for (let i = 0; i < linha.length; i++) {
+      if (linha[i] === 'X') ponto(g, x0 + i, y0 + j, tom(cor, 14 - j * 4 - i));
+    }
+  });
+}
+
+function costeletaIcone(g) {
+  const osso = [240, 232, 210];
+  // osso saindo do canto de baixo à esquerda
+  for (let i = 0; i < 5; i++) ponto(g, 3 + i, 12 - i, tom(osso, i === 0 ? -20 : 0));
+  retangulo(g, 1, 11, 2, 12, osso); retangulo(g, 2, 13, 3, 14, osso);
+  formaTexto(g, [
+    '...XXXXX..',
+    '..XXXXXXX.',
+    '.XXXXXXXXX',
+    '.XXXXXXXXX',
+    '..XXXXXXX.',
+    '...XXXXX..',
+  ], 5, 2, [226, 112, 120]);
+  // veios de gordura e brilho
+  ponto(g, 8, 4, [250, 200, 200]); ponto(g, 9, 4, [250, 200, 200]); ponto(g, 10, 5, [250, 200, 200]);
+  ponto(g, 7, 6, [176, 70, 84]); ponto(g, 11, 6, [176, 70, 84]); ponto(g, 9, 7, [176, 70, 84]);
+}
+
+function coxinhaIcone(g) {
+  const osso = [240, 232, 210];
+  retangulo(g, 2, 12, 3, 13, osso); retangulo(g, 1, 13, 2, 14, osso);
+  ponto(g, 3, 11, osso); ponto(g, 4, 10, osso); ponto(g, 5, 9, tom(osso, -20));
+  formaTexto(g, [
+    '...XXXX...',
+    '..XXXXXX..',
+    '.XXXXXXXX.',
+    '.XXXXXXXXX',
+    '.XXXXXXXXX',
+    '..XXXXXXX.',
+    '...XXXXX..',
+  ], 5, 1, [222, 156, 52]);
+  // brilho e pontinhos de torrado
+  ponto(g, 8, 3, [255, 232, 150]); ponto(g, 9, 3, [255, 226, 130]); ponto(g, 7, 4, [250, 214, 110]);
+  ponto(g, 10, 6, [170, 100, 30]); ponto(g, 8, 7, [170, 100, 30]); ponto(g, 11, 5, [190, 116, 36]);
+}
+
+function macaIcone(g) {
+  formaTexto(g, [
+    '..XXX..XXX..',
+    '.XXXXXXXXXX.',
+    'XXXXXXXXXXXX',
+    'XXXXXXXXXXXX',
+    'XXXXXXXXXXXX',
+    '.XXXXXXXXXX.',
+    '..XXXXXXXX..',
+    '...XX..XX...',
+  ], 2, 4, [210, 36, 40]);
+  // brilho
+  ponto(g, 4, 6, [255, 210, 210]); ponto(g, 4, 7, [255, 170, 170]); ponto(g, 5, 6, [255, 170, 170]);
+  // cabinho e folhinha
+  ponto(g, 8, 3, [100, 66, 30]); ponto(g, 8, 2, [100, 66, 30]);
+  retangulo(g, 9, 1, 11, 1, [70, 170, 50]); retangulo(g, 9, 2, 10, 2, [56, 140, 42]);
+}
+
+function carnePodreIcone(g) {
+  const osso = [200, 196, 170];
+  retangulo(g, 2, 12, 3, 13, osso); ponto(g, 4, 11, osso); ponto(g, 5, 10, tom(osso, -20));
+  formaTexto(g, [
+    '...XXXXX..',
+    '..XXXXXXX.',
+    '.XXXXXXXXX',
+    '.XXXXXXXXX',
+    '..XXXXXXX.',
+    '...XXXXX..',
+  ], 5, 3, [120, 150, 78]);
+  // manchas escuras e mofo
+  retangulo(g, 8, 5, 9, 6, [84, 98, 50]); ponto(g, 11, 7, [70, 84, 44]); ponto(g, 7, 8, [84, 98, 50]);
+  ponto(g, 10, 4, [176, 196, 110]); ponto(g, 6, 7, [150, 70, 80]);
+}
+
+function penaIcone(g) {
+  // pena branca curva, da ponta de baixo à esquerda até cima à direita
+  const cano = [210, 206, 196];
+  for (let i = 0; i < 12; i++) ponto(g, 2 + i, 13 - i, cano);
+  // barbas: dois lados do cano, com leve curvatura
+  for (let i = 3; i < 12; i++) {
+    const x = 2 + i, y = 13 - i;
+    const larg = i < 9 ? 3 : 2;
+    for (let k = 1; k <= larg; k++) {
+      ponto(g, x + k, y, tom([250, 250, 250], -k * 6));
+      ponto(g, x, y - k + (i > 8 ? 1 : 0), tom([240, 240, 245], -k * 8));
+    }
+  }
+  ponto(g, 13, 1, [255, 255, 255]); ponto(g, 14, 2, [230, 230, 236]);
+  ponto(g, 2, 14, [150, 146, 136]);
+}
+
+function fioSedaIcone(g) {
+  const branco = [244, 244, 248];
+  // novelo redondo
+  preencher(g, (x, y) => (x - 7) * (x - 7) + (y - 7) * (y - 7) <= 22, branco);
+  // voltas do fio
+  for (let i = 0; i < 8; i++) {
+    ponto(g, 4 + i, 4 + ((i * 3) % 5) + 1, [200, 204, 216]);
+    ponto(g, 10 - ((i * 2) % 6), 5 + i, [214, 218, 228]);
+  }
+  ponto(g, 5, 5, [255, 255, 255]); ponto(g, 6, 5, [255, 255, 255]);
+  // fio solto
+  ponto(g, 10, 11, branco); ponto(g, 11, 12, branco); ponto(g, 12, 12, [220, 224, 234]);
+  ponto(g, 13, 13, branco); ponto(g, 13, 14, [220, 224, 234]); ponto(g, 12, 14, branco);
+}
+
+// --- Fase 9: metais brutos, barras e escamas ---
+// Cor de cada metal bruto / barra (o ferro bruto é bege-rosado; a barra, cinza-azulada)
+const COR_BRUTO = {
+  cobre_bruto: [206, 114, 62],
+  ferro_bruto: [214, 172, 148],
+  prata_bruta: [218, 232, 250],
+  ouro_bruto: [250, 204, 56],
+  draconio_bruto: [176, 40, 104],
+};
+const COR_BARRA = {
+  barra_cobre: [208, 116, 64],
+  barra_ferro: [172, 178, 192],
+  barra_prata: [232, 242, 255],
+  barra_ouro: [252, 208, 60],
+  barra_draconio: [186, 44, 108],
+};
+
+/** Três pedrinhas de metal, na cor do bruto */
+function brutoIcone(g, cor) {
+  const pedras = [
+    // [x0, y0, linhas]
+    [2, 7, ['.XXX.', 'XXXXX', 'XXXXX', '.XXX.']],
+    [8, 4, ['.XXXX.', 'XXXXXX', 'XXXXXX', '.XXXX.']],
+    [6, 9, ['.XXXX.', 'XXXXXX', 'XXXXXX', '.XXXX.']],
+  ];
+  pedras.forEach(([x0, y0, linhas], k) => {
+    // pedra cinza por trás e pontos do metal por cima
+    formaTexto(g, linhas, x0, y0, [118, 118, 122]);
+    linhas.forEach((linha, j) => {
+      for (let i = 0; i < linha.length; i++) {
+        if (linha[i] !== 'X') continue;
+        if ((i + j * 2 + k) % 3 !== 0) ponto(g, x0 + i, y0 + j, tom(cor, 12 - j * 10 - i * 2));
+      }
+    });
+    ponto(g, x0 + 1, y0 + 1, tom(cor, 70)); // brilhinho
+  });
+}
+
+/** Lingote em perspectiva: topo claro, frente média, lado escuro, com brilho */
+function barraIcone(g, cor) {
+  for (let y = 5; y <= 8; y++) for (let x = 2 + (8 - y); x <= 10 + (8 - y); x++) ponto(g, x, y, tom(cor, 38 - (x - 5) * 1.5));
+  for (let y = 9; y <= 12; y++) for (let x = 2; x <= 10; x++) ponto(g, x, y, tom(cor, y === 9 ? 8 : -6 - (y - 9) * 6));
+  for (let k = 1; k <= 3; k++) for (let y = 9 - k; y <= 12 - k; y++) ponto(g, 10 + k, y, tom(cor, -52));
+  // brilho: pontinhos brancos e um friso claro na frente
+  ponto(g, 5, 7, [255, 255, 255]); ponto(g, 6, 7, tom(cor, 80)); ponto(g, 4, 8, tom(cor, 70));
+  for (let x = 3; x <= 7; x++) ponto(g, x, 10, tom(cor, 30));
+  ponto(g, 3, 10, [255, 255, 255]);
+}
+
+/** Escama em forma de gota (ponta para baixo), com nervura no meio e brilho */
+function escamaIcone(g, cor) {
+  const forma = [
+    '....XXXXXX....',
+    '..XXXXXXXXXX..',
+    '.XXXXXXXXXXXX.',
+    '.XXXXXXXXXXXX.',
+    '.XXXXXXXXXXXX.',
+    '..XXXXXXXXXX..',
+    '..XXXXXXXXXX..',
+    '...XXXXXXXX...',
+    '....XXXXXX....',
+    '.....XXXX.....',
+    '......XX......',
+  ];
+  forma.forEach((linha, j) => {
+    for (let i = 0; i < linha.length; i++) {
+      if (linha[i] !== 'X') continue;
+      ponto(g, 1 + i, 2 + j, tom(cor, 44 - j * 7 - i * 2));
+    }
+  });
+  // nervura central e nervuras laterais
+  for (let j = 1; j <= 9; j++) ponto(g, 7, 2 + j, tom(cor, -50));
+  for (let j = 2; j <= 6; j++) { ponto(g, 7 - j + 1, 2 + j + 1, tom(cor, -40)); ponto(g, 7 + j - 1, 2 + j + 1, tom(cor, -40)); }
+  // borda clara em cima e brilhos
+  for (let i = 5; i <= 10; i++) ponto(g, i, 2, tom(cor, 90));
+  ponto(g, 4, 4, [255, 255, 255]); ponto(g, 5, 4, tom(cor, 110)); ponto(g, 4, 5, tom(cor, 100));
+  ponto(g, 12, 2, [255, 255, 255]); ponto(g, 13, 1, tom(cor, 100)); ponto(g, 12, 1, tom(cor, 90)); // cintilar
+}
+
+const ICONES_MOBS = {
+  costeleta: costeletaIcone,
+  coxinha: coxinhaIcone,
+  maca: macaIcone,
+  carne_podre: carnePodreIcone,
+  pena: penaIcone,
+  fio_seda: fioSedaIcone,
+};
+
 // Itens de bloco que usam um ícone próprio em vez do cubinho
 const ICONES_ESPECIAIS = new Set(['porta', 'tocha']);
 
 /** Desenha o ícone de um item que não é bloco (item pode ser undefined) */
 function desenharIconeItem(item) {
   const g = novaGrade();
-  if (item && item.nome === 'graveto') {
+  if (item && COR_BRUTO[item.nome]) {
+    brutoIcone(g, COR_BRUTO[item.nome]);
+    contornar(g);
+  } else if (item && COR_BARRA[item.nome]) {
+    barraIcone(g, COR_BARRA[item.nome]);
+    contornar(g);
+  } else if (item && item.nome === 'diamante') {
+    gema(g, COR_MATERIAL.diamante);
+    contornar(g);
+  } else if (item && (item.nome === 'escama_dragao' || item.nome === 'escama_hidra')) {
+    escamaIcone(g, COR_MATERIAL[item.nome]);
+    contornar(g);
+  } else if (item && item.nome === 'graveto') {
     graveto(g);
     contornar(g);
   } else if (item && item.nome === 'carvao') {
     carvaoIcone(g);
+    contornar(g);
+  } else if (item && ICONES_MOBS[item.nome]) {
+    ICONES_MOBS[item.nome](g);
     contornar(g);
   } else if (item && item.nome === 'tocha') {
     tochaIcone(g);
@@ -1197,13 +1612,49 @@ function desenharIconeItem(item) {
   } else if (item && item.tipo === 'arma' && item.visual === 'espada_madeira') {
     espadaMadeira(g);
     contornar(g);
+  } else if (item && item.tipo === 'arma' && typeof item.visual === 'string' && item.visual.startsWith('espada_')) {
+    espadaIcone(g, item.visual);
+    contornar(g);
   } else if (item && item.tipo === 'acessorio' && COR_CAPA[item.visual]) {
     capa(g, COR_CAPA[item.visual]);
     contornar(g);
   } else {
     interrogacao(g);
   }
+  if (item && item.melhoria > 0) return grade48Melhorado(g, item);
   return grade48(g);
+}
+
+/**
+ * Ícone de um item com melhoria +N: brilho de borda na cor do material
+ * (mais forte a cada nível) e um "+N" pequeno no canto de baixo.
+ */
+function grade48Melhorado(g, item) {
+  const base = grade48Canvas(g);
+  const material = item.material ?? String(item.visual ?? '').replace(/^espada_/, '');
+  const cor = COR_MATERIAL[material] ?? [255, 230, 120];
+  const n = item.melhoria;
+  const canvas = novoCanvas(48);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  // brilho: o ícone desenhado com sombra colorida (duas vezes para ficar forte)
+  ctx.shadowColor = rgb(tom(cor, 30));
+  ctx.shadowBlur = 3 + n * 2;
+  ctx.drawImage(base, 0, 0);
+  ctx.drawImage(base, 0, 0);
+  ctx.shadowBlur = 0;
+  ctx.drawImage(base, 0, 0);
+  // "+N" no canto inferior direito, com contorno escuro
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineWidth = 4;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.strokeText('+' + n, 47, 46);
+  ctx.fillStyle = n >= 5 ? '#ffe45a' : '#ffffff';
+  ctx.fillText('+' + n, 47, 46);
+  return canvas.toDataURL('image/png');
 }
 
 // ---------------------------------------------------------------------

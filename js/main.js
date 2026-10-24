@@ -129,6 +129,20 @@ function lugarLivrePerto(mundo, x0, y0, z0) {
   return [x0, y0, z0]; // não achou: nasce no mesmo lugar (jogadores não colidem entre si)
 }
 
+/**
+ * Direção do empurrão ao levar um golpe. `de` pode ser a posição do mob
+ * ([x, y, z] ou {x, y, z}); o empurrão vai da posição dele para o jogador.
+ */
+const _dirGolpe = { x: 0, y: 0, z: 0 };
+function direcaoDoGolpe(jogador, de) {
+  let mx, mz;
+  if (Array.isArray(de)) { mx = de[0]; mz = de[2]; } else if (de) { mx = de.x; mz = de.z; }
+  if (!Number.isFinite(mx) || !Number.isFinite(mz)) return null;
+  _dirGolpe.x = jogador.posicao.x - mx;
+  _dirGolpe.z = jogador.posicao.z - mz;
+  return _dirGolpe;
+}
+
 async function iniciar() {
   // ----- Renderizador, cena e câmera -----
   const canvas = document.getElementById('tela');
@@ -261,6 +275,49 @@ async function iniciar() {
     location.reload();
   }
 
+  /**
+   * Monta a função `obterJogadores()` dos mobs: [{ id, posicao, local, defesa }].
+   * Os objetos são reaproveitados (nada de lixo no loop). A lista de quem está
+   * na sala é relida só a cada 1 s; as posições são lidas a cada chamada.
+   */
+  function criarListaDeJogadores(jogador, remotos) {
+    const lista = [];
+    const cache = new Map();          // id -> objeto reaproveitado
+    let ids = [];
+    let ultimaLeitura = -Infinity;
+    const obter = (id) => {
+      let o = cache.get(id);
+      if (!o) { o = { id, posicao: null, local: false, defesa: 0 }; cache.set(id, o); }
+      return o;
+    };
+    return () => {
+      const agora = performance.now();
+      if (agora - ultimaLeitura > 1000) {
+        ultimaLeitura = agora;
+        ids = rede ? rede.listaJogadores().map((j) => j.id) : [];
+      }
+      lista.length = 0;
+      const meuId = rede && rede.meuId ? rede.meuId : 'local';
+      const eu = obter(meuId);
+      eu.posicao = jogador.posicao;
+      eu.local = true;
+      eu.defesa = jogador.bonus ? jogador.bonus.defesa : 0;
+      if (!jogador.morto) lista.push(eu);
+      for (const id of ids) {
+        if (id === meuId) continue;
+        const pos = remotos.posicaoDe(id);
+        if (!pos) continue;
+        const o = obter(id);
+        o.posicao = pos;
+        o.local = false;
+        // A defesa dos outros jogadores: se a rede souber, usa; senão 0
+        o.defesa = (rede && typeof rede.defesaDe === 'function' ? rede.defesaDe(id) : 0) || 0;
+        lista.push(o);
+      }
+      return lista;
+    };
+  }
+
   // ----- Montagem do jogo (depois da escolha na tela inicial) -----
   async function montarJogo({ apelido, semente, modificacoes, hora }) {
     ui.mostrarCarregando('Gerando o mundo...');
@@ -292,13 +349,43 @@ async function iniciar() {
     });
     jogador.poderes = poderes;
 
-    jogo = { semente, mundo, ceu, personagem, jogador, remotos, itensChao, particulas, poderes, baus };
+    // Mobs (Fase 7). Import dinâmico: se o módulo falhar, o jogo continua sem mobs.
+    let mobs = null;
+    try {
+      const modulo = await import('./mobs.js');
+      if (typeof modulo.Mobs === 'function') {
+        mobs = new modulo.Mobs({
+          scene, mundo, ceu, rede, particulas, som, itensChao, ui,
+          obterJogadores: criarListaDeJogadores(jogador, remotos),
+        });
+      }
+    } catch (erro) {
+      console.warn('Hackraft: mobs indisponíveis.', erro);
+    }
+    jogador.mobs = mobs;
+
+    jogo = { semente, mundo, ceu, personagem, jogador, remotos, itensChao, particulas, poderes, baus, mobs };
   }
 
   // Depois de posicionar o jogador: liga a rede, expõe para depuração e começa o loop
   function comecar() {
-    const { mundo, ceu, jogador, remotos, itensChao, particulas, poderes, baus } = jogo;
+    const { mundo, ceu, jogador, remotos, itensChao, particulas, poderes, baus, mobs } = jogo;
     aplicarAparencia();
+
+    // ----- Mobs (Fase 7): alvos dos poderes, dano em mim e XP -----
+    if (mobs) {
+      poderes.registrarAlvos(() => mobs.alvosParaPoderes());
+      // O dano chega do anfitrião; a armadura reduz (cada ponto de defesa tira 4%)
+      mobs.aoDanoJogador(({ qtd, de }) => {
+        const reducao = Math.min(CONFIG.DEFESA_MAX_REDUCAO, (jogador.bonus.defesa || 0) * CONFIG.DEFESA_POR_PONTO);
+        jogador.machucar(qtd * (1 - reducao), { direcao: direcaoDoGolpe(jogador, de) });
+      });
+      // XP por matar mobs (a Fase 8 usa o total)
+      mobs.aoXp((qtd) => {
+        jogador.xpTotal += qtd;
+        ui.mostrarXp(qtd);
+      });
+    }
 
     // ----- Baús: mudanças de outros jogadores e baú quebrado com a tela aberta -----
     baus.aoMudar((x, y, z, i, valor) => {
@@ -408,7 +495,7 @@ async function iniciar() {
 
     window.jogo = {
       mundo, ceu, jogador, inventario, equipamento, itensChao, ui, som, salvar, rede, remotos,
-      renderer, scene, camera, texturas, chat, hacker, particulas, poderes, baus,
+      renderer, scene, camera, texturas, chat, hacker, particulas, poderes, baus, mobs,
     };
 
     // Música e boas-vindas
@@ -503,6 +590,7 @@ async function iniciar() {
         'Chunks: ' + est.chunks + '  Fila: ' + est.fila + '  Faces: ' + est.faces,
         'Semente: ' + jogo.semente,
         'Itens no chão: ' + itensChao.quantidade,
+        'Mobs: ' + (mobs ? (mobs.quantidade ?? '?') : 'desligado') + '  XP: ' + jogador.xpTotal,
         'Câmera: ' + jogador.modoCamera,
         'Rede: ' + NOMES_MODO[rede.modo] + (rede.codigo ? '  Sala: ' + rede.codigo : '') +
           '  Jogadores: ' + rede.quantidadeJogadores,
@@ -514,6 +602,7 @@ async function iniciar() {
 
       jogador.atualizar(dt);
       poderes.atualizar(dt);
+      if (mobs) mobs.atualizar(dt);
       particulas.atualizar(dt);
       brilharCristais(dt);
       if (typeof mundo.blocosProximos === 'function') fogoDasTochas(dt);

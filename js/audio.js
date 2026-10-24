@@ -742,6 +742,141 @@ class Som {
     } catch (e) { /* som é enfeite */ }
   }
 
+  // ----- Sons da Fase 7 (mobs, pancada e comer), todos sintetizados -----
+
+  /**
+   * Uma "voz" de mob: oscilador com glide de `de` a `ate` Hz, filtro passa-baixas,
+   * vibrato (vib = [hz, profundidade em Hz]) e envelope. `v` é o volume (0 a 1).
+   */
+  _vozMob(t0, o) {
+    const ctx = this.ctx;
+    const osc = ctx.createOscillator();
+    osc.type = o.onda;
+    osc.frequency.setValueAtTime(o.de, t0);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(20, o.ate), t0 + o.dur);
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = o.filtro ?? 1500;
+    f.Q.value = o.q ?? 1;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, o.forca * o.v), t0 + (o.ataque ?? 0.02));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + o.dur);
+    osc.connect(f).connect(g).connect(this.mestre);
+    let lfo = null;
+    if (o.vib) {
+      lfo = ctx.createOscillator();
+      lfo.frequency.value = o.vib[0];
+      const lg = ctx.createGain();
+      lg.gain.value = o.vib[1];
+      lfo.connect(lg).connect(osc.frequency);
+      lfo.start(t0);
+      lfo.stop(t0 + o.dur + 0.02);
+    }
+    osc.start(t0);
+    osc.stop(t0 + o.dur + 0.02);
+  }
+
+  /** Ruído filtrado com tremolo (volume tremendo) para o chiado da aranha */
+  _chiado(t0, freq, dur, forca, tremHz) {
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this.ruido;
+    src.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = freq;
+    f.Q.value = 1.8;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, forca), t0 + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    // tremolo: um oscilador lento somando ao ganho
+    const trem = ctx.createOscillator();
+    trem.frequency.value = tremHz;
+    const tg = ctx.createGain();
+    tg.gain.value = forca * 0.6;
+    trem.connect(tg).connect(g.gain);
+    src.connect(f).connect(g).connect(this.mestre);
+    src.start(t0, Math.random() * 0.5);
+    src.stop(t0 + dur + 0.02);
+    trem.start(t0);
+    trem.stop(t0 + dur + 0.02);
+  }
+
+  /**
+   * Som de um mob. tipo: 'porco' | 'galinha' | 'zumbi' | 'aranha' (outros = genérico).
+   * evento: 'idle' | 'dano' | 'morte'. volume (0 a 1) é opcional: mobs longe tocam baixinho.
+   */
+  mob(tipo, evento = 'idle', volume = 1) {
+    if (!this._podeTocar()) return;
+    const v = Math.min(1, Math.max(0, Number(volume) || 0));
+    if (v <= 0.01) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      const r = 0.92 + Math.random() * 0.16; // variação de tom a cada vez
+      // dano: mais agudo e curto; morte: mais longo e caindo
+      const dano = evento === 'dano';
+      const morte = evento === 'morte';
+      const tomM = dano ? 1.3 : 1;
+      const durM = dano ? 0.65 : morte ? 1.8 : 1;
+      const quedaM = morte ? 0.5 : 1;
+
+      if (tipo === 'porco') {
+        // "oinc": dente-de-serra com filtro; sobe um pouco e cai
+        const d = 0.22 * durM;
+        this._vozMob(t0, { onda: 'sawtooth', de: 200 * r * tomM, ate: 120 * r * tomM * quedaM, dur: d, forca: 0.22, filtro: 700, q: 3, v });
+        this._vozMob(t0 + d * 0.9, { onda: 'sawtooth', de: 150 * r * tomM, ate: 260 * r * tomM * (morte ? 0.4 : 1), dur: d * 0.7, forca: 0.2, filtro: 900, q: 2, v });
+      } else if (tipo === 'galinha') {
+        // "có-có": notinhas curtas e agudas
+        const n = morte ? 3 : dano ? 1 : 2;
+        for (let k = 0; k < n; k++) {
+          const t = t0 + k * 0.11;
+          const f0 = (700 + k * 60) * r * tomM;
+          this._vozMob(t, { onda: 'square', de: f0, ate: f0 * (morte ? 0.55 : 0.8), dur: 0.09 * durM, forca: 0.09, filtro: 2600, q: 2, ataque: 0.008, v });
+        }
+      } else if (tipo === 'zumbi') {
+        // gemido grave com vibrato lento
+        const d = 0.9 * durM;
+        this._vozMob(t0, {
+          onda: 'sawtooth', de: 110 * r * tomM, ate: (morte ? 55 : 85) * r * tomM, dur: d,
+          forca: 0.2, filtro: 420, q: 2, ataque: 0.12, vib: [5, 9], v,
+        });
+        this._ruidoVarrido(t0, 'lowpass', 500, 200, d * 0.8, 0.05 * v, 0.7);
+      } else if (tipo === 'aranha') {
+        // chiado áspero
+        const d = 0.45 * durM;
+        this._chiado(t0, (dano ? 5200 : 3800) * r, d, 0.18 * v, dano ? 38 : 24);
+      } else {
+        // genérico: um grunhido simples
+        this._vozMob(t0, { onda: 'triangle', de: 260 * r * tomM, ate: 160 * r * quedaM, dur: 0.25 * durM, forca: 0.18, filtro: 1200, v });
+      }
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** "Tump" de pancada num mob */
+  golpeMob() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      this._tomOnda(t0, 'sine', 160 * (0.9 + Math.random() * 0.2), 55, 0.14, 0.35);
+      this._ruidoVarrido(t0, 'lowpass', 1200, 300, 0.08, 0.15);
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Três "nhac" curtos de mastigar */
+  comer() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      for (let k = 0; k < 3; k++) {
+        const t = t0 + k * 0.16;
+        this._ruidoVarrido(t, 'bandpass', 1800 + Math.random() * 600, 900, 0.07, 0.3, 1.5);
+        this._tomOnda(t, 'triangle', 220 + Math.random() * 40, 120, 0.06, 0.12);
+      }
+    } catch (e) { /* som é enfeite */ }
+  }
+
   alternarMudo() {
     this.mudo = !this.mudo;
     this._aplicarGanho();

@@ -75,9 +75,9 @@ Os contratos (APIs de cada módulo, mensagens de rede, formato do save, decisõe
 - [x] Fase 4: chat e comandos (+ /hacker)
 - [x] Fase 5: minérios de poder
 - [x] Fase 6: baús e construção
-- [ ] Fase 7: mobs
+- [x] Fase 7: mobs
 - [ ] Fase 8: monstros estilo RPG
-- [ ] Fase 9: armas, armaduras, minérios e forja
+- [ ] Fase 9: armas, armaduras, minérios e forja (em andamento: minérios, armas e forja prontos; falta ligar no jogo)
 - [ ] Fase 10: roupas como itens e camadas de equipamento
 - [ ] Fase 11: montarias
 

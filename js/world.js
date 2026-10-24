@@ -119,6 +119,13 @@ const TABELA_MINERIOS_BASE = [
   // então nas planícies sobram uns 4 ou 5 veios. Vem DEPOIS dos cristais e
   // só troca pedra: os cristais dos mundos que já existem continuam iguais.
   { bloco: B.MINERIO_CARVAO,   yMin: 5, yMax: 70, veios: 7,     tamanho: [3, 8], fundo: 1   },
+  // Metais (Fase 9): só trocam pedra e vêm DEPOIS das linhas acima.
+  { bloco: B.MINERIO_COBRE,    yMin: 10, yMax: 70, veios: 3.3,   tamanho: [3, 6], fundo: 1   },
+  { bloco: B.MINERIO_FERRO,    yMin: 5,  yMax: 60, veios: 2.5,   tamanho: [3, 6], fundo: 1.2 },
+  { bloco: B.MINERIO_PRATA,    yMin: 5,  yMax: 35, veios: 1,     tamanho: [2, 5], fundo: 1.3 },
+  { bloco: B.MINERIO_OURO,     yMin: 4,  yMax: 28, veios: 0.5,   tamanho: [1, 3], fundo: 1.4 },
+  { bloco: B.MINERIO_DIAMANTE, yMin: 4,  yMax: 14, veios: 0.2,   tamanho: [1, 2], fundo: 1.3 },
+  { bloco: B.MINERIO_DRACONIO, yMin: 4,  yMax: 20, veios: 0.08,  tamanho: [1, 2], fundo: 1.5 },
 ];
 
 // A tabela de verdade: ignora as linhas cujo bloco ainda não existe em

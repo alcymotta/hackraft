@@ -109,6 +109,13 @@ export const CONFIG = {
   BRILHO_RAIO: 14,               // distância máxima (blocos) para os brilhinhos
   BRILHO_POR_VEZ: 3,             // quantos blocos brilham a cada vez
 
+  // ----- Mobs, combate e comida (Fase 7) -----
+  ALCANCE_ATAQUE: 4,             // distância (blocos) para bater num mob
+  INTERVALO_GOLPE_MOB: 0.5,      // segundos entre dois golpes
+  TEMPO_COMER: 0.8,              // segundos segurando o botão direito para comer
+  DEFESA_POR_PONTO: 0.04,        // cada ponto de defesa tira 4% do dano dos mobs
+  DEFESA_MAX_REDUCAO: 0.8,       // a armadura nunca tira mais que 80% do dano
+
   // ----- Baús, construção e tochas (Fase 6) -----
   ESPACOS_BAU: 27,               // espaços de um baú
   BLOCOS_POR_LOTE_MAX: 512,      // máximo de blocos numa mensagem `blocos` (lote)

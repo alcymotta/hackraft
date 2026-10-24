@@ -479,3 +479,159 @@ Barra de vida: sprite com canvas que mostra a % de vida, e `definirVida(frac)`.
   - o anfitrião só aplica se o espaço atual for igual a `antes`; se não for, responde `bauRecusado { x, y, z, i, antes, valor, atual }`;
   - o cliente desfaz no inventário (`ui.removerItensDoJogador` / `ui.devolverAoJogador`) e corrige a tela;
   - `baus.aoRecusar(fn)` e `ui aoMudarEspaco(i, valor, antes)`, que só é chamado se o espaço mudou de fato.
+### Fase 8: monstros estilo RPG, chefões, XP e níveis
+**Tipos novos em `TIPOS_MOB` (mobs.js) e `MODELOS` (modelos_mobs.js):**
+| tipo | vida | dano | comportamento | onde/quando | xp | drops |
+|---|---|---|---|---|---|---|
+| `esqueleto` | 20 | 3 (flecha) | atira flechas de 8 a 16 blocos; foge se você chega muito perto | noite e cavernas | 8 | `osso` (1–2), às vezes `flecha` |
+| `aranha_gigante` | 40 | 5 | como a aranha, maior (2×), sobe parede, envenena (2 s) | noite, florestas e cavernas | 15 | `fio_seda` (2–4), `seda_rara` (10%) |
+| `orc_guerreiro` | 45 | 7 | corpo a corpo forte, investida curta | noite, em grupos de 2–3 | 20 | `moeda` (2–5), `couro_orc` |
+| `orc_xama` | 30 | 5 (magia) | fica longe, lança orbe roxo teleguiado de leve, às vezes cura um orc perto | acompanha orcs | 25 | `moeda` (3–6), `cristal_roxo` (15%) |
+| `dragao` (chefão) | 400 | sopro de fogo 8 + garra 10 | voa em círculos, mergulha, sopra fogo em cone, pousa às vezes | Ninho do Dragão ou Lua Vermelha | 500 | `escama_dragao` (4–8), `ovo_dragao` (1), `espada_dragao` (40%) |
+| `hidra` (chefão) | 500 | por cabeça | 3 cabeças: fogo (bola), gelo (rajada que deixa lento) e veneno (nuvem); cada cabeça ataca no seu ritmo | Covil da Hidra (lago escuro) ou Lua Vermelha | 600 | `escama_hidra` (4–8), `espada_hidra` (50%), `cristal_verde` (3) |
+
+**Projéteis de mob (anfitrião):** flecha, orbe, bola de fogo, rajada de gelo e nuvem de veneno. A rede manda `projetilMob { id, tipo, origem, dir }` e `projetilFim { id, ponto }`; os clientes desenham. O dano no jogador vem pela mensagem `dano` (com `efeito: 'veneno' | 'lento' | 'fogo'`).
+
+**Áreas especiais (world.js, determinísticas pela semente):**
+- **Ninho do Dragão:** 1 por região de 12×12 chunks, num pico alto. Plataforma de pedra escura com ossos e brasas, e o dracônio aparece em volta (a Fase 9 usa).
+- **Covil da Hidra:** 1 por região de 12×12 chunks, deslocado do ninho. Lago escuro com ilhota de pedra musgosa.
+- `mundo.areasEspeciais(perto, raio)` → `[{ tipo: 'ninho' | 'covil', x, y, z }]`.
+- O chefão aparece quando um jogador chega a menos de 40 blocos da área, uma vez por dia de jogo. Ele não aparece de novo enquanto estiver vivo.
+
+**Lua Vermelha:** 1 a cada ~8 noites (sorteada pelo anfitrião ao anoitecer e sincronizada). A lua e o céu ficam avermelhados (`ceu.definirLuaVermelha(bool)`), aparecem mais monstros, e um chefão pode surgir perto dos jogadores (30% por noite vermelha). Aviso no chat: "🌕 A Lua Vermelha nasceu... cuidado!".
+
+**XP e níveis (player.js / ui.js):**
+- `jogador.xp` (total), `jogador.nivel`. XP para o próximo nível = `floor(40 × nivel^1.4)`.
+- A cada nível: +2 de vida máxima (1 coração, até 40 = 20 corações) e +1 de força (dano extra no corpo a corpo, em `forcaExtra()`).
+- Subir de nível: partículas douradas, som e mensagem "Nível 5! (+1 coração, +1 força)".
+- UI: barra de XP verde fina acima da hotbar, com o número do nível no meio; os corações quebram em 2 fileiras depois de 10.
+- O XP e o nível são salvos (`jogador.serializar`; os visitantes, pelo `meuEstado`).
+
+**Efeitos no jogador:**
+- veneno: 1 de dano por segundo por N s, corações esverdeados;
+- lento: velocidade × 0.5, tela azulada leve;
+- fogo: 1 de dano por segundo por 3 s, chamas na tela.
+
+**UI de chefão:** barra grande no topo, com o nome ("Dragão Ancestral", "Hidra de Três Cabeças") e a vida, visível para todos que estiverem a até 64 blocos.
+
+**Itens novos (items.js):**
+- materiais: `osso`, `flecha`, `seda_rara`, `moeda` (pilha 99), `couro_orc`, `escama_dragao`, `escama_hidra`;
+- `ovo_dragao` (pilha 1; a Fase 11 choca);
+- armas: `espada_dragao` (dano 14; acerto põe fogo), `espada_hidra` (dano 12; acerto envenena);
+- os efeitos das armas ficam no campo `efeitoArma`.
+
+**Sons:** esqueleto (chocalhar de ossos), orc (grunhido), xamã (canto mágico curto), dragão (rugido grave + bater de asas), hidra (sibilo triplo), flecha (zunido), música de chefão (tensa, usando o `som.musica` com o clima `'chefao'`).
+### Fase 9: minérios, forja, armas, armaduras e melhorias
+**Blocos (blocks.js):** 26 `MINERIO_COBRE`, 27 `MINERIO_FERRO`, 28 `MINERIO_PRATA`, 29 `MINERIO_OURO`, 30 `MINERIO_DIAMANTE`, 31 `MINERIO_DRACONIO` (brilho roxo-avermelhado, `luz: 3`, `xray: true`), 32 `FORJA` (interativo; topo com bigorna, lados de fornalha acesa; dureza 2).
+**Itens brutos (soltos pelos minérios):** `cobre_bruto`, `ferro_bruto`, `prata_bruta`, `ouro_bruto`, `diamante` (já é gema), `draconio_bruto`.
+**Barras (fundidas na forja: 1 bruto + 1 carvão → 1 barra):** `barra_cobre`, `barra_ferro`, `barra_prata`, `barra_ouro`, `barra_draconio`.
+**Materiais de equipamento (`MATERIAIS_EQUIP`):**
+| material | espada (dano) | armadura (capacete/peitoral/calça/botas) | custo (espada / peça) |
+|---|---|---|---|
+| madeira | 4 (já existe) | — | — |
+| couro | — | 1/3/2/1 (já existe) | — |
+| cobre | 5 | 1/3/2/1 | 2 barras / 3–5 barras |
+| ferro | 6 | 2/6/5/2 (já existe) | 2 / 3–5 |
+| prata | 7 | 2/6/5/2 + 1 no peitoral | 2 / 3–5 |
+| ouro | 6 | 1/4/3/1 | 2 / 3–5 |
+| diamante | 9 | 3/8/6/3 | 2 diamantes / 3–5 diamantes |
+| draconio | 12 | 4/9/7/4 | 2 barras de dracônio / 3–5 |
+| escama_dragao | — | 4/10/8/4 | escamas de dragão (Fase 8) |
+| escama_hidra | — | 4/9/8/4 + resistência a veneno | escamas de hidra (Fase 8) |
+
+Custo das peças: capacete 5, peitoral 8, calça 7, botas 4 unidades do material (como no Minecraft). Espada: 2 do material + 1 graveto.
+Nomes: `espada_<material>`, `capacete_<material>` etc. Itens existentes continuam iguais (`espada_madeira`, `*_couro`, `*_ferro`).
+
+**Melhoria (+1 a +5) codificada no NOME do item:** `espada_ferro+2`.
+- `obterItem(nome)` entende o sufixo `+N`: devolve uma definição derivada (com cache), com `base` (nome sem o sufixo), `melhoria: N`, `rotulo: "Espada de ferro +2"`, `dano: base + N×1` e `defesa: base + ceil(N/2)` por peça.
+- Os itens equipáveis com sufixo continuam com `pilha: 1`. `slotDoItem` funciona com o sufixo.
+- Quem valida itens (rede, save, baús) deve usar `obterItem(nome)` e não `ITENS.has(nome)`.
+- Custo para melhorar até o nível N: N+1 unidades do material do item (barras ou gemas; escamas para os itens de chefão). Para `espada_madeira` e couro: tábuas/couro_orc. Não falha (feito para criança).
+
+**Visual:**
+- `Equipamento.aparencia()` devolve a armadura como `'ferro+2'` (material + sufixo) e `mao: 'espada_ferro+2'`.
+- `character.js` interpreta o sufixo: cada nível dá um brilho (emissive pulsante na cor do material, mais forte a cada nível; com +5, partículas/aura leve).
+- A espada é desenhada na cor do material; dracônio e as de chefão têm detalhes próprios (espada_dragao: lâmina vermelha com brilho de fogo; espada_hidra: verde-azulada).
+- Materiais de armadura novos via `registrarMaterialArmadura`.
+
+**forja.js:**
+- Lógica pura (sem DOM): `RECEITAS_FUNDIR`, `receitasForjar()` (gerada a partir de `MATERIAIS_EQUIP`), `custoMelhoria(nomeItem)` → `[{ item, qtd }]` ou null, `fundir/forjar/melhorar(inventario, ...)` → `{ ok, motivo }`.
+- `TelaForja`: DOM e CSS próprios, injetados como no hacker.js, e registra `ui.adicionarMenuExtra`. Tem 3 abas:
+  - **Fundir:** brutos + carvão → barras;
+  - **Forjar:** grade de espadas e armaduras por material, com custo e "tenho/preciso";
+  - **Melhorar:** o jogador clica num equipamento do inventário ou equipado, vê "+2 → +3", o custo e o botão "Melhorar". Ao melhorar há uma animação de faíscas e martelo, com som.
+- `abrir({ inventario, equipamento, particulas, som, aoFechar })`, `fechar()`, `aberta`.
+
+**Crafting (receitas.js):** forja = pedra 8 + carvão 4 (na lista da tela E).
+
+**Mundo:** linhas novas na `TABELA_MINERIOS`:
+- cobre: y 10–70, comum
+- ferro: y 5–60, comum
+- prata: y 5–35, médio
+- ouro: y 4–28, raro
+- diamante: y 4–14, muito raro
+- dracônio: y 4–20, raríssimo; na Fase 8 também nasce em volta dos Ninhos do Dragão
+### Fase 10: alfaiate e bônus das roupas
+**Blocos:** 33 `MESA_ALFAIATE` (interativa; topo com tesoura, fita métrica e tecido; lados de madeira com carretéis; dureza 1; som 'madeira'), 34 `FOGUEIRA` (modelo próprio simples ou cubo baixo com toras e fogo; `luz: 13`; não sólida; dureza 0.5; usada na Fase 11 para chocar o ovo).
+**Itens:** `tecido` (material; crafting: fio_seda 3 → tecido 1). No crafting da tela E: mesa do alfaiate = tábuas 4 + fio_seda 2; fogueira = graveto 3 + carvão 1 + tronco 1.
+**alfaiate.js** (como o forja.js: lógica pura + `TelaAlfaiate` com DOM/CSS próprios e `ui.adicionarMenuExtra`):
+- Aba **Costurar**, com `RECEITAS_ALFAIATE`:
+  - roupa_ninja: tecido 5 + carvão 3
+  - roupa_cavaleiro: tecido 4 + barra_ferro 3 + barra_ouro 1
+  - roupa_mago: tecido 6 + cristal_roxo 1 + pena 2
+  - roupa_astronauta: tecido 5 + barra_prata 3 + vidro 2
+  - roupa_pirata: tecido 5 + couro_orc 2 + moeda 5
+  - capa_vermelha: tecido 4 + cristal_vermelho 1
+  - capa_azul: tecido 4 + cristal_azul 1
+- Aba **Loja** (comprar com `moeda`), com `PRECOS_LOJA`: ninja 20, cavaleiro 25, mago 30, astronauta 35, pirata 20, capas 10. Mostra "Você tem N moedas".
+- A tela mostra o boneco do jogador com a roupa escolhida (prévia) antes de costurar ou comprar. Pode reutilizar a classe `Personagem` num canvas próprio.
+- `abrir({ inventario, equipamento, aparenciaBase, particulas, som, posMesa, aoFechar })`, `fechar()`, `aberta`.
+**Bônus das roupas (items.js + player.js):**
+- ninja: velocidade 0.1 + silencioso (já existe)
+- cavaleiro: defesa 2 (já existe)
+- mago: `duracaoPoderes: 0.3` (os poderes duram 30% a mais)
+- astronauta: `pulo: 0.3` + `quedaSegura: 5` (+5 blocos sem dano de queda)
+- pirata: `nado: 0.5` (nada 50% mais rápido)
+- hacker: nenhum
+**De onde mais vêm as roupas:**
+- orcs soltam uma roupa aleatória (3%);
+- os chefões soltam 1 roupa garantida;
+- os baús de tesouro dos Ninhos e Covis (Fase 8) podem ter roupa.
+
+### Fase 11: montarias
+**Itens para domar:**
+- `maca_dourada`: na forja, aba "Especiais", maçã 1 + barra_ouro 4
+- `osso_encantado`: na tela E, osso 1 + cristal_verde 1
+- `fio_seda_magico`: na tela E, seda_rara 1 + cristal_roxo 1
+- `ovo_dragao`: só cai do dragão; para chocar, coloque o ovo (vira bloco 35 `OVO_DRAGAO`, que balança) a até 3 blocos de uma FOGUEIRA por 1 dia de jogo (300 s); então nasce o filhote, já domado por quem colocou o ovo
+**Outros itens:** `sela` (couro_orc 3 + barra_ferro 1), `armadura_montaria` (barra_ferro 6; ou de ouro/diamante: barra_ouro 6 / diamante 6), `apito` (barra_prata 1 + graveto 1).
+**Montarias (tipos de mob novos, domáveis):**
+| montaria | onde | item | velocidade | especial |
+|---|---|---|---|---|
+| `cavalo` | planícies, de dia (em grupo) | maçã dourada | 9 | pulo alto (2.5 blocos) |
+| `lobo_gigante` | florestas, à noite | osso encantado | 11 | ataca os mobs perto de você |
+| `aranha_montaria` (aranha gigante domada) | — (vem de aranha gigante enfraquecida, abaixo de 30% de vida) | fio de seda mágico | 8 | sobe paredes |
+| `filhote_dragao` | do ovo | — | 10 | voa por 10 s (recarga de 20 s) |
+**Domar:** com o item na mão, clique com o botão direito na criatura (que precisa estar calma, ou enfraquecida no caso da aranha gigante). Aparece uma barra de "confiança" que enche em ~5 s. Se a criatura levar dano ou você se afastar mais de 4 blocos, falha e o item é perdido. Se encher, a criatura fica domada (nome do dono acima: "Cavalo de Pai").
+**Montar:** R monta/desmonta a montaria mais próxima (até 3 blocos) que seja sua. Montado: WASD move a montaria, Espaço pula (ou voa, no filhote de dragão), e a câmera fica um pouco mais alta.
+- A montaria tem vida própria (barra de vida perto da hotbar quando montado) e pode receber sela (necessária para montar) e armadura (defesa 4/7/10, aparece no modelo), aplicadas clicando com o item na mão.
+- Montaria com 0 de vida desmaia e volta para a casa do dono depois de 60 s.
+- **Apito:** com o apito na mão, botão direito chama todas as suas montarias, que teleportam para perto se estiverem a mais de 30 blocos (com som e partículas).
+- **Salvamento:** as montarias domadas são salvas no mundo do anfitrião (tipo, dono, nome, vida, sela, armadura, posição) e reaparecem ao carregar.
+- **Multiplayer:** todos veem as montarias e quem está montado. O anfitrião simula a montaria e o dono controla a montaria em que está montado (envia entradas e posição; o anfitrião confia, porque é um jogo de família).
+**Como ficou a Fase 7 (protocolo versão 6):**
+- **mobs.js:**
+  - Exporta `Mobs`, `TIPOS_MOB`, `ORDEM_TIPOS`, `COMPORTAMENTOS`, `registrarTipoMob(nome, def)` e `registrarComportamento(nome, fn)`.
+  - Na classe: `atualizar`, `quantidade`, `autoridade`, `limpar`, `atacar(id, dano, dir)` (o `dir` é copiado), `raycastMob` (objeto reaproveitado), `alvosParaPoderes()` (lista reaproveitada), `aoDanoJogador(fn({ qtd, de: [x, y, z], efeito }))`, `aoXp(fn)` e `criarMob(tipo, x, y, z, yaw?)` (só no anfitrião).
+  - Ganchos da Fase 8: `definirAtaqueDistancia(fn)` e, nos tipos, os campos `ataqueDistancia`, `voa` + `alturaVoo` e `chefao`. O chefão não conta nos limites, não some longe, não queima no sol e chama `ui.mostrarBarraChefao`, se existir.
+  - O `Mobs` se registra sozinho com `rede.registrarMobs(this)`.
+  - Os drops usam `rede.soltarDrop` (sem dono).
+  - Lê `mundo._chunkEm(cx, cz).alturas` para saber se o mob está debaixo do céu. Seria melhor o world.js oferecer `topoColuna(x, z)`.
+- **Rede:**
+  - `mobNovo { id, mob, x, y, z, yaw, vida }`: o tipo do mob vai no campo `mob`.
+  - `atacarMob { id, dano, dir, ataque, efeito? }`, com distância máxima de 6 no golpe e 32 nos poderes, e até 12 por segundo.
+  - `mobs { t, dados: Float32Array(8 por mob) }`. As flags guardam um contador de golpes nos bits 8–11, mais subindo, no ar e nadando.
+  - `dano { qtd, de, efeito? }` vem SEM o desconto da armadura (quem recebe desconta).
+  - `xp { qtd }`.
+  - O `bemvindo` leva `mobs`.
+- Os mobs só existem onde o anfitrião tem o mundo carregado.

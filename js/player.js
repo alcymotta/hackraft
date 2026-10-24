@@ -104,6 +104,13 @@ export class Jogador {
     this.espera = 0;                   // pausa depois de quebrar
     this.tempoColocar = 0;
 
+    // Combate, comida e XP (Fase 7)
+    this.mobs = null;                  // Mobs (o main liga depois: jogador.mobs = mobs)
+    this._esperaGolpe = 0;             // tempo até poder bater de novo
+    this._tempoComendo = 0;            // há quanto tempo está comendo
+    this._comendoItem = null;          // nome da comida que está sendo comida
+    this.xpTotal = 0;                  // XP ganho matando mobs (a Fase 8 usa)
+
     // Passos e submersão
     this.distPasso = 0;
     this.submerso = false;
@@ -485,6 +492,7 @@ export class Jogador {
       this._acoesDeBloco(dt);
     } else {
       this._limparQuebra();
+      this._pararComer();
       this.contorno.visible = false;
     }
 
@@ -729,9 +737,21 @@ export class Jogador {
     if (this.espera > 0) this.espera -= dt;
     if (this.tempoColocar > 0) this.tempoColocar -= dt;
 
-    // ----- Ataque de poder (fogo, raio, gelo): o botão esquerdo atira e NÃO quebra -----
+    if (this._esperaGolpe > 0) this._esperaGolpe -= dt;
+
+    // ----- Mob na mira (Fase 7): se está mais perto que o bloco, o clique bate nele -----
     const mods = this._mods;
-    if (mods.ataque && this.poderes) {
+    let golpeMob = null;
+    if (this.botoes[0] && !mods.ataque && this.mobs && typeof this.mobs.raycastMob === 'function') {
+      const m = this.mobs.raycastMob(this._olhos, this._dir, CONFIG.ALCANCE_ATAQUE);
+      if (m && (!alvo || !(alvo.t < m.t))) golpeMob = m;
+    }
+
+    // ----- Ataque de poder (fogo, raio, gelo): o botão esquerdo atira e NÃO quebra -----
+    if (golpeMob) {
+      if (this.temAlvoQuebra) this._limparQuebra();
+      if (this._esperaGolpe <= 0) this._baterNoMob(golpeMob);
+    } else if (mods.ataque && this.poderes) {
       if (this.botoes[0] && this.poderes.atirar(this._olhos, this._dir)) {
         this.personagem.animarGolpe();
         if (this.som && typeof this.som.tiro === 'function') this.som.tiro(mods.ataque);
@@ -773,10 +793,14 @@ export class Jogador {
       this._limparQuebra();
     }
 
+    // ----- Comer (botão direito segurado com uma comida na mão) -----
+    const shift = !!(this.teclas.ShiftLeft || this.teclas.ShiftRight);
+    const mirandoInterativo = !!(alvo && BLOCOS[alvo.id] && BLOCOS[alvo.id].interativo && !shift);
+    this._atualizarComer(dt, mirandoInterativo);
+
     // ----- Colocar (botão direito) -----
     if (this.botoes[2] && this.tempoColocar <= 0 && alvo) {
       const defAlvo = BLOCOS[alvo.id];
-      const shift = !!(this.teclas.ShiftLeft || this.teclas.ShiftRight);
       if (defAlvo && defAlvo.interativo && !shift) {
         // Baú e porta: só reagem ao clique (segurar o botão não fica abrindo e fechando)
         if (this._cliqueDireito) this._usarBloco(alvo, defAlvo);
@@ -785,6 +809,102 @@ export class Jogador {
       }
     }
     this._cliqueDireito = false;
+  }
+
+  // ------------------------------------------------------------------
+  // Combate (Fase 7)
+  // ------------------------------------------------------------------
+
+  /** Dano extra de força. A Fase 8 (níveis) vai trocar isto; por enquanto é 0. */
+  forcaExtra() {
+    return 0;
+  }
+
+  /** Dano de um golpe: a arma na mão principal do equipamento (ou 1 sem arma) + força */
+  _danoDoGolpe() {
+    const maoItem = this.equipamento ? this.equipamento.espacos.mao : null;
+    const base = (maoItem && obterItem(maoItem) && obterItem(maoItem).dano) || 1;
+    return base + this.forcaExtra();
+  }
+
+  /** Bate no mob mirado (`m` = { id, t }) e começa a espera até o próximo golpe */
+  _baterNoMob(m) {
+    this._esperaGolpe = CONFIG.INTERVALO_GOLPE_MOB;
+    this.mobs.atacar(m.id, this._danoDoGolpe(), this._dir);
+    this.personagem.animarGolpe();
+    if (this.som && typeof this.som.golpeMob === 'function') this.som.golpeMob();
+  }
+
+  // ------------------------------------------------------------------
+  // Comida (Fase 7)
+  // ------------------------------------------------------------------
+
+  _pararComer() {
+    if (this._tempoComendo > 0 || this._comendoItem) {
+      this._tempoComendo = 0;
+      this._comendoItem = null;
+      if (this.ui.mostrarComendo) this.ui.mostrarComendo(0);
+    }
+  }
+
+  /** Controla o "segurar o botão direito para comer" (chamado todo quadro) */
+  _atualizarComer(dt, mirandoInterativo) {
+    const sel = this.botoes[2] && !mirandoInterativo ? this.inventario.itemSelecionado() : null;
+    const def = sel ? obterItem(sel.item) : null;
+    // Só come comida, e só com a vida abaixo do máximo (a maçã pode sempre)
+    if (!def || def.tipo !== 'comida' || (this.vida >= CONFIG.VIDA_MAX && def.nome !== 'maca')) {
+      this._pararComer();
+      return;
+    }
+    // Trocou de comida no meio: recomeça
+    if (this._comendoItem !== sel.item) {
+      this._comendoItem = sel.item;
+      this._tempoComendo = 0;
+    }
+    this._tempoComendo += dt;
+    if (this._tempoComendo >= CONFIG.TEMPO_COMER) {
+      this._comer(def);
+      this._tempoComendo = 0;
+      this._cliqueDireito = false;
+      this.botoes[2] = false; // para comer outra, é preciso apertar de novo
+      if (this.ui.mostrarComendo) this.ui.mostrarComendo(0);
+      this._comendoItem = null;
+    } else if (this.ui.mostrarComendo) {
+      this.ui.mostrarComendo(this._tempoComendo / CONFIG.TEMPO_COMER);
+    }
+  }
+
+  /** Come 1 unidade da comida `def`: cura (ou machuca, se for enjoada) */
+  _comer(def) {
+    this.inventario.remover(this.inventario.selecionado, 1);
+    if (def.enjoo && Math.random() < def.enjoo) this.machucar(1, 'enjoo');
+    else this.curar(def.cura || 0);
+    if (this.som && typeof this.som.comer === 'function') this.som.comer();
+    // Migalhas saindo da boca
+    if (this.particulas && typeof this.particulas.emitir === 'function') {
+      const o = this._olhos, d = this._dir;
+      this.particulas.emitir({
+        x: o.x + d.x * 0.5, y: o.y - 0.25 + d.y * 0.5, z: o.z + d.z * 0.5,
+        qtd: 8, cor: def.cor || '#c98a4b', velocidade: 1.5, espalhar: 0.1,
+        gravidade: 9, vida: 0.5, tamanho: 0.06, aditivo: false,
+      });
+    }
+  }
+
+  /** Sorteia os drops extras do bloco (`dropExtra`: um objeto ou lista { item, chance, min, max }) */
+  _soltarDropExtra(bloco, alvo) {
+    const lista = Array.isArray(bloco.dropExtra) ? bloco.dropExtra : (bloco.dropExtra ? [bloco.dropExtra] : []);
+    for (const d of lista) {
+      if (!d || !d.item || Math.random() >= (d.chance ?? 1)) continue;
+      const min = d.min ?? 1;
+      const max = d.max ?? min;
+      const qtd = min + Math.floor(Math.random() * (max - min + 1));
+      if (qtd <= 0) continue;
+      const sobrou = this.inventario.adicionar(d.item, qtd);
+      if (sobrou > 0 && this.soltarItem) {
+        this.soltarItem(d.item, sobrou, alvo.x + 0.5, alvo.y + 0.3, alvo.z + 0.5, 0, 3, 0);
+      }
+    }
   }
 
   /**
@@ -904,6 +1024,7 @@ export class Jogador {
       this.espera = CONFIG.ESPERA_APOS_QUEBRAR;
       return;
     }
+    if (bloco.dropExtra) this._soltarDropExtra(bloco, alvo);
     if (bloco.som) this.som.quebrar(bloco.som);
     if (this.particulas) this.particulas.explosaoBloco(alvo.x, alvo.y, alvo.z, idAnterior, this.texturas);
     this._limparQuebra();
@@ -1039,7 +1160,7 @@ export class Jogador {
     if (this.morto && this.obterPosRenascer) {
       const r = this.obterPosRenascer();
       if (Array.isArray(r) && r.length === 3 && r.every(Number.isFinite)) {
-        return { pos: [r[0], r[1], r[2]], yaw: this.yaw, pitch: this.pitch, vida: CONFIG.VIDA_MAX };
+        return { pos: [r[0], r[1], r[2]], yaw: this.yaw, pitch: this.pitch, vida: CONFIG.VIDA_MAX, xpTotal: this.xpTotal };
       }
     }
     return {
@@ -1047,6 +1168,7 @@ export class Jogador {
       yaw: this.yaw,
       pitch: this.pitch,
       vida: this.vida,
+      xpTotal: this.xpTotal,
     };
   }
 
@@ -1059,6 +1181,7 @@ export class Jogador {
     if (Number.isFinite(dados.pitch)) {
       this.pitch = Math.max(-LIMITE_PITCH, Math.min(LIMITE_PITCH, dados.pitch));
     }
+    this.xpTotal = Number.isFinite(dados.xpTotal) && dados.xpTotal > 0 ? Math.floor(dados.xpTotal) : 0;
     // Vida salva (saves antigos não têm: ficam com a vida cheia). Nunca carrega "morto".
     if (Number.isFinite(dados.vida) && dados.vida > 0) {
       this.vida = Math.min(CONFIG.VIDA_MAX, dados.vida);
