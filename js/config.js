@@ -52,7 +52,10 @@ export const CONFIG = {
   ARRASTO_AGUA: 3,          // freio vertical da água
   VEL_SUBIR_AGUA: 3.5,      // velocidade de subida nadando (Space)
   VEL_MAX_QUEDA: 55,        // velocidade máxima de queda
-  Y_ABISMO: -10,            // abaixo disso o jogador volta ao ponto de nascimento
+  VEL_VOAR: 10,             // velocidade horizontal voando (comando /voar)
+  VEL_VOAR_VERTICAL: 8,     // velocidade de subir (Espaço) e descer (Shift) voando
+  ACEL_VOAR: 40,            // quão rápido ganha e perde velocidade voando (maior = para mais seco)
+  Y_ABISMO: -10,           // abaixo disso o jogador volta ao ponto de nascimento
 
   // ----- Inventário -----
   TAMANHO_PILHA: 64,        // quantos itens iguais cabem num espaço
@@ -89,6 +92,10 @@ export const CONFIG = {
   TEMPO_SEM_RESPOSTA_S: 20,      // sem nenhuma mensagem por esse tempo = a conexão caiu (aba travada, internet caiu)
   MODS_POR_LOTE: 1000,           // blocos mudados por mensagem ao mandar o mundo para quem entra (1000 = 16 KB, cabe numa mensagem só)
   ESPERA_AO_CAIR_S: 3,           // segundos mostrando o aviso antes de voltar ao início (cliente)
+
+  // ----- Chat (Fase 4) -----
+  CHAT_MAX_CARACTERES: 200,      // tamanho máximo de uma mensagem de chat (o resto é cortado)
+  CHAT_INTERVALO_MIN_MS: 150,    // o anfitrião ignora mensagens de um mesmo cliente mais rápidas que isso (anti-spam)
 };
 
 // Duração total de um dia completo (dia + noite), em segundos

@@ -99,6 +99,72 @@ img { image-rendering: pixelated; }
   transition: opacity 0.6s;
 }
 
+/* ---------- Chat ---------- */
+#chat {
+  position: fixed;
+  left: 10px;
+  bottom: 84px;               /* acima da hotbar */
+  width: min(520px, 46vw);
+  z-index: 9;
+  pointer-events: none;
+  font-family: var(--fonte-texto);
+  font-size: 15px;
+  font-weight: bold;
+  color: #fff;
+}
+.chat-lista {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: 210px;
+  overflow: hidden;
+}
+#chat.aberto .chat-lista { max-height: 42vh; overflow-y: auto; }
+.chat-msg {
+  padding: 2px 6px;
+  margin-top: 1px;
+  background: rgba(0, 0, 0, 0.5);
+  text-shadow: 2px 2px 0 #3f3f3f;
+  word-break: break-word;
+  transition: opacity 1s ease-out;
+}
+.chat-sistema { color: #ffe84a; }
+.chat-erro { color: #ff5555; }
+.chat-sucesso { color: #55ff55; }
+.chat-msg.sumindo { opacity: 0; }
+.chat-msg.velha { display: none; }
+.chat-msg.fora { display: none; }
+/* Com o chat aberto, tudo volta a aparecer (menos o que passou das 50) */
+#chat.aberto .chat-msg.sumindo { opacity: 1; transition: none; }
+#chat.aberto .chat-msg.velha:not(.fora) { display: block; opacity: 1; }
+.chat-campo {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.75);
+  border: 2px solid #777;
+  outline: none;
+  color: #fff;
+  font: bold 15px var(--fonte-texto);
+  pointer-events: auto;
+}
+.chat-campo::placeholder { color: #999; }
+.chat-campo.oculto { display: none; }
+
+/* Modo hacker: fonte de terminal verde com leve brilho */
+#chat.hacker { font-family: 'Courier New', Consolas, monospace; color: #33ff66; }
+#chat.hacker .chat-msg,
+#chat.hacker .chat-campo {
+  color: #33ff66;
+  font-family: 'Courier New', Consolas, monospace;
+  text-shadow: 0 0 6px rgba(51, 255, 102, 0.75);
+  background: rgba(0, 12, 0, 0.7);
+}
+#chat.hacker .chat-nome { color: #33ff66 !important; }
+#chat.hacker .chat-campo { border-color: #1f9a40; }
+
 /* ---------- Hotbar ---------- */
 #hud-inferior {
   position: fixed;

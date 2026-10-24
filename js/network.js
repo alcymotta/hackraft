@@ -48,6 +48,13 @@
 //     aparencia  { ap }
 //                Minha aparência completa: { cores, roupa, armadura, mao,
 //                acessorio }. Ao entrar e sempre que mudar.
+//     chat       { texto }
+//                Mensagem de chat (Fase 4). O anfitrião confere (texto de até
+//                200 caracteres, sem caracteres de controle) e manda `chat`
+//                para todos, inclusive para quem escreveu.
+//     pedirHora  { hora }
+//                "Quero mudar a hora" (/dia, /noite). O anfitrião confere que
+//                é um número, aplica e manda `hora` para todos na hora.
 //     tchau      { }   "estou fechando a página" (vale nos dois sentidos)
 //
 //   Por que existe o `tchau`? Quando uma aba é fechada, o navegador do
@@ -80,7 +87,12 @@
 //                Um bloco mudou. `de` = id de quem mudou. O anfitrião manda
 //                para TODOS, inclusive para quem mudou: para esse, a
 //                mensagem é a "confirmação" (veja _blocoDoAnfitriao).
-//     hora       { hora }   a cada 5 s (segundos desde o nascer do sol)
+//     hora       { hora, por? }   a cada 5 s (segundos desde o nascer do sol).
+//                Quando alguém mudou a hora de propósito, vem `por` (o
+//                apelido): todos aplicam na hora (sem tolerância) e mostram
+//                o aviso "<apelido> mudou para dia/noite".
+//     chat       { de, apelido, texto }
+//                Mensagem de chat de `de` (id) para todos (Fase 4).
 //     itemNovo   { id, item, qtd, x, y, z, vx, vy, vz, de }
 //                Um item apareceu no chão (`de` = id de quem soltou, ou '').
 //     itemRemovido { id }   o item sumiu (alguém pegou, ou o tempo acabou)
@@ -94,6 +106,17 @@
 //   próprio jogador). Assim dois jogadores nunca pegam o mesmo item: o
 //   anfitrião atende os pedidos na ordem em que chegam, e o segundo pedido
 //   encontra o item já removido.
+//
+// CASA (Fase 4)
+//   Cada jogador tem uma `casa: [x, y, z]` (comando /setcasa). O cliente a
+//   manda no `meuEstado`; o anfitrião guarda em dadosJogadores[apelido].casa
+//   (vai no save) e a devolve no `bemvindo`, dentro de `meuEstado`. A casa
+//   do próprio anfitrião fica em `rede.casa` (o main grava no save dele).
+//
+// AVISOS DE SISTEMA (Fase 4)
+//   "X entrou no mundo!", "X saiu.", "X mudou para noite" aparecem na tela
+//   (ui.mostrarMensagem) E vão para quem se registrar com `rede.aoAviso(fn)`
+//   (o main manda para o chat). `fn(texto)`.
 //
 // SEGURANÇA
 //   Tudo o que chega pela rede é conferido (tipos, números finitos, id de
@@ -110,7 +133,7 @@ import { Equipamento } from './equipamento.js';
 import { quantoCabe } from './itens_chao.js';
 
 const PREFIXO_ID = 'hackraft-';
-const VERSAO_PROTOCOLO = 2;          // mude quando o formato das mensagens mudar (2 = Fase 3)
+const VERSAO_PROTOCOLO = 3;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4)
 const MAX_QTD_ITEM = 64;             // maior pilha aceita numa mensagem de item
 const VEL_MAX_ITEM = 20;             // maior velocidade aceita para um item solto
 const DIST_SOLTAR = 8;               // o cliente só solta itens até 8 blocos de onde está
@@ -166,6 +189,18 @@ function limparCores(c) {
   return r;
 }
 
+/** Texto de chat: só texto, sem caracteres de controle, até CHAT_MAX_CARACTERES. Vazio = '' */
+function limparChat(v) {
+  if (typeof v !== 'string') return '';
+  return v.replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/g, '').trim().slice(0, CONFIG.CHAT_MAX_CARACTERES);
+}
+
+/** Casa [x, y, z] conferida, ou null */
+function limparCasa(c) {
+  if (!Array.isArray(c) || c.length !== 3 || !posicaoValida(c[0], c[1], c[2])) return null;
+  return [c[0], c[1], c[2]];
+}
+
 /** Texto curto e seguro (para mensagens de erro vindas do anfitrião) */
 function textoCurto(v, max = 200) {
   return typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max) : '';
@@ -209,7 +244,7 @@ function limparEquipamento(d) {
   }
 }
 
-/** { pos, yaw, pitch, inventario, equipamento } conferido, ou null */
+/** { pos, yaw, pitch, inventario, equipamento, casa } conferido, ou null */
 function limparEstadoJogador(e) {
   if (!e || typeof e !== 'object') return null;
   const p = e.pos;
@@ -220,6 +255,7 @@ function limparEstadoJogador(e) {
     pitch: ehNumero(e.pitch) ? e.pitch : 0,
     inventario: limparInventario(e.inventario),
     equipamento: limparEquipamento(e.equipamento),
+    casa: limparCasa(e.casa),
   };
 }
 
@@ -439,6 +475,9 @@ export class Rede {
     // Minha aparência completa (Fase 3). Vai no bemvindo (anfitrião) ou na
     // mensagem `aparencia` (todos), sempre que mudar.
     this.aparencia = null;
+    this.casa = null;                 // [x, y, z] da minha casa (/setcasa), ou null
+    this._ouvintesChat = [];          // fn({ de, apelido, texto })
+    this._ouvintesAviso = [];         // fn(texto)
     this._aparenciaPendente = false;  // mudou e ainda não foi mandada
     this._tempoAparencia = 0;
 
@@ -743,6 +782,12 @@ export class Rede {
         case 'aparencia':
           if (cli.pronto) this._aparenciaDoCliente(cli, msg);
           return;
+        case 'chat':
+          if (cli.pronto) this._chatDoCliente(cli, msg);
+          return;
+        case 'pedirHora':
+          if (cli.pronto) this._pedirHoraDoCliente(cli, msg);
+          return;
         case 'tchau':
           this._clienteSaiu(cli);
           try { cli.conn.close(); } catch (e) { /* ignora */ }
@@ -802,6 +847,49 @@ export class Rede {
     cli.aparencia = ap;
     this._aplicarAparenciaRemota(cli.id, ap);
     this._avisarTodos({ tipo: 'aparencia', id: cli.id, ap }, cli);
+  }
+
+  /** Um cliente escreveu no chat: confere e manda para todos (inclusive ele e o anfitrião) */
+  _chatDoCliente(cli, msg) {
+    const texto = limparChat(msg.texto);
+    if (!texto) return;
+    // Anti-spam simples: mensagens muito coladas são ignoradas
+    const agora = performance.now();
+    if (agora - (cli.ultimoChat || 0) < CONFIG.CHAT_INTERVALO_MIN_MS) return;
+    cli.ultimoChat = agora;
+    this._distribuirChat(cli.id, cli.apelido, texto);
+  }
+
+  /** (Anfitrião) Entrega o chat aos ouvintes daqui e manda para todos os clientes */
+  _distribuirChat(de, apelido, texto) {
+    this._entregarChat({ de, apelido, texto });
+    this._avisarTodos({ tipo: 'chat', de, apelido, texto });
+  }
+
+  /** Chama os ouvintes de chat (o erro de um ouvinte não atrapalha os outros) */
+  _entregarChat(m) {
+    for (const fn of this._ouvintesChat) {
+      try { fn(m); } catch (e) { console.error(e); }
+    }
+  }
+
+  /** Um cliente pediu para mudar a hora */
+  _pedirHoraDoCliente(cli, msg) {
+    if (!ehNumero(msg.hora) || !this.ceu) return;
+    this._aplicarHoraDeAlguem(msg.hora, cli.apelido);
+  }
+
+  /**
+   * (Anfitrião ou sozinho) Muda a hora do céu, avisa na tela/chat e manda
+   * `hora` (com `por`) para todos os clientes na hora.
+   */
+  _aplicarHoraDeAlguem(hora, apelido) {
+    const C = CICLO_SEGUNDOS;
+    const h = ((hora % C) + C) % C;
+    this.ceu.definirHora(h);
+    this._aviso(apelido + ' mudou para ' + (h < CONFIG.DIA_SEGUNDOS ? 'dia' : 'noite'));
+    this._avisarTodos({ tipo: 'hora', hora: this.ceu.hora, por: apelido });
+    this._tempoHora = performance.now(); // a próxima hora automática só daqui a 5 s
   }
 
   _recusar(cli, motivo) {
@@ -894,7 +982,7 @@ export class Rede {
     }
     cli.pronto = true;
     this.remotos.adicionar(cli.id, cli.apelido, cli.cores);
-    this.ui.mostrarMensagem(cli.apelido + ' entrou no mundo!');
+    this._aviso(cli.apelido + ' entrou no mundo!');
     this._avisarListaMudou();
   }
 
@@ -956,7 +1044,7 @@ export class Rede {
       d.pitch = e.pitch;
     } else {
       this.dadosJogadores.set(cli.apelido, {
-        pos: [e.x, e.y, e.z], yaw: e.yaw, pitch: e.pitch, inventario: null, equipamento: null,
+        pos: [e.x, e.y, e.z], yaw: e.yaw, pitch: e.pitch, inventario: null, equipamento: null, casa: null,
       });
     }
   }
@@ -971,7 +1059,7 @@ export class Rede {
       if (c.pronto) this._enviar(c.conn, aviso);
     }
     if (this.remotos) this.remotos.remover(cli.id);
-    if (this.ui) this.ui.mostrarMensagem(cli.apelido + ' saiu.');
+    this._aviso(cli.apelido + ' saiu.');
     this._avisarListaMudou();
   }
 
@@ -986,7 +1074,7 @@ export class Rede {
     }
   }
 
-  /** Anfitrião: dados dos visitantes para o save ({ [apelido]: { pos, yaw, pitch, inventario, equipamento } }) */
+  /** Anfitrião: dados dos visitantes para o save ({ [apelido]: { pos, yaw, pitch, inventario, equipamento, casa } }) */
   exportarDadosJogadores() {
     // Quem está online agora: atualiza a posição antes de salvar
     for (const c of this.clientes.values()) if (c.pronto) this._guardarPosicao(c);
@@ -995,7 +1083,7 @@ export class Rede {
     for (const [apelido, d] of this.dadosJogadores) {
       obj[apelido] = {
         pos: d.pos.slice(), yaw: d.yaw, pitch: d.pitch,
-        inventario: d.inventario, equipamento: d.equipamento ?? null,
+        inventario: d.inventario, equipamento: d.equipamento ?? null, casa: d.casa ?? null,
       };
     }
     return obj;
@@ -1121,8 +1209,11 @@ export class Rede {
         case 'entrou': this._alguemEntrou(msg); return;
         case 'saiu': this._alguemSaiu(msg); return;
         case 'hora':
-          if (ehNumero(msg.hora)) this._sincronizarHora(msg.hora);
+          if (!ehNumero(msg.hora)) return;
+          if (typeof msg.por === 'string') this._horaMudadaPorAlguem(msg.hora, limparApelido(msg.por));
+          else this._sincronizarHora(msg.hora);
           return;
+        case 'chat': this._chatDoAnfitriao(msg); return;
         case 'itemNovo': this._itemNovoDoAnfitriao(msg); return;
         case 'itemRemovido': this._itemRemovidoDoAnfitriao(msg); return;
         case 'ganhou':
@@ -1229,6 +1320,7 @@ export class Rede {
     this.meuId = this.peer.id;
     this.apelido = r.apelido;
     this._msgPos.id = this.meuId;
+    this.casa = r.meuEstado ? r.meuEstado.casa : null; // a casa que o anfitrião guardou para mim
 
     this.jogadores.clear();
     for (const j of r.jogadores) {
@@ -1292,6 +1384,23 @@ export class Rede {
     this._aplicarBlocoDaRede(x, y, z, id);
   }
 
+  /** Alguém mudou a hora de propósito: aplica já e avisa */
+  _horaMudadaPorAlguem(hora, apelido) {
+    if (!this.ligado || !this.ceu) {
+      this._horaPendente = hora;
+      return;
+    }
+    this.ceu.definirHora(hora);
+    this._aviso(apelido + ' mudou para ' + (this.ceu.hora < CONFIG.DIA_SEGUNDOS ? 'dia' : 'noite'));
+  }
+
+  /** Mensagem de chat vinda do anfitrião */
+  _chatDoAnfitriao(msg) {
+    const texto = limparChat(msg.texto);
+    if (!texto || typeof msg.de !== 'string' || msg.de.length > 100) return;
+    this._entregarChat({ de: msg.de, apelido: limparApelido(msg.apelido), texto });
+  }
+
   _alguemEntrou(msg) {
     const id = msg.id;
     if (typeof id !== 'string' || id.length > 100 || id === this.meuId) return;
@@ -1302,7 +1411,7 @@ export class Rede {
     });
     if (!this.ligado) return;
     this.remotos.adicionar(id, apelido, cores);
-    this.ui.mostrarMensagem(apelido + ' entrou no mundo!');
+    this._aviso(apelido + ' entrou no mundo!');
     this._avisarListaMudou();
   }
 
@@ -1355,7 +1464,7 @@ export class Rede {
     this.jogadores.delete(id);
     if (!this.ligado) return;
     this.remotos.remover(id);
-    this.ui.mostrarMensagem(j.apelido + ' saiu.');
+    this._aviso(j.apelido + ' saiu.');
     this._avisarListaMudou();
   }
 
@@ -1406,6 +1515,7 @@ export class Rede {
       pitch: s.pitch,
       inventario: this.inventario.serializar(),
       equipamento: this.equipamento ? this.equipamento.serializar() : null,
+      casa: this.casa,
     });
   }
 
@@ -1488,9 +1598,9 @@ export class Rede {
       this._ultimaMsgAnfitriao = performance.now();
       const anfitriao = [...this.jogadores.values()].find((j) => j.anfitriao);
       if (this.apelido !== this._apelidoPedido) {
-        ui.mostrarMensagem('O nome já estava em uso: você é "' + this.apelido + '".');
+        this._aviso('O nome já estava em uso: você é "' + this.apelido + '".');
       } else if (anfitriao) {
-        ui.mostrarMensagem('Você entrou no mundo de ' + anfitriao.apelido + '!');
+        this._aviso('Você entrou no mundo de ' + anfitriao.apelido + '!');
       }
     }
 
@@ -1561,6 +1671,71 @@ export class Rede {
     } else if (this.modo === 'cliente') {
       this._enviar(this.conexaoAnfitriao, { tipo: 'aparencia', ap: this.aparencia });
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Chat, hora e casa (Fase 4)
+  // ------------------------------------------------------------------
+
+  /** Registra uma função chamada a cada mensagem de chat: fn({ de, apelido, texto }) */
+  aoChat(fn) {
+    if (typeof fn === 'function') this._ouvintesChat.push(fn);
+  }
+
+  /** Registra uma função chamada a cada aviso de sistema da rede: fn(texto) */
+  aoAviso(fn) {
+    if (typeof fn === 'function') this._ouvintesAviso.push(fn);
+  }
+
+  /** Mostra um aviso na tela e manda para os ouvintes (o chat) */
+  _aviso(texto) {
+    if (this.ui) this.ui.mostrarMensagem(texto);
+    for (const fn of this._ouvintesAviso) {
+      try { fn(texto); } catch (e) { console.error(e); }
+    }
+  }
+
+  /**
+   * Envia uma mensagem de chat. Sozinho: só entrega aqui. Anfitrião: entrega
+   * aqui e manda para todos. Cliente: pede ao anfitrião, que manda para todos
+   * (inclusive de volta para quem escreveu).
+   */
+  enviarChat(texto) {
+    const t = limparChat(texto);
+    if (!t || this.encerrado) return;
+    if (this.modo === 'cliente') {
+      if (!this._caiu) this._enviar(this.conexaoAnfitriao, { tipo: 'chat', texto: t });
+    } else if (this.modo === 'anfitriao') {
+      this._distribuirChat(this._idLocal(), this.apelido, t);
+    } else {
+      this._entregarChat({ de: this._idLocal(), apelido: this.apelido, texto: t });
+    }
+  }
+
+  /**
+   * Muda a hora do dia (segundos desde o nascer do sol). Cliente: pede ao
+   * anfitrião. Anfitrião ou sozinho: aplica na hora, avisa e (anfitrião)
+   * manda para todos. Devolve false se o número for inválido.
+   */
+  pedirHora(segundos) {
+    if (!ehNumero(segundos) || this.encerrado) return false;
+    if (this.modo === 'cliente') {
+      if (this._caiu) return false;
+      this._enviar(this.conexaoAnfitriao, { tipo: 'pedirHora', hora: segundos });
+      return true;
+    }
+    if (!this.ceu) return false;
+    this._aplicarHoraDeAlguem(segundos, this.apelido);
+    return true;
+  }
+
+  /**
+   * Guarda a minha casa [x, y, z] (ou null). O cliente manda o `meuEstado`
+   * logo, para o anfitrião guardar. O anfitrião grava a dele no save (main).
+   */
+  definirCasa(pos) {
+    this.casa = limparCasa(pos);
+    if (this.modo === 'cliente' && this.ligado && !this._caiu) this._enviarMeuEstado();
   }
 
   // ------------------------------------------------------------------

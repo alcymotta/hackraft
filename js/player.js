@@ -60,6 +60,7 @@ export class Jogador {
     this.noChao = false;
     this.naAgua = false;
     this.modoCamera = 'primeira';
+    this.voando = false;               // modo voo (comando /voar): sem gravidade
 
     // Entrada
     this.teclas = {};                  // event.code → true se apertada
@@ -144,6 +145,8 @@ export class Jogador {
   _ligarEventos() {
     window.addEventListener('keydown', (e) => {
       // Digitando num campo de texto (apelido, código): não mexe no jogador
+      // (o F5 nunca deve recarregar a página, nem digitando)
+      if (e.code === 'F5' || e.key === 'F5') e.preventDefault();
       if (this._digitando(e)) return;
       // F5 ou V trocam a câmera. No F5 também tentamos impedir que a página
       // recarregue. Em muitos notebooks, porém, a tecla F5 (sem o Fn) manda o
@@ -353,6 +356,12 @@ export class Jogador {
     const comp = Math.hypot(dx, dz);
     if (comp > 0) { dx /= comp; dz /= comp; }
 
+    // Modo voo: física própria (sem gravidade, sem passos)
+    if (this.voando) {
+      this._fisicaVoando(dt, ativo, dx, dz);
+      return;
+    }
+
     // Velocidade básica × bônus da roupa (ninja: +10%)
     const vel = (naAgua ? CONFIG.VEL_NADAR : (correndo ? CONFIG.VEL_CORRER : CONFIG.VEL_ANDAR)) *
       (1 + this.bonus.velocidade);
@@ -394,17 +403,7 @@ export class Jogador {
       }
     }
 
-    // Move em subpassos (para não atravessar paredes), eixo por eixo
-    const ddx = v.x * dt, ddy = v.y * dt, ddz = v.z * dt;
-    const maior = Math.max(Math.abs(ddx), Math.abs(ddy), Math.abs(ddz));
-    const n = Math.max(1, Math.ceil(maior / PASSO_MAX));
-    this.noChao = false;
-    this._sairDeDentroDoBloco(); // preso dentro de um bloco: sobe
-    for (let i = 0; i < n; i++) {
-      this._moverY(ddy / n);
-      this._moverX(ddx / n);
-      this._moverZ(ddz / n);
-    }
+    this._moverComColisao(dt);
 
     this.velHorizontal = Math.hypot(v.x, v.z);
 
@@ -422,6 +421,74 @@ export class Jogador {
     } else if (!this.noChao) {
       this.distPasso = 0;
     }
+  }
+
+  /** Move o jogador pela velocidade atual, em subpassos (para não atravessar paredes), eixo por eixo */
+  _moverComColisao(dt) {
+    const v = this.velocidade;
+    const ddx = v.x * dt, ddy = v.y * dt, ddz = v.z * dt;
+    const maior = Math.max(Math.abs(ddx), Math.abs(ddy), Math.abs(ddz));
+    const n = Math.max(1, Math.ceil(maior / PASSO_MAX));
+    this.noChao = false;
+    this._sairDeDentroDoBloco(); // preso dentro de um bloco: sobe
+    for (let i = 0; i < n; i++) {
+      this._moverY(ddy / n);
+      this._moverX(ddx / n);
+      this._moverZ(ddz / n);
+    }
+  }
+
+  /**
+   * Física do voo: WASD move na horizontal, Espaço sobe, Shift desce.
+   * Sem gravidade. Ao soltar as teclas a velocidade cai a zero aos poucos
+   * (ACEL_VOAR). A colisão continua valendo. Tocar o chão não desliga o voo.
+   */
+  _fisicaVoando(dt, ativo, dx, dz) {
+    const v = this.velocidade;
+    const t = this.teclas;
+    const vel = CONFIG.VEL_VOAR * (1 + this.bonus.velocidade);
+    const acel = CONFIG.ACEL_VOAR * dt;
+
+    // Horizontal: aproxima da velocidade desejada
+    const alvoX = dx * vel, alvoZ = dz * vel;
+    const difX = alvoX - v.x, difZ = alvoZ - v.z;
+    const difLen = Math.hypot(difX, difZ);
+    if (difLen <= acel) {
+      v.x = alvoX;
+      v.z = alvoZ;
+    } else {
+      v.x += (difX / difLen) * acel;
+      v.z += (difZ / difLen) * acel;
+    }
+
+    // Vertical: Espaço sobe, Shift desce
+    let alvoY = 0;
+    if (ativo) {
+      if (t.Space) alvoY += CONFIG.VEL_VOAR_VERTICAL;
+      if (t.ShiftLeft || t.ShiftRight) alvoY -= CONFIG.VEL_VOAR_VERTICAL;
+    }
+    const difY = alvoY - v.y;
+    if (Math.abs(difY) <= acel) v.y = alvoY;
+    else v.y += Math.sign(difY) * acel;
+
+    // Não entra num chunk que ainda não carregou (senão atravessaria o terreno)
+    const pp = this.posicao;
+    const mundo = this.mundo;
+    if (v.x !== 0 && !mundo.estaPronto(pp.x + Math.sign(v.x) * 2, pp.z)) v.x = 0;
+    if (v.z !== 0 && !mundo.estaPronto(pp.x, pp.z + Math.sign(v.z) * 2)) v.z = 0;
+    // Limite de altura: um pouco acima do mundo, e nunca abaixo de 1
+    const yMax = CONFIG.ALTURA_MUNDO + 20;
+    if (pp.y >= yMax && v.y > 0) v.y = 0;
+    if (pp.y <= 1 && v.y < 0) v.y = 0;
+
+    this._moverComColisao(dt);
+    if (pp.y > yMax) pp.y = yMax;
+    if (pp.y < 1) pp.y = 1;
+    // Parado em cima de um bloco também conta como "no chão" (para a animação do boneco)
+    const p = this.posicao;
+    if (!this.noChao && v.y <= 0 && this._colide(p.x, p.y - 0.05, p.z)) this.noChao = true;
+    this.velHorizontal = Math.hypot(v.x, v.z);
+    this.distPasso = 0; // sem sons de passo voando
   }
 
   // ------------------------------------------------------------------

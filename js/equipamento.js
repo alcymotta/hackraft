@@ -14,6 +14,7 @@ export class Equipamento {
     for (const s of SLOTS_EQUIPAMENTO) this.espacos[s] = null;
     this.esconderArmadura = false; // esconde a armadura no boneco (a defesa continua)
     this.esconderCapacete = false; // esconde só o capacete
+    this.roupaForcada = null; // visual forçado pelo modo hacker (não é salvo)
     this._ouvintes = [];
   }
 
@@ -65,7 +66,7 @@ export class Equipamento {
       return obterItem(this.espacos[slot])?.material ?? null;
     };
     return {
-      roupa: obterItem(this.espacos.roupa)?.visual ?? null,
+      roupa: this.roupaForcada ?? obterItem(this.espacos.roupa)?.visual ?? null,
       armadura: {
         capacete: material('capacete'),
         peitoral: material('peitoral'),
@@ -75,6 +76,15 @@ export class Equipamento {
       mao: obterItem(this.espacos.mao)?.visual ?? null,
       acessorio: obterItem(this.espacos.acessorio)?.visual ?? null,
     };
+  }
+
+  /**
+   * Força um visual de roupa (ex.: 'hacker') sem mexer na roupa equipada.
+   * Passe null para voltar ao normal. Não vai para o save nem para o serializar.
+   */
+  definirRoupaForcada(visual) {
+    this.roupaForcada = visual ?? null;
+    this.notificar();
   }
 
   /** Registra uma função chamada sempre que o equipamento muda */

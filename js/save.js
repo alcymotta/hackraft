@@ -2,8 +2,8 @@
 // Hackraft - Salvar e carregar o jogo (localStorage do navegador)
 // ---------------------------------------------------------------------
 // O estado é um objeto simples:
-//   { versao: 3, semente, modificacoes, jogador, inventario, hora,
-//     jogadores, equipamento, itensChao }
+//   { versao: 4, semente, modificacoes, jogador, inventario, hora,
+//     jogadores, equipamento, itensChao, casa }
 //
 // Versões:
 //   1 (Fase 1): sem `jogadores`
@@ -11,6 +11,8 @@
 //               a posição e o inventário de quem visitou o mundo pela rede
 //   3 (Fase 3): + `equipamento` (do anfitrião), `itensChao` (itens largados
 //               no mundo) e `jogadores[apelido].equipamento`
+//   4 (Fase 4): + `casa: [x, y, z]` (do anfitrião, comando /setcasa) e
+//               `jogadores[apelido].casa`
 //
 // Um save antigo continua funcionando: o que não existia naquela versão
 // vem "vazio" (sem visitantes, sem equipamento, sem itens no chão).
@@ -21,7 +23,7 @@
 
 import { CONFIG } from './config.js';
 
-const VERSOES_ACEITAS = [1, 2, 3];
+const VERSOES_ACEITAS = [1, 2, 3, 4];
 
 /** Guarda o estado. Devolve true se deu certo, false se falhou (ex.: sem espaço). */
 export function salvarJogo(estado) {
@@ -36,8 +38,8 @@ export function salvarJogo(estado) {
 
 /**
  * Lê o jogo salvo. Devolve o estado, ou null se não existir ou for inválido.
- * Aceita as versões 1 a 3. O que faltar das versões antigas é preenchido:
- * `jogadores` = {}, `equipamento` = null, `itensChao` = [].
+ * Aceita as versões 1 a 4. O que faltar das versões antigas é preenchido:
+ * `jogadores` = {}, `equipamento` = null, `itensChao` = [], `casa` = null.
  */
 export function carregarJogo() {
   try {
@@ -52,6 +54,8 @@ export function carregarJogo() {
       estado.equipamento = null;
     }
     if (!Array.isArray(estado.itensChao)) estado.itensChao = [];
+    const c = estado.casa;
+    if (!Array.isArray(c) || c.length !== 3 || !c.every(Number.isFinite)) estado.casa = null;
     return estado;
   } catch (erro) {
     console.warn('Hackraft: save ilegível, ignorando', erro);

@@ -45,6 +45,9 @@ const porNome = new Map();
  *  - item: nome do item que cai ao quebrar (null = não cai nada)
  *  - sorteio: nome de uma tabela de sorteio (ex.: 'presente'). Ao quebrar, o jogador
  *    ganha 1 item aleatório dessa tabela (null = sem sorteio)
+ *  - xray: aparece com contorno brilhante no raio-X do modo hacker (padrão false).
+ *    Os minérios de poder da Fase 5 vão usar este campo.
+ *  - corXray: cor CSS do contorno do raio-X (null = verde padrão)
  */
 function registrar(id, def) {
   const bloco = {
@@ -60,6 +63,8 @@ function registrar(id, def) {
     som: def.som ?? 'pedra',
     item: def.item === undefined ? def.nome : def.item,
     sorteio: def.sorteio ?? null,
+    xray: def.xray ?? false,
+    corXray: def.corXray ?? null,
   };
   BLOCOS[id] = bloco;
   SOLIDO[id] = bloco.solido ? 1 : 0;
@@ -114,6 +119,7 @@ registrar(B.PRESENTE, {
   nome: 'presente', rotulo: 'Presente misterioso',
   texturas: { topo: 'presente_topo', lado: 'presente_lado', baixo: 'presente_lado' },
   dureza: 0.3, som: 'madeira', item: null, sorteio: 'presente',
+  xray: true, corXray: '#ffd23f',
 });
 
 /** Devolve o id do bloco a partir do nome (ou undefined se não existir) */

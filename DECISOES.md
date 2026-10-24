@@ -21,3 +21,16 @@ Desde a Fase 3, o Claude segue direto até a Fase 11 sem parar a cada fase, como
 - **Trocar itens entre jogadores:** G joga o item no chão (Shift+G joga a pilha), ou arraste para fora do inventário. Os itens no chão somem em 10 minutos.
 - **Bônus de roupa:** o ninja corre 10% mais rápido e faz passos silenciosos, e o cavaleiro tem +2 de defesa. A defesa passa a valer quando houver dano, na Fase 7.
 - **Roupa hacker:** existe como item, mas não sai do presente. Ela é do comando /hacker (Fase 4).
+
+## Fase 4: chat e comandos
+- **O chat não solta o mouse:** abrir o chat (T) mantém o mouse preso, e o jogador para enquanto você digita. O Esc fecha o chat e mostra a pausa, porque o navegador sempre solta o mouse no Esc.
+- **Horário:** qualquer jogador pode usar /dia e /noite. O anfitrião aplica e avisa todos no chat.
+- **Casa:** cada jogador tem a sua (/setcasa), guardada no mundo do anfitrião.
+- **/dar:** aceita o nome do item com ou sem acento ("espada de madeira" ou "espada_madeira").
+- **Raio-X do /hacker:** por enquanto mostra os presentes enterrados; a partir da Fase 5, também os minérios de poder.
+- **Efeitos do hacker:** discretos e seguros para a vista, sem flashes fortes nem rápidos.
+
+## Fase 5: minérios de poder
+- **Vida antecipada:** a barra de vida (corações), o dano de queda, a morte e o renascer na casa vieram para esta fase, para o cristal verde (regeneração) ter efeito. Na Fase 7, os monstros passam a causar dano usando esse sistema.
+- **Morrer não perde itens**, para não frustrar uma criança.
+- **Poderes de ataque antes dos monstros:** a bola de fogo queima madeira e folhas, o gelo congela a água (vira bloco de gelo) e o raio cai onde você mira. Quando os monstros chegarem (Fase 7), os três passam a acertá-los também.

@@ -18,6 +18,12 @@
 //   navegador, editadas na tela C) + o que ele está vestindo (Equipamento).
 //   Sempre que uma das duas muda, aplicarAparencia() atualiza o boneco,
 //   o preview da interface e manda para os outros jogadores.
+//
+// CHAT, COMANDOS E /HACKER (Fase 4)
+//   O Chat (tecla T) manda as mensagens normais para a rede e executa os
+//   comandos (/dia, /voar, /tp...). Os comandos recebem um "ctx" com as
+//   peças do jogo (veja registrarComandos em comandos.js). O ModoHacker
+//   cuida dos efeitos de tela do /hacker. A música troca entre dia e noite.
 // =====================================================================
 
 import * as THREE from 'three';
@@ -33,6 +39,9 @@ import { Jogador } from './player.js';
 import { JogadoresRemotos } from './jogadores_remotos.js';
 import { ItensNoChao, quantoCabe } from './itens_chao.js';
 import { Rede } from './network.js';
+import { Chat } from './chat.js';
+import { registrarComandos } from './comandos.js';
+import { ModoHacker } from './hacker.js';
 import { som } from './audio.js';
 import { BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { salvarJogo, carregarJogo, apagarJogo } from './save.js';
@@ -138,6 +147,7 @@ async function iniciar() {
   const inventario = new Inventario();
   const equipamento = new Equipamento();
   ui = new InterfaceJogo({ inventario, equipamento, texturas, canvas });
+  const chat = new Chat({ ui });
 
   // ----- Estado da partida (preenchido quando o jogo é montado) -----
   let rede = null;          // Rede (modo 'sozinho', 'anfitriao' ou 'cliente')
@@ -200,7 +210,7 @@ async function iniciar() {
   function salvar() {
     if (!podeSalvar()) return false;
     const ok = salvarJogo({
-      versao: 3,
+      versao: 4,
       semente: jogo.semente,
       modificacoes: jogo.mundo.exportarModificacoes(),
       jogador: jogo.jogador.serializar(),
@@ -209,6 +219,7 @@ async function iniciar() {
       jogadores: rede.exportarDadosJogadores(),
       equipamento: equipamento.serializar(),
       itensChao: jogo.itensChao.exportar(),
+      casa: rede.casa, // [x, y, z] ou null (comando /setcasa do anfitrião)
     });
     // Save cheio: avisa, no máximo uma vez a cada 60 s
     if (!ok && performance.now() - ultimoAvisoSalvar > 60000) {
@@ -265,6 +276,14 @@ async function iniciar() {
   function comecar() {
     const { mundo, ceu, jogador, remotos, itensChao } = jogo;
     aplicarAparencia(); // boneco, preview e rede com a roupa certa
+
+    // ----- Chat e avisos da rede (registrar ANTES de rede.ligar) -----
+    // Mensagem de chat de qualquer jogador (inclusive a minha, de volta)
+    rede.aoChat((m) => chat.adicionarMensagem({ de: m.apelido, texto: m.texto, tipo: 'jogador' }));
+    // "X entrou", "X saiu", "X mudou para noite" também vão para o chat
+    rede.aoAviso((texto) => chat.adicionarMensagem({ de: '', texto, tipo: 'sistema' }));
+    // Texto normal (sem /) digitado no chat vai para a rede (sozinho: só aparece aqui)
+    chat.aoEnviarMensagem((texto) => rede.enviarChat(texto));
     rede.ligar({
       mundo, ceu, jogador, inventario, remotos, ui, equipamento, itensChao,
       aoPegarItem: () => som.golpe('folhas'), // um "plim" curtinho ao pegar um item
@@ -278,10 +297,40 @@ async function iniciar() {
       aoPegar: (entrada) => rede.pegarItem(entrada),
     });
 
+    // ----- Modo hacker e comandos do chat -----
+    const hacker = new ModoHacker({ equipamento, mundo, scene, camera, chat, som, ui });
+
+    /** Aceita [x, y, z] ou { x, y, z } (os comandos mandam uma lista) */
+    const lerPos = (p) => (Array.isArray(p) ? { x: p[0], y: p[1], z: p[2] } : p);
+    registrarComandos(chat, {
+      jogador, ceu, rede, remotos, inventario, equipamento, hacker, mundo,
+      // Muda a hora: a rede aplica (anfitrião/sozinho) ou pede ao anfitrião (cliente)
+      mudarHora: (segundos) => rede.pedirHora(segundos),
+      // Casa salva (vai no save do anfitrião ou no meuEstado do cliente) ou o ponto de nascimento
+      obterCasa: () => {
+        if (rede.casa) return rede.casa.slice();
+        const n = mundo.pontoDeNascimento();
+        return [n.x, n.y, n.z];
+      },
+      definirCasa: (pos) => {
+        const p = lerPos(pos);
+        rede.definirCasa([p.x, p.y, p.z]);
+        if (rede.modo !== 'cliente') salvar();
+      },
+    });
+
     window.jogo = {
       mundo, ceu, jogador, inventario, equipamento, itensChao, ui, som, salvar, rede, remotos,
-      renderer, scene, camera, texturas,
+      renderer, scene, camera, texturas, chat, hacker,
     };
+
+    // Música e boas-vindas
+    if (som.musica && typeof som.musica.iniciar === 'function') som.musica.iniciar();
+    let climaAtual = null; // 'dia' ou 'noite' (só avisa a música quando muda)
+    chat.adicionarMensagem({
+      de: '', tipo: 'sistema',
+      texto: 'Bem-vindo ao Hackraft! Aperte T para conversar ou digite /ajuda',
+    });
 
     // ----- Loop do jogo -----
     const relogio = new THREE.Clock();
@@ -326,6 +375,12 @@ async function iniciar() {
       ceu.atualizar(dt, camera.position);
       mundo.definirLuzDoDia(ceu.luzDoDia);
       itensChao.definirLuz(ceu.luzDoDia);
+      hacker.atualizar(dt, jogador.posicao);
+      const clima = ceu.ehNoite ? 'noite' : 'dia';
+      if (clima !== climaAtual) {
+        climaAtual = clima;
+        if (som.musica && typeof som.musica.definirClima === 'function') som.musica.definirClima(clima);
+      }
       renderer.render(scene, camera);
 
       // Debug a cada ~0.25 s
@@ -363,7 +418,7 @@ async function iniciar() {
         console.warn('Hackraft: multiplayer indisponível, jogando sozinho.', erro);
       }
 
-      const estado = carregarJogo(); // versão 1, 2 ou 3 (ou null)
+      const estado = carregarJogo(); // versão 1 a 4 (ou null)
       const semente = estado && estado.semente !== undefined
         ? estado.semente
         : Math.floor(Math.random() * 2147483647);
@@ -388,6 +443,7 @@ async function iniciar() {
 
       // Posição e inventário de quem já visitou este mundo
       rede.carregarDadosJogadores(estado && estado.jogadores);
+      if (estado && estado.casa) rede.definirCasa(estado.casa); // casa do anfitrião
       comecar();
 
       window.addEventListener('beforeunload', salvarSaindo);

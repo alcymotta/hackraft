@@ -43,7 +43,8 @@ js/itens_chao.js    ItensNoChao: itens largados no mundo (Fase 3)
 js/chat.js          Chat: caixa de mensagens (T) e execução de comandos (Fase 4)
 js/comandos.js      os comandos /dia, /noite, /voar, /tp, /casa, /setcasa, /dar, /hacker, /ajuda (Fase 4)
 js/hacker.js        ModoHacker: efeitos de tela, letras Matrix, raio-X (Fase 4)
-js/powers.js        (Fase 5) poderes
+js/powers.js        Poderes: cristais, HUD de poderes ativos, ataques de fogo/raio/gelo (Fase 5)
+js/particulas.js    Particulas: pedacinhos de bloco, brilhos, fogo, raio, gelo (Fase 5)
 js/mobs.js          (Fase 7) animais e monstros
 assets/textures/    PNGs opcionais que substituem as texturas geradas (ver texturas.json)
 assets/sounds/      sons opcionais (ver sons.json)
@@ -308,6 +309,57 @@ Exporta também: `SLOTS_EQUIPAMENTO = ['roupa', 'capacete', 'peitoral', 'calca',
 - `pedirHora`: cliente→anfitrião `{ hora }`. O anfitrião aplica e manda `hora` para todos na hora, com o aviso "<apelido> mudou para dia/noite".
 - `meuEstado` e `jogadores[apelido]` ganham `casa: [x, y, z]`. O save do anfitrião guarda a casa dele.
 - Métodos: `rede.enviarChat(texto)`, `rede.aoChat(fn)`, `rede.pedirHora(s)`.
+- Como ficou:
+  - `pedirHora(s)` serve a todos os modos: o anfitrião ou o modo sozinho aplicam direto e avisam. `hora` ganhou o campo `por` (apelido); quando vem, todos aplicam na hora.
+  - `rede.aoAviso(fn)` recebe os avisos (entrou, saiu, mudou a hora...), que o main manda para o chat.
+  - `rede.casa` (`[x, y, z]` ou null) e `rede.definirCasa(pos)`; `ctx.obterCasa()` devolve um array.
+  - O anfitrião ignora chat repetido em menos de 150 ms (`CONFIG.CHAT_INTERVALO_MIN_MS`).
+  - Save versão 4. O chat tem `enviarTexto(texto)`, útil para testes.
+
+### Fase 5: minérios de poder, vida e partículas
+**Blocos novos:** ids 10 a 17 para os minérios de cristal (`MINERIO_AZUL`, `MINERIO_VERMELHO`, `MINERIO_DOURADO`, `MINERIO_VERDE`, `MINERIO_ROXO`, `MINERIO_FOGO`, `MINERIO_RAIO`, `MINERIO_GELO`) e id 18 para o `GELO`.
+- Os minérios têm pedra com cristais coloridos (helper `minerio()`), dureza 2, som 'pedra', `xray: true`, `corXray` na cor do cristal e `brilho: true`.
+- Cada minério solta o seu item (`item: 'cristal_azul'` etc.).
+- O gelo é azul-claro translúcido, opaco para a malha (simples), dureza 0.5 e som 'pedra'.
+- Campo novo em blocks.js: `brilho` (padrão false). A malha passa esse valor para o shader, que faz o bloco brilhar pulsando, visível até no escuro.
+
+**Itens novos:** tipo `'poder'` (pilha 16): `cristal_azul` (supervelocidade), `cristal_vermelho` (superpulo), `cristal_dourado` (voar), `cristal_verde` (regeneração), `cristal_roxo` (soco forte), `cristal_fogo`, `cristal_raio`, `cristal_gelo`. Campos: `poder` (id do poder), `duracao` (30), `cor`, `ataque` (true para fogo, raio e gelo). O `iconeItem` mostra uma gema facetada na cor do cristal.
+
+**world.js:** a etapa "minérios" (antes das árvores) usa veios de 1 a 4 blocos de cristal, só dentro de pedra, entre y=4 e y=28 (mais raros quanto mais alto), escolhidos por hash da semente. Média alvo: ~1 a 2 cristais por chunk, com as 8 cores distribuídas. Deixe a etapa pronta para a Fase 9 acrescentar cobre, ferro, prata, ouro, diamante e dracônio.
+
+**particulas.js:** `export class Particulas({ scene })`:
+- `emitir({ x, y, z, qtd, cor | cores[], velocidade, espalhar, gravidade, vida, tamanho, aditivo })`, `explosaoBloco(x, y, z, idBloco, texturas)` (pedacinhos coloridos com as cores da textura do bloco) e `atualizar(dt)`
+- Usa um pool fixo (ex.: 2000 partículas) num `THREE.Points` ou `InstancedMesh`, sem alocar por quadro.
+- Quebrar bloco solta pedacinhos, os minérios de cristal soltam brilhinhos de vez em quando, e há efeitos para fogo, raio e gelo.
+
+**Vida (player.js + ui.js):**
+- `jogador.vida` (0 a `CONFIG.VIDA_MAX` = 20, ou seja, 10 corações), `machucar(qtd, causa)`, `curar(qtd)` e `aoMorrer(fn)`.
+- Queda: dano = blocos caídos − 3 (não vale voando nem caindo na água).
+- Ao machucar: tela levemente vermelha, empurrãozinho e som. Morte: tela "Você desmaiou!" com o botão "Voltar para casa", que leva para a casa com a vida cheia. **Os itens não se perdem.**
+- `ui.atualizarVida(vida, max)`: corações acima da hotbar, com meio coração.
+- A vida é salva (`jogador.serializar` passa a incluir `vida`).
+
+**powers.js:** `export class Poderes({ jogador, mundo, scene, camera, particulas, som, ui, inventario, rede })`:
+- `usar(nomeItem)` → bool: consome 1 cristal e ativa o poder por 30 s. Usar o mesmo de novo soma tempo, até no máximo 90 s.
+- `ativos` (Map poder → segundos restantes), `atualizar(dt)` e `modificadores()` → `{ velocidade, pulo, voar, regeneracao, quebraInstantanea, ataque: 'fogo' | 'raio' | 'gelo' | null }`
+- HUD próprio: ícones com contador no canto superior direito, abaixo do selo da sala.
+- Efeitos:
+  - azul: velocidade × 2;
+  - vermelho: pulo × 1.8 e sem dano de queda;
+  - dourado: voa (igual ao /voar, mas só pelo tempo do poder);
+  - verde: +1 de vida a cada 1.5 s;
+  - roxo: quebra qualquer bloco quebrável na hora.
+- Ataques (enquanto ativos, o botão esquerdo ATIRA em vez de quebrar; intervalo de ~0.4 s):
+  - **fogo:** bola de fogo que voa reto (com partículas) até 30 blocos. Ao bater num bloco de madeira, tronco ou folhas, queima um raio de 1 em volta (vira ar, só esses blocos). Ao bater num alvo, dá dano 6 + fogo.
+  - **raio:** acerta na hora o alvo mais próximo da mira (até 25 blocos, num cone de ~20°) e salta para até 2 alvos a até 6 blocos dele. Sem alvo, cai no bloco mirado. Linha em zigue-zague branca/amarela por 0.2 s, com partículas. Dano 8.
+  - **gelo:** rajada (projétil azul-claro). Na água, congela um raio de 2 em volta (vira `GELO`). Num alvo, dano 3 + lento/congelado por 4 s.
+- **Alvos:** registro genérico `poderes.registrarAlvos(fnListar)`, onde `fnListar()` devolve `[{ id, posicao, raio, receberDano(qtd, tipo, efeito) }]`. Na Fase 5 a lista é vazia; a Fase 7 registra os mobs.
+- Uso: Q usa o cristal selecionado na hotbar, e duplo clique num cristal na tela E também usa (a UI chama `aoUsarItem(nome)`).
+
+**Rede (protocolo versão 4):**
+- `efeito` (todos → anfitrião → outros) `{ tipo: 'fogo' | 'raio' | 'gelo' | 'poder', origem, direcao, alvo?, cor? }`: cada computador desenha o efeito localmente.
+- Blocos queimados ou congelados vão pelo caminho normal do `definirBloco`.
+- Outros jogadores veem uma aura de partículas na cor do poder ativo (mensagem `poderes` com a lista dos ativos, enviada quando muda).
 
 ## Subagentes e fluxo de trabalho
 - A conversa principal é a **coordenadora**: divide cada fase em tarefas e manda cada uma para o agente certo, em paralelo quando são independentes.
@@ -324,7 +376,7 @@ Exporta também: `SLOTS_EQUIPAMENTO = ['roupa', 'capacete', 'peitoral', 'calca',
 - [x] Fase 1: mundo e movimento
 - [x] Fase 2: multiplayer
 - [x] Fase 3: personagem e roupinhas
-- [ ] Fase 4: chat e comandos (+ /hacker)
+- [x] Fase 4: chat e comandos (+ /hacker)
 - [ ] Fase 5: minérios de poder
 - [ ] Fase 6: baús e construção
 - [ ] Fase 7: mobs

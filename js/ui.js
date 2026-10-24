@@ -56,6 +56,8 @@ const CONTROLES = [
   ['E', 'inventário e equipamento'],
   ['C', 'aparência'],
   ['G', 'largar item (Shift: tudo)'],
+  ['T', 'chat'],
+  ['/', 'comandos'],
   ['V ou F5', 'trocar câmera'],
   ['F3', 'informações'],
   ['M', 'ligar/desligar som'],
@@ -78,6 +80,7 @@ class PreviewBoneco {
     this.canvas = canvas;
     this.ok = false;
     this.rodando = false;
+    this._idQuadro = 0;                  // id do requestAnimationFrame agendado
     this.arrastando = false;
     this.ultimoTempo = 0;
     this.giro = Math.PI + 0.5;           // de frente para a câmera, meio de lado
@@ -127,10 +130,15 @@ class PreviewBoneco {
     if (!this.ok || this.rodando) return;
     this.rodando = true;
     this.ultimoTempo = performance.now();
-    requestAnimationFrame(this._quadro);
+    this._idQuadro = requestAnimationFrame(this._quadro);
   }
 
-  parar() { this.rodando = false; }
+  parar() {
+    this.rodando = false;
+    // Cancela o quadro agendado, para não nascer um segundo loop ao reabrir
+    cancelAnimationFrame(this._idQuadro);
+    this._idQuadro = 0;
+  }
 
   _loop(t) {
     if (!this.rodando) return;
@@ -140,7 +148,7 @@ class PreviewBoneco {
     this.personagem.grupo.rotation.y = this.giro;
     this.personagem.animar(dt, 0, false); // parado (deixa a capa balançar de leve)
     this.renderer.render(this.cena, this.camera);
-    requestAnimationFrame(this._quadro);
+    this._idQuadro = requestAnimationFrame(this._quadro);
   }
 }
 
@@ -165,6 +173,7 @@ export class InterfaceJogo {
     this.iconesPorNome = new Map();     // cache: nome do item -> dataURL
     this.ultimoSelecionado = inventario.selecionado;
     this.fonteDicaAtual = null;         // função que diz qual item está sob o mouse
+    this.menusExtras = [];              // funções de adicionarMenuExtra
 
     // Aparência: a base (cores salvas no navegador) e a completa (com equipamento)
     this.aparenciaBase = this._lerAparenciaSalva();
@@ -814,6 +823,19 @@ export class InterfaceJogo {
     this.elPausa.classList.remove('oculto');
     this._atualizarBotaoMudo();
     $('volume').value = Math.round(som.volume * 100);
+    // Música (pode ainda não existir no audio.js)
+    if (som.musica?.volume !== undefined) $('volume-musica').value = Math.round(som.musica.volume * 100);
+    this._atualizarBotaoMusica();
+  }
+
+  _atualizarBotaoMusica() {
+    const ligada = som.musica?.ligada;
+    $('btn-musica').textContent = 'Música: ' + (ligada === false ? 'desligada' : 'ligada');
+  }
+
+  // Registra uma função que devolve true quando uma tela extra (ex.: o chat) está aberta
+  adicionarMenuExtra(fn) {
+    this.menusExtras.push(fn);
   }
 
   _esconderPausa() {
@@ -849,7 +871,9 @@ export class InterfaceJogo {
   }
 
   get menuAberto() {
-    return this.inventarioAberto || this.aparenciaAberta || this.pausaAberta || this.inicialAberta;
+    if (this.inventarioAberto || this.aparenciaAberta || this.pausaAberta || this.inicialAberta) return true;
+    for (const fn of this.menusExtras) if (fn()) return true;
+    return false;
   }
 
   // ------------------------------------------------------------------
@@ -1058,6 +1082,14 @@ export class InterfaceJogo {
       som.alternarMudo();
       this._atualizarBotaoMudo();
     };
+    $('volume-musica').addEventListener('input', (e) => {
+      som.musica?.definirVolume(Number(e.target.value) / 100);
+    });
+    $('btn-musica').onclick = (e) => {
+      e.currentTarget.blur();
+      som.musica?.alternar();
+      this._atualizarBotaoMusica();
+    };
     this._confirmarDoisCliques($('btn-novo-pausa'), () => {
       this._esconderPausa();
       if (this.aoNovoMundo) this.aoNovoMundo();
@@ -1110,6 +1142,9 @@ export class InterfaceJogo {
       const alvo = e.target;
       if (alvo && ((alvo.tagName === 'INPUT' && alvo.type !== 'range' && alvo.type !== 'checkbox') ||
                    alvo.tagName === 'TEXTAREA')) return;
+
+      // Com um menu extra aberto (ex.: chat), só o Esc continua valendo
+      if (e.code !== 'Escape' && this.menusExtras.some((f) => f())) return;
 
       // Durante o carregamento, as teclas do jogo são ignoradas
       const carregando = !this.elCarregando.classList.contains('oculto');
