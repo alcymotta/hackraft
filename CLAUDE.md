@@ -64,7 +64,7 @@ Os contratos (APIs de cada módulo, mensagens de rede, formato do save, decisõe
 - `arquiteto` (opus): multiplayer, mundo/chunks, desempenho, IA, bugs difíceis
 - `testador` (haiku): revisão e roteiro de testes (não edita)
 - `/planejar <tarefa>` classifica a tarefa e indica o agente.
-- Antes de cada fase: mostrar a divisão tarefa → agente. No fim: dizer quais agentes foram usados, explicar como testar e **esperar a confirmação** antes de seguir.
+- Antes de cada fase: mostrar a divisão tarefa → agente. No fim: dizer quais agentes foram usados e explicar como testar. Desde a Fase 3, o dono pediu para seguir direto até a Fase 11 sem esperar confirmação: cada fase é testada pelos agentes (revisão + Chrome headless), vai para o Git e a próxima começa. As decisões tomadas sozinho vão para `DECISOES.md`.
 - Commit no fim de cada fase que funcionar: `Fase N: resumo`.
 
 ## Fases
@@ -74,7 +74,7 @@ Os contratos (APIs de cada módulo, mensagens de rede, formato do save, decisõe
 - [x] Fase 3: personagem e roupinhas
 - [x] Fase 4: chat e comandos (+ /hacker)
 - [x] Fase 5: minérios de poder
-- [ ] Fase 6: baús e construção
+- [x] Fase 6: baús e construção
 - [ ] Fase 7: mobs
 - [ ] Fase 8: monstros estilo RPG
 - [ ] Fase 9: armas, armaduras, minérios e forja
@@ -82,9 +82,10 @@ Os contratos (APIs de cada módulo, mensagens de rede, formato do save, decisõe
 - [ ] Fase 11: montarias
 
 ## Pendências técnicas
-- Fase 4 (comandos que mudam muitos blocos): criar uma mensagem de rede em lote e um `definirBlocos(lista)` que remonte cada chunk uma vez só.
 - Com a aba do anfitrião escondida, o loop do jogo dele para, e o horário dos clientes para junto.
-
+- Luz:
+  - a luz do céu vem só do mapa de altura (porta e vidro deixam passar);
+  - caso raro: se um chunk do meio do caminho for descarregado e a tocha for tirada depois, pode sobrar "luz fantasma" até recarregar.
 ## Voltar para uma versão anterior (Git)
 - `git log --oneline`: lista as versões salvas
 - `git restore .`: desfaz o que mudou desde o último commit

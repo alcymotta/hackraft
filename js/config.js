@@ -90,7 +90,7 @@ export const CONFIG = {
   INTERVALO_ESTADO_S: 10,        // a cada quantos segundos o cliente manda inventário e posição para o anfitrião guardar
   TEMPO_LIMITE_CONEXAO_S: 10,    // tempo máximo esperando o servidor ou a sala responder
   TEMPO_SEM_RESPOSTA_S: 20,      // sem nenhuma mensagem por esse tempo = a conexão caiu (aba travada, internet caiu)
-  MODS_POR_LOTE: 1000,           // blocos mudados por mensagem ao mandar o mundo para quem entra (1000 = 16 KB, cabe numa mensagem só)
+  MODS_POR_LOTE: 1000,           // blocos mudados por mensagem ao mandar o mundo para quem entra (1000 = ~20 KB (5 inteiros por bloco), cabe numa mensagem só)
   ESPERA_AO_CAIR_S: 3,           // segundos mostrando o aviso antes de voltar ao início (cliente)
 
   // ----- Chat (Fase 4) -----
@@ -108,6 +108,15 @@ export const CONFIG = {
   BRILHO_INTERVALO_S: 0.3,       // de quanto em quanto tempo saem brilhinhos dos cristais
   BRILHO_RAIO: 14,               // distância máxima (blocos) para os brilhinhos
   BRILHO_POR_VEZ: 3,             // quantos blocos brilham a cada vez
+
+  // ----- Baús, construção e tochas (Fase 6) -----
+  ESPACOS_BAU: 27,               // espaços de um baú
+  BLOCOS_POR_LOTE_MAX: 512,      // máximo de blocos numa mensagem `blocos` (lote)
+  BAU_TEMPO_LIMITE_S: 5,         // o cliente desiste de abrir o baú se o anfitrião não responder
+  TOCHA_INTERVALO_S: 0.15,       // de quanto em quanto tempo saem fagulhas das tochas
+  TOCHA_RAIO: 14,                // distância máxima (blocos) para as fagulhas das tochas
+  TOCHA_POR_VEZ: 3,              // quantas tochas soltam fagulhas a cada vez
+  BAU_DIST_MAX: 12,              // o anfitrião só atende `bauAbrir` de quem está até essa distância (blocos)
 };
 
 // Duração total de um dia completo (dia + noite), em segundos

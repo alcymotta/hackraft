@@ -2,8 +2,8 @@
 // Hackraft - Salvar e carregar o jogo (localStorage do navegador)
 // ---------------------------------------------------------------------
 // O estado é um objeto simples:
-//   { versao: 5, semente, modificacoes, jogador, inventario, hora,
-//     jogadores, equipamento, itensChao, casa }
+//   { versao: 6, semente, modificacoes, jogador, inventario, hora,
+//     jogadores, equipamento, itensChao, casa, baus }
 //
 // Versões:
 //   1 (Fase 1): sem `jogadores`
@@ -15,6 +15,8 @@
 //               `jogadores[apelido].casa`
 //
 //   5 (Fase 5): `jogador.vida` (a vida do anfitrião vem do jogador.serializar)
+//   6 (Fase 6): + `baus` ("x,y,z" → 27 espaços) e as `modificacoes` passam a ter
+//               o estado do bloco: [x, y, z, id, estado]
 //
 // Um save antigo continua funcionando: o que não existia naquela versão
 // vem "vazio" (sem visitantes, sem equipamento, sem itens no chão).
@@ -25,7 +27,7 @@
 
 import { CONFIG } from './config.js';
 
-const VERSOES_ACEITAS = [1, 2, 3, 4, 5];
+const VERSOES_ACEITAS = [1, 2, 3, 4, 5, 6];
 
 /** Guarda o estado. Devolve true se deu certo, false se falhou (ex.: sem espaço). */
 export function salvarJogo(estado) {
@@ -40,8 +42,8 @@ export function salvarJogo(estado) {
 
 /**
  * Lê o jogo salvo. Devolve o estado, ou null se não existir ou for inválido.
- * Aceita as versões 1 a 5. O que faltar das versões antigas é preenchido:
- * `jogadores` = {}, `equipamento` = null, `itensChao` = [], `casa` = null.
+ * Aceita as versões 1 a 6. O que faltar das versões antigas é preenchido:
+ * `jogadores` = {}, `equipamento` = null, `itensChao` = [], `casa` = null, `baus` = {}.
  */
 export function carregarJogo() {
   try {
@@ -56,6 +58,7 @@ export function carregarJogo() {
       estado.equipamento = null;
     }
     if (!Array.isArray(estado.itensChao)) estado.itensChao = [];
+    if (!estado.baus || typeof estado.baus !== 'object' || Array.isArray(estado.baus)) estado.baus = {};
     const c = estado.casa;
     if (!Array.isArray(c) || c.length !== 3 || !c.every(Number.isFinite)) estado.casa = null;
     return estado;

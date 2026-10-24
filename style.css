@@ -241,7 +241,8 @@ img { image-rendering: pixelated; }
   text-shadow: 2px 2px 0 #3f3f3f;
   pointer-events: none;
 }
-#inv-grade .espaco:hover, #inv-hotbar .espaco:hover {
+#inv-grade .espaco:hover, #inv-hotbar .espaco:hover,
+#bau-grade .espaco:hover, #bau-inv-grade .espaco:hover, #bau-inv-hotbar .espaco:hover {
   background: #a8a8a8;
 }
 
@@ -592,9 +593,46 @@ img { image-rendering: pixelated; }
 .aparencia-botoes { display: flex; gap: 14px; justify-content: center; margin-top: 16px; }
 .aparencia-botoes .botao { min-width: 130px; }
 
-@media (max-width: 900px) {
+@media (max-width: 1250px) {
   .inv-colunas { flex-direction: column; align-items: center; }
+  #criar-lista { max-height: 200px; }
 }
+
+/* ---------- Criar (Fase 6) ---------- */
+.inv-criar { width: 260px; }
+#criar-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 440px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.receita {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  background: var(--espaco);
+  border: 3px solid;
+  border-color: #373737 #ffffff #ffffff #373737;
+  cursor: pointer;
+  user-select: none;
+}
+.receita:hover { background: #a8a8a8; }
+.receita.desativada { opacity: 0.45; cursor: default; }
+.receita.desativada:hover { background: var(--espaco); }
+.receita .espaco { flex: none; }
+.receita-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.receita-nome { font-family: var(--fonte-pixel); font-size: 9px; color: #222; }
+.receita-ings { display: flex; flex-wrap: wrap; gap: 6px; }
+.receita-ing { display: flex; align-items: center; gap: 2px; font-size: 12px; font-weight: bold; color: #1a5a1a; }
+.receita-ing img { width: 18px; height: 18px; image-rendering: pixelated; }
+.receita-ing.falta { color: #c01818; }
+
+/* ---------- Baú (Fase 6) ---------- */
+#tela-bau { background: rgba(0, 0, 0, 0.45); }
+.separador-curto { height: 8px; }
 #btn-personagem, #btn-novo-inicial { flex: 1; }
 
 /* ---------- Vida (Fase 5) ---------- */

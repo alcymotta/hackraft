@@ -50,8 +50,9 @@ import { registrarComandos } from './comandos.js';
 import { ModoHacker } from './hacker.js';
 import { Particulas } from './particulas.js';
 import { Poderes } from './powers.js';
+import { Baus } from './baus.js';
 import { som } from './audio.js';
-import { BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
+import { B, BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { salvarJogo, carregarJogo, apagarJogo } from './save.js';
 
 const NOMES_MODO = { sozinho: 'sozinho', anfitriao: 'anfitrião', cliente: 'cliente' };
@@ -222,7 +223,8 @@ async function iniciar() {
   function salvar() {
     if (!podeSalvar()) return false;
     const ok = salvarJogo({
-      versao: 5,
+      versao: 6,
+      baus: jogo.baus.exportar(),
       semente: jogo.semente,
       modificacoes: jogo.mundo.exportarModificacoes(),
       jogador: jogo.jogador.serializar(),
@@ -275,8 +277,10 @@ async function iniciar() {
     const personagem = new Personagem(aparenciaBase);
     const itensChao = new ItensNoChao({ scene, mundo, texturas });
     const particulas = new Particulas({ scene, mundo });
+    // Baús (Fase 6): o conteúdo mora no anfitrião; a rede (já criada) transporta
+    const baus = new Baus({ mundo, rede, itensChao });
     const jogador = new Jogador({
-      camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento, particulas,
+      camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento, particulas, baus,
       // No multiplayer, quem cria o item no chão é o anfitrião: passa pela rede
       soltarItem: (item, qtd, x, y, z, vx, vy, vz) => rede.soltarItem(item, qtd, x, y, z, vx, vy, vz),
     });
@@ -288,13 +292,56 @@ async function iniciar() {
     });
     jogador.poderes = poderes;
 
-    jogo = { semente, mundo, ceu, personagem, jogador, remotos, itensChao, particulas, poderes };
+    jogo = { semente, mundo, ceu, personagem, jogador, remotos, itensChao, particulas, poderes, baus };
   }
 
   // Depois de posicionar o jogador: liga a rede, expõe para depuração e começa o loop
   function comecar() {
-    const { mundo, ceu, jogador, remotos, itensChao, particulas, poderes } = jogo;
-    aplicarAparencia(); // boneco, preview e rede com a roupa certa
+    const { mundo, ceu, jogador, remotos, itensChao, particulas, poderes, baus } = jogo;
+    aplicarAparencia();
+
+    // ----- Baús: mudanças de outros jogadores e baú quebrado com a tela aberta -----
+    baus.aoMudar((x, y, z, i, valor) => {
+      const ab = jogador.bauAberto;
+      if (ab && ab.x === x && ab.y === y && ab.z === z && ui.bauAberto) {
+        const espacos = baus.obter(x, y, z);
+        if (espacos) ui.atualizarBau(espacos);
+      }
+    });
+    // O anfitrião recusou uma mudança minha (alguém mexeu no mesmo espaço): desfaz o efeito
+    baus.aoRecusar(({ x, y, z, antes, valor, atual }) => {
+      // Descobre o que eu TIREI do baú e o que eu COLOQUEI
+      let tirado = null, colocado = null;
+      if (antes && valor && antes.item === valor.item) {
+        if (valor.qtd < antes.qtd) tirado = { item: antes.item, qtd: antes.qtd - valor.qtd };
+        else if (valor.qtd > antes.qtd) colocado = { item: antes.item, qtd: valor.qtd - antes.qtd };
+      } else {
+        tirado = antes;      // item A saiu (ou o espaço foi esvaziado)
+        colocado = valor;    // item B entrou (ou o espaço estava vazio)
+      }
+      if (tirado) ui.removerItensDoJogador(tirado.item, tirado.qtd);
+      if (colocado) ui.devolverAoJogador(colocado.item, colocado.qtd);
+      const ab = jogador.bauAberto;
+      if (ab && ab.x === x && ab.y === y && ab.z === z && ui.bauAberto) {
+        const espacos = baus.obter(x, y, z);
+        if (espacos) ui.atualizarBau(espacos);   // mostra o valor de verdade
+      }
+      ui.mostrarMensagem('Alguém mexeu nesse espaço ao mesmo tempo!');
+    });
+    mundo.aoAlterarBloco((ev) => {
+      const ab = jogador.bauAberto;
+      if (!ab || !ui.bauAberto) return;
+      let quebrou = false;
+      if (ev.lote && Array.isArray(ev.lista)) {
+        for (const b of ev.lista) if (b[0] === ab.x && b[1] === ab.y && b[2] === ab.z && b[3] !== B.BAU) quebrou = true;
+      } else if (ev.x === ab.x && ev.y === ab.y && ev.z === ab.z && ev.id !== B.BAU) {
+        quebrou = true;
+      }
+      if (quebrou) {
+        jogador.bauAberto = null;
+        ui.fecharBau(true);
+      }
+    }); // boneco, preview e rede com a roupa certa
 
     // ----- Chat e avisos da rede (registrar ANTES de rede.ligar) -----
     // Mensagem de chat de qualquer jogador (inclusive a minha, de volta)
@@ -361,7 +408,7 @@ async function iniciar() {
 
     window.jogo = {
       mundo, ceu, jogador, inventario, equipamento, itensChao, ui, som, salvar, rede, remotos,
-      renderer, scene, camera, texturas, chat, hacker, particulas, poderes,
+      renderer, scene, camera, texturas, chat, hacker, particulas, poderes, baus,
     };
 
     // Música e boas-vindas
@@ -397,6 +444,46 @@ async function iniciar() {
       }
     }
 
+    // ----- Tochas (Fase 6): fagulhas e fumaça nas tochas perto de você -----
+    let tempoTochas = 0;
+    const ehTocha = (id) => BLOCOS[id]?.modelo === 'tocha'; // criada uma vez só (sem lixo no loop)
+    // Quanto a tocha na parede fica deslocada (estado 1 a 4 = encostada em -Z, +X, +Z, -X)
+    const DESLOC_X = [0, 0, 0.3, 0, -0.3];
+    const DESLOC_Z = [0, -0.3, 0, 0.3, 0];
+
+    function fogoDasTochas(dt) {
+      tempoTochas += dt;
+      if (tempoTochas < CONFIG.TOCHA_INTERVALO_S) return;
+      tempoTochas = 0;
+      // A luz dos itens no chão acompanha o lugar onde o jogador está
+      const p = jogador.posicao;
+      itensChao.definirLuz(typeof mundo.luzEm === 'function'
+        ? mundo.luzEm(Math.floor(p.x), Math.floor(p.y + 1), Math.floor(p.z))
+        : ceu.luzDoDia);
+      if (typeof particulas.emitir !== 'function') return;
+      const lista = mundo.blocosProximos(p, CONFIG.TOCHA_RAIO, ehTocha, 32);
+      if (!lista || lista.length === 0) return;
+      const n = Math.min(CONFIG.TOCHA_POR_VEZ, lista.length);
+      for (let k = 0; k < n; k++) {
+        const b = lista[Math.floor(Math.random() * lista.length)]; // [x, y, z, id]
+        const est = typeof mundo.obterEstado === 'function' ? mundo.obterEstado(b[0], b[1], b[2]) : 0;
+        const parede = est >= 1 && est <= 4;
+        const x = b[0] + 0.5 + (parede ? DESLOC_X[est] : 0);
+        const y = b[1] + (parede ? 0.85 : 0.7);
+        const z = b[2] + 0.5 + (parede ? DESLOC_Z[est] : 0);
+        particulas.emitir({
+          x, y, z, qtd: 1, cores: ['#ffb02a', '#ffe066', '#ff7a1a'],
+          velocidade: 0.4, espalhar: 0.04, gravidade: -1.5, vida: 0.5, tamanho: 0.07, aditivo: true,
+        });
+        if (Math.random() < 0.4) {
+          particulas.emitir({
+            x, y: y + 0.1, z, qtd: 1, cor: '#555555',
+            velocidade: 0.3, espalhar: 0.05, gravidade: -1, vida: 1.0, tamanho: 0.1, aditivo: false,
+          });
+        }
+      }
+    }
+
     const pad = (n) => String(n).padStart(2, '0');
 
     function textoDebug() {
@@ -429,6 +516,7 @@ async function iniciar() {
       poderes.atualizar(dt);
       particulas.atualizar(dt);
       brilharCristais(dt);
+      if (typeof mundo.blocosProximos === 'function') fogoDasTochas(dt);
       itensChao.atualizar(dt);
       rede.atualizar(dt);
       remotos.atualizar(dt);
@@ -437,7 +525,7 @@ async function iniciar() {
       mundo.definirLuzDoDia(ceu.luzDoDia);
       tempoShader += dt;
       if (typeof mundo.definirTempo === 'function') mundo.definirTempo(tempoShader);
-      itensChao.definirLuz(ceu.luzDoDia);
+      if (typeof mundo.luzEm !== 'function') itensChao.definirLuz(ceu.luzDoDia); // com luzEm, quem define é fogoDasTochas
       hacker.atualizar(dt, jogador.posicao);
       const clima = ceu.ehNoite ? 'noite' : 'dia';
       if (clima !== climaAtual) {
@@ -496,6 +584,7 @@ async function iniciar() {
       if (estado && estado.equipamento) equipamento.carregar(estado.equipamento);
       const { mundo, jogador, itensChao } = jogo;
       if (estado) itensChao.carregar(estado.itensChao);
+      if (estado) jogo.baus.carregar(estado.baus);
       if (estado && estado.jogador && Array.isArray(estado.jogador.pos)) {
         jogador.carregar(estado.jogador);
       } else {

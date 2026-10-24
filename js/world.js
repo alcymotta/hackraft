@@ -9,16 +9,41 @@
 //     malhas, descarrega os que ficaram longe, guarda as modificações
 //     do jogador, faz o raycast (qual bloco a mira está olhando), acha
 //     blocos perto do jogador (blocosProximos) e cria o shader (material)
-//     que desenha os blocos (com o brilho pulsante dos cristais).
+//     que desenha os blocos (com o brilho pulsante dos cristais e a luz
+//     quente das tochas).
 //
-// Exporta: Mundo (contrato do CLAUDE.md), GeradorMundo, BIOMA, TABELA_MINERIOS
+// Fase 6 (baús, construção e tochas):
+//   - Estado do bloco: 1 byte a mais por posição (porta aberta, tocha na
+//     parede, frente do baú). definirBloco(x, y, z, id, origem, estado),
+//     obterEstado(x, y, z) e definirBlocos(lista) para mudar vários de uma vez.
+//   - Luz das tochas: a classe Iluminacao (chunk.js) espalha a luz de bloco
+//     em bloco, inclusive para os chunks vizinhos. luzEm(x, y, z) diz quanta
+//     luz tem num lugar (para personagens e itens).
+//   - Colisão e mira: caixaColisao / caixaSelecao (porta fina, tocha
+//     pequena), e o raycast acerta essas caixas de verdade.
+//
+// FORMATOS (o que a rede e o save usam):
+//   modificação:   [x, y, z, id, estado]  (listas antigas com 4 números valem estado 0)
+//   lote:          definirBlocos([[x, y, z, id, estado?], ...], origem)
+//   evento simples (aoAlterarBloco): { x, y, z, id, estado, anterior, estadoAnterior, origem }
+//   evento de lote (aoAlterarBloco): { lote: true, lista, origem }, com
+//                  lista[i] = [x, y, z, id, estado, anterior, estadoAnterior]
+//                  (os 5 primeiros números são o formato da rede; só vêm os
+//                  blocos que mudaram de verdade, na ordem em que foram aplicados)
+//
+// Exporta: Mundo (contrato do CLAUDE.md), GeradorMundo, BIOMA, TABELA_MINERIOS,
+//          direcaoDoYaw(yaw), estadoTochaPelaNormal(normal)
 // =====================================================================
 
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { B, BLOCOS, OPACO, SOLIDO, LIQUIDO } from './blocks.js';
 import { criarRuido, hash2D, hash3D, sementeParaNumero } from './noise.js';
-import { Chunk, MontadorMalha, TAM, ALTURA, AREA } from './chunk.js';
+import {
+  Chunk, MontadorMalha, Iluminacao, TAM, ALTURA, AREA,
+  MODELO, MODELO_CUBO, caixaColisaoDe, caixaSelecaoDe,
+  SUJO_OESTE, SUJO_LESTE, SUJO_NORTE, SUJO_SUL, SUJO_NO, SUJO_NE, SUJO_SO, SUJO_SE,
+} from './chunk.js';
 
 // TAM precisa ser potência de 2 (16) para as contas rápidas com bits:
 //   chunk = x >> BITS      (o mesmo que Math.floor(x / 16), inclusive para negativos)
@@ -89,6 +114,11 @@ const TABELA_MINERIOS_BASE = [
   { bloco: B.MINERIO_FOGO,     yMin: 4, yMax: 28, veios: 0.09,  tamanho: [1, 4], fundo: 1.5 },
   { bloco: B.MINERIO_RAIO,     yMin: 4, yMax: 28, veios: 0.09,  tamanho: [1, 4], fundo: 1.5 },
   { bloco: B.MINERIO_GELO,     yMin: 4, yMax: 28, veios: 0.09,  tamanho: [1, 4], fundo: 1.5 },
+  // Carvão (Fase 6): comum, para fazer tochas. Muitos veios por chunk, mas
+  // só os que caem dentro da pedra viram carvão (acima do chão não nasce nada),
+  // então nas planícies sobram uns 4 ou 5 veios. Vem DEPOIS dos cristais e
+  // só troca pedra: os cristais dos mundos que já existem continuam iguais.
+  { bloco: B.MINERIO_CARVAO,   yMin: 5, yMax: 70, veios: 7,     tamanho: [3, 8], fundo: 1   },
 ];
 
 // A tabela de verdade: ignora as linhas cujo bloco ainda não existe em
@@ -607,10 +637,16 @@ export class GeradorMundo {
 // =====================================================================
 // Um material só (ShaderMaterial) para todos os chunks. Cada vértice
 // traz: uv (0..1 na face), aCamada (qual textura do DataArrayTexture),
-// aSombra (sombra da face × AO), aLuzCeu (quanto de céu enxerga) e
-// aBrilho (Fase 5: 0 = normal; maior que 0 = bloco que brilha, e o valor
-// é a "fase" da pulsação dele).
+// aSombra (sombra da face × AO), aLuzCeu (quanto de céu enxerga),
+// aLuzBloco (Fase 6: quanta luz de tocha chega ali) e aBrilho (Fase 5:
+// 0 = normal; maior que 0 = bloco que brilha, e o valor é a "fase" da
+// pulsação dele).
 // Todos esses atributos são bytes "normalizados" (0..255 vira 0..1).
+//
+// Luz das tochas (Fase 6): luz final = o maior entre (céu × luz do dia) e
+// (tocha × cor quente). O "maior" é feito em cada cor (vermelho, verde,
+// azul) separada: de dia o sol branco ganha; à noite e nas cavernas, perto
+// da tocha, ganha a luz alaranjada.
 //
 // Brilho dos cristais (Fase 5): o bloco tem luz própria, então aparece
 // mesmo no escuro (de noite e nas cavernas). Os pixels de CRISTAL (os
@@ -633,6 +669,13 @@ const PULSO_LUZ_PEDRA = CONFIG.PULSO_LUZ_PEDRA ?? 0.3;    // luz da parte de ped
 const PERIODO_PULSO = (2 * Math.PI) / PULSO_VELOCIDADE;
 const VOLTA_TEMPO = PERIODO_PULSO * Math.max(1, Math.round(3600 / PERIODO_PULSO));
 
+// Luz das tochas (dá para ajustar no config.js, se quiser)
+const COR_LUZ_BLOCO = CONFIG.COR_LUZ_TOCHA ?? '#ffcf8a'; // cor da luz das tochas
+const FORCA_LUZ_BLOCO = CONFIG.FORCA_LUZ_TOCHA ?? 1.0;   // 1 = normal; maior = tochas mais fortes
+// Curva da queda: brilho = (nível / 15) ^ CURVA. 2 = igual à luz do céu;
+// maior (ex.: 2.6) = a luz cai mais rápido longe da tocha (mais "clima" à noite)
+const CURVA_LUZ_BLOCO = CONFIG.CURVA_LUZ_TOCHA ?? 2.0;
+
 /** Número JS → texto de número com vírgula no GLSL (o GLSL exige o ".0") */
 function glslNum(v) {
   const t = String(Number(v));
@@ -643,6 +686,7 @@ const SHADER_VERTICE = /* glsl */ `
   attribute float aCamada;
   attribute float aSombra;
   attribute float aLuzCeu;
+  attribute float aLuzBloco;
   #ifndef AGUA
     attribute float aBrilho;
   #endif
@@ -650,13 +694,14 @@ const SHADER_VERTICE = /* glsl */ `
   uniform float uLuzDoDia;
   uniform float uLuzMinima;
   uniform float uTempo;
+  uniform vec3 uCorLuzBloco;
 
   varying vec2 vUv;
   varying float vCamada;
-  varying float vLuz;
+  varying vec3 vLuz;
   #ifndef AGUA
     varying float vBrilho;     // 1 = bloco que brilha, 0 = normal
-    varying float vLuzCristal; // luz dos pixels de cristal (só vale com vBrilho = 1)
+    varying vec3 vLuzCristal;  // luz dos pixels de cristal (só vale com vBrilho = 1)
   #endif
 
   #include <fog_pars_vertex>
@@ -674,7 +719,11 @@ const SHADER_VERTICE = /* glsl */ `
     // contraste ficar parecido. A luz do dia já vem linear do sky.js.
     float sombra = aSombra * aSombra;
     float ceu = aLuzCeu * aLuzCeu;
-    vLuz = sombra * max(ceu * uLuzDoDia, uLuzMinima);
+    // A luz das tochas usa uma curva parecida (nível 0..15 "como o olho vê" → linear)
+    float tocha = pow(aLuzBloco, ${glslNum(CURVA_LUZ_BLOCO)}) * ${glslNum(FORCA_LUZ_BLOCO)};
+    // O maior entre o céu (branco) e a tocha (cor quente), em cada canal de cor
+    vec3 luz = max(vec3(max(ceu * uLuzDoDia, uLuzMinima)), uCorLuzBloco * tocha);
+    vLuz = sombra * luz;
 
     #ifndef AGUA
       vBrilho = 0.0;
@@ -687,8 +736,8 @@ const SHADER_VERTICE = /* glsl */ `
         // Luz própria: quase não depende do céu nem do AO. Ainda guarda um
         // pouco da sombra da face (0.55 a 1) para o bloco não ficar "chapado".
         float propria = 0.55 + 0.45 * aSombra;
-        vLuzCristal = max(vLuz, propria * pulso);
-        vLuz = max(vLuz, propria * ${glslNum(PULSO_LUZ_PEDRA)} * pulso);
+        vLuzCristal = max(vLuz, vec3(propria * pulso));
+        vLuz = max(vLuz, vec3(propria * ${glslNum(PULSO_LUZ_PEDRA)} * pulso));
         vBrilho = 1.0;
       }
     #endif
@@ -706,10 +755,10 @@ const SHADER_FRAGMENTO = /* glsl */ `
 
   varying vec2 vUv;
   varying float vCamada;
-  varying float vLuz;
+  varying vec3 vLuz;
   #ifndef AGUA
     varying float vBrilho;
-    varying float vLuzCristal;
+    varying vec3 vLuzCristal;
   #endif
 
   #include <fog_pars_fragment>
@@ -720,9 +769,9 @@ const SHADER_FRAGMENTO = /* glsl */ `
     #ifdef AGUA
       gl_FragColor = vec4(texel.rgb * vLuz, uAlfaAgua);
     #else
-      // Folhas: os furos (alfa baixo) são recortados
+      // Folhas, vidro e tocha: os furos (alfa baixo) são recortados
       if (texel.a < 0.5) discard;
-      float luz = vLuz;
+      vec3 luz = vLuz;
       if (vBrilho > 0.5) {
         // Este pixel é cristal ou pedra? A pedra é cinza e meio escura; o
         // cristal é colorido (saturado) ou bem claro (o reflexo branco).
@@ -748,6 +797,8 @@ function criarMateriais(texturas) {
   const uLuzDoDia = { value: 1 };
   const uLuzMinima = { value: CONFIG.LUZ_MINIMA_BLOCOS ?? 0.04 };
   const uTempo = { value: 0 };
+  // new THREE.Color('#...') já converte do sRGB para o espaço linear das contas
+  const uCorLuzBloco = { value: new THREE.Color(COR_LUZ_BLOCO) };
 
   function uniforms() {
     // Os da névoa vêm do three (ele atualiza sozinho a partir de scene.fog).
@@ -757,6 +808,7 @@ function criarMateriais(texturas) {
     u.uLuzDoDia = uLuzDoDia;
     u.uLuzMinima = uLuzMinima;
     u.uTempo = uTempo;
+    u.uCorLuzBloco = uCorLuzBloco;
     u.uAlfaAgua = { value: CONFIG.ALFA_AGUA ?? 0.7 };
     return u;
   }
@@ -781,7 +833,7 @@ function criarMateriais(texturas) {
     side: THREE.DoubleSide,  // para ver a superfície por baixo (mergulhando)
   });
 
-  return { solido, agua, uLuzDoDia, uTempo };
+  return { solido, agua, uLuzDoDia, uLuzMinima, uTempo, uCorLuzBloco };
 }
 
 /** Transforma os arrays do MontadorMalha numa BufferGeometry. */
@@ -792,6 +844,7 @@ function criarGeometria(m) {
   g.setAttribute('aCamada', new THREE.BufferAttribute(m.camadas, 1, true));
   g.setAttribute('aSombra', new THREE.BufferAttribute(m.sombras, 1, true));
   g.setAttribute('aLuzCeu', new THREE.BufferAttribute(m.luzCeu, 1, true));
+  g.setAttribute('aLuzBloco', new THREE.BufferAttribute(m.luzBloco, 1, true));
   // Só a malha sólida tem aBrilho (o shader da água nem declara esse atributo)
   if (m.brilhos) g.setAttribute('aBrilho', new THREE.BufferAttribute(m.brilhos, 1, true));
   g.setIndex(new THREE.BufferAttribute(m.indices, 1));
@@ -808,10 +861,43 @@ function criarGeometria(m) {
 }
 
 // =====================================================================
+// AJUDANTES DE ESTADO (para quem coloca blocos: player.js, comandos)
+// =====================================================================
+// Direções: 0 = -Z, 1 = +X, 2 = +Z, 3 = -X (as mesmas dos estados).
+
+/**
+ * Para onde o jogador olha (só na horizontal), com yaw = 0 olhando para -Z.
+ * Devolve 0 (-Z), 1 (+X), 2 (+Z) ou 3 (-X). É o estado da porta; o baú usa
+ * (direção + 2) % 4 para a frente ficar virada para o jogador.
+ */
+export function direcaoDoYaw(yaw) {
+  const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+  if (Math.abs(fx) > Math.abs(fz)) return fx > 0 ? 1 : 3;
+  return fz < 0 ? 0 : 2;
+}
+
+/**
+ * Estado da tocha colocada na face de normal `normal` ({ x, y, z }) de um bloco:
+ * em cima (normal +Y) = 0 (no chão); numa lateral = 1 a 4 (encostada no bloco
+ * que fica em -Z, +X, +Z ou -X dela). Embaixo (normal -Y) = -1 (não pode).
+ */
+export function estadoTochaPelaNormal(normal) {
+  if (normal.y > 0) return 0;
+  if (normal.y < 0) return -1;
+  if (normal.z > 0) return 1; // a tocha está em +Z do bloco: a parede fica em -Z dela
+  if (normal.x < 0) return 2; // parede em +X
+  if (normal.z < 0) return 3; // parede em +Z
+  if (normal.x > 0) return 4; // parede em -X
+  return -1;
+}
+
+// =====================================================================
 // MUNDO
 // =====================================================================
 
 const ORCAMENTO_MS = CONFIG.ORCAMENTO_CHUNKS_MS ?? 8; // tempo máximo por quadro carregando chunks
+// Luz do céu dentro das cavernas (a mesma conta do chunk.js: nível 0..15 → 0..1)
+const LUZ_CAVERNA_CEU = Math.round((CONFIG.LUZ_CAVERNA ?? 0.3) * 15) / 15;
 const MAX_RESERVA = 48; // chunks descarregados guardados para reaproveitar a memória
 // Maior raio aceito pelo blocosProximos: a área que fica carregada em volta do jogador
 const RAIO_MAX_PROXIMOS = (CONFIG.DISTANCIA_RENDER + 3) * TAM;
@@ -835,14 +921,32 @@ export class Mundo {
 
     this.chunks = new Map();        // "cx,cz" → Chunk
     this.modificacoes = new Map();  // "x,y,z" → id (o que o jogador mudou)
-    this.modsPorChunk = new Map();  // "cx,cz" → Map(índice local → id), para aplicar rápido
+    // "x,y,z" → estado, só dos blocos mudados com estado diferente de 0
+    // (porta, tocha na parede, baú). Fica separado para o `modificacoes`
+    // continuar sendo "posição → id", como antes.
+    this.estadosModificados = new Map();
+    // "cx,cz" → Map(índice local → id + estado × 256), para aplicar rápido
+    this.modsPorChunk = new Map();
     this.ouvintes = [];
+
+    // Luz das tochas (chunk.js). Cada chunk carregado entra nela.
+    this.luz = new Iluminacao();
+    // Chunks com malha que precisam ser remontados (a luz mudou, um bloco
+    // mudou...). Juntamos todos e remontamos cada um UMA vez só.
+    this._pendentes = new Set();
+    this._lote = 0; // > 0 = no meio de uma mudança grande: remonta só no fim
+    // Função chamada pela Iluminacao para cada chunk cuja luz mudou (criada
+    // uma vez só, para não gerar lixo a cada mudança)
+    this._aoSujar = (ch, bits) => this._sujoDeLuz(ch, bits);
 
     this.montador = new MontadorMalha((nome) => (texturas ? texturas.indice(nome) : 0));
     const mats = criarMateriais(texturas);
     this.materialSolido = mats.solido;
     this.materialAgua = mats.agua;
     this._uLuzDoDia = mats.uLuzDoDia;
+    this._uLuzMinima = mats.uLuzMinima;
+    /** Cor da luz das tochas (THREE.Color, já em espaço linear), para tingir personagens e itens */
+    this.corLuzBloco = mats.uCorLuzBloco.value;
     // Relógio do brilho dos cristais: o atualizar() copia o tempo para o shader.
     // Se alguém chamar definirTempo(t), o relógio próprio é desligado.
     this._uTempo = mats.uTempo;
@@ -892,6 +996,7 @@ export class Mundo {
     this._cacheCh = new Array(64).fill(null);
 
     this._vizinhos = new Array(9).fill(null);
+    this._acerto = { nx: 0, ny: 0, nz: 0, t: 0 }; // rascunho do raycast nos modelos
     this._reserva = [];
     this._totalFaces = 0;
   }
@@ -923,15 +1028,63 @@ export class Mundo {
     else ch = new Chunk(cx, cz);
     this.gerador.gerar(ch);
 
-    // Aplica o que o jogador já tinha mudado neste chunk
+    // Aplica o que o jogador já tinha mudado neste chunk (id e estado:
+    // o valor guardado é id + estado × 256)
     const mods = this.modsPorChunk.get(ch.chave);
     if (mods) {
-      for (const [i, id] of mods) {
-        ch.definir(i & MASCARA, i >> (2 * BITS), (i >> BITS) & MASCARA, id);
+      for (const [i, v] of mods) {
+        ch.definir(i & MASCARA, i >> (2 * BITS), (i >> BITS) & MASCARA, v & 255, v >> 8);
       }
     }
     this.chunks.set(ch.chave, ch);
+
+    // Luz das tochas: liga o chunk aos 4 vizinhos carregados, acende as
+    // fontes dele e puxa a luz que vem dos vizinhos (e empurra a dele para eles)
+    this.luz.registrar(ch,
+      this._chunkEm(cx - 1, cz), this._chunkEm(cx + 1, cz),
+      this._chunkEm(cx, cz - 1), this._chunkEm(cx, cz + 1));
+    this.luz.calcularChunk(ch);
+    this.luz.coletarSujos(this._aoSujar);
+    if (this._lote === 0) this._remontarPendentes();
     return ch;
+  }
+
+  // ----------------------------------------------------------------
+  // Remontagem das malhas
+  // ----------------------------------------------------------------
+
+  /** Marca o chunk (cx, cz) para remontar, se ele já tiver malha. */
+  _pendenteSeTiver(cx, cz) {
+    const ch = this._chunkEm(cx, cz);
+    if (ch && ch.temMalha) this._pendentes.add(ch);
+  }
+
+  /**
+   * A luz do chunk mudou (aviso da Iluminacao). A malha dele precisa ser
+   * remontada e, se mudou na borda, a do vizinho daquele lado também,
+   * porque a malha do vizinho lê 1 bloco da nossa borda (luz suave).
+   */
+  _sujoDeLuz(ch, bits) {
+    if (ch.temMalha) this._pendentes.add(ch);
+    const cx = ch.cx, cz = ch.cz;
+    if (bits & SUJO_OESTE) this._pendenteSeTiver(cx - 1, cz);
+    if (bits & SUJO_LESTE) this._pendenteSeTiver(cx + 1, cz);
+    if (bits & SUJO_NORTE) this._pendenteSeTiver(cx, cz - 1);
+    if (bits & SUJO_SUL) this._pendenteSeTiver(cx, cz + 1);
+    if (bits & SUJO_NO) this._pendenteSeTiver(cx - 1, cz - 1);
+    if (bits & SUJO_NE) this._pendenteSeTiver(cx + 1, cz - 1);
+    if (bits & SUJO_SO) this._pendenteSeTiver(cx - 1, cz + 1);
+    if (bits & SUJO_SE) this._pendenteSeTiver(cx + 1, cz + 1);
+  }
+
+  /** Remonta (uma vez cada) os chunks marcados. */
+  _remontarPendentes() {
+    if (this._pendentes.size === 0) return;
+    for (const ch of this._pendentes) {
+      // Pode ter sido descarregado no meio do caminho
+      if (ch.temMalha && this.chunks.get(ch.chave) === ch) this._montarMalha(ch);
+    }
+    this._pendentes.clear();
   }
 
   /** (Re)monta as malhas de um chunk. Os 8 vizinhos já devem ter dados. */
@@ -987,6 +1140,8 @@ export class Mundo {
     ch.temMalha = false;
     this._totalFaces -= ch.faces;
     ch.faces = 0;
+    this.luz.remover(ch);
+    this._pendentes.delete(ch);
     this.chunks.delete(ch.chave);
     const s = ((ch.cx & 7) << 3) | (ch.cz & 7);
     if (this._cacheCh[s] === ch) this._cacheCh[s] = null;
@@ -1019,6 +1174,19 @@ export class Mundo {
     }
     if (this._filaPos >= this._filaTam) return;
 
+    // Gerar um chunk pode mudar a luz de um vizinho que já tem malha (raro):
+    // essas remontagens ficam para o fim do quadro, uma vez cada.
+    this._lote++;
+    try {
+      this._carregarDaFila();
+    } finally {
+      this._lote--;
+    }
+    if (this._lote === 0) this._remontarPendentes();
+  }
+
+  /** Gera/monta alguns chunks da fila (até CHUNKS_POR_QUADRO malhas e ~8 ms). */
+  _carregarDaFila() {
     const inicio = performance.now();
     const maxMalhas = CONFIG.CHUNKS_POR_QUADRO;
     let montados = 0;
@@ -1077,11 +1245,17 @@ export class Mundo {
     const pcx = Math.floor(pos.x / TAM);
     const pcz = Math.floor(pos.z / TAM);
     const r = Math.min(raio, CONFIG.DISTANCIA_RENDER);
-    for (let dz = -r - 1; dz <= r + 1; dz++) {
-      for (let dx = -r - 1; dx <= r + 1; dx++) {
-        if (dentroDoRaio(dx, dz, r + 1)) this._garantirDados(pcx + dx, pcz + dz);
+    this._lote++;
+    try {
+      for (let dz = -r - 1; dz <= r + 1; dz++) {
+        for (let dx = -r - 1; dx <= r + 1; dx++) {
+          if (dentroDoRaio(dx, dz, r + 1)) this._garantirDados(pcx + dx, pcz + dz);
+        }
       }
+    } finally {
+      this._lote--;
     }
+    if (this._lote === 0) this._remontarPendentes();
     for (let k = 0; k < this._offX.length; k++) {
       const dx = this._offX[k];
       const dz = this._offZ[k];
@@ -1112,10 +1286,23 @@ export class Mundo {
     return ch.dados[(x & MASCARA) + (z & MASCARA) * TAM + y * AREA];
   }
 
+  /** Estado do bloco em (x, y, z): 0 a 255 (0 fora da altura ou em chunk não carregado). */
+  obterEstado(x, y, z) {
+    if (y < 0 || y >= ALTURA) return 0;
+    x = Math.floor(x);
+    y = Math.floor(y);
+    z = Math.floor(z);
+    const ch = this._chunkEm(x >> BITS, z >> BITS);
+    if (!ch) return 0;
+    return ch.estados[(x & MASCARA) + (z & MASCARA) * TAM + y * AREA];
+  }
+
   /**
-   * Muda um bloco. Registra em `modificacoes`, remonta o chunk na hora (e os
-   * vizinhos, se o bloco estiver na borda) e avisa os ouvintes.
-   * Devolve true se algo mudou.
+   * Muda um bloco (e o estado dele). Registra em `modificacoes`, atualiza a
+   * luz, remonta o chunk na hora (e os vizinhos, se o bloco estiver na
+   * borda ou se a luz deles mudou) e avisa os ouvintes com
+   *   { x, y, z, id, estado, anterior, estadoAnterior, origem }.
+   * Devolve true se algo mudou (o id ou o estado).
    *
    * Se o chunk não estiver carregado (ex.: o outro jogador está longe), os
    * dados dele são gerados antes (sem malha, é rápido). Sem isso não
@@ -1123,52 +1310,125 @@ export class Mundo {
    * ar) seria ignorado, porque "ar" é o que um chunk não carregado parece
    * ter. O chunk gerado assim é descartado sozinho quando ficar longe.
    */
-  definirBloco(x, y, z, id, origem = 'local') {
+  definirBloco(x, y, z, id, origem = 'local', estado = 0) {
     x = Math.floor(x);
     y = Math.floor(y);
     z = Math.floor(z);
-    if (y < 0 || y >= ALTURA) return false;
-    const cx = x >> BITS;
-    const cz = z >> BITS;
-    const lx = x & MASCARA;
-    const lz = z & MASCARA;
-    const iLocal = lx + lz * TAM + y * AREA;
-    const ch = this._garantirDados(cx, cz);
+    if (!(y >= 0 && y < ALTURA) || !Number.isFinite(x) || !Number.isFinite(z)) return false;
+    id |= 0;
+    if (BLOCOS[id] === undefined) return false;
+    estado = (estado | 0) & 255;
+
+    this._lote++;
+    let mudou;
+    let anterior = 0, estadoAnterior = 0;
+    try {
+      const ch = this._garantirDados(x >> BITS, z >> BITS);
+      const iLocal = (x & MASCARA) + (z & MASCARA) * TAM + y * AREA;
+      anterior = ch.dados[iLocal];
+      estadoAnterior = ch.estados[iLocal];
+      mudou = anterior !== id || estadoAnterior !== estado;
+      if (mudou) this._aplicarMudanca(ch, x, y, z, iLocal, id, estado, anterior);
+    } finally {
+      this._lote--;
+    }
+    if (!mudou) return false;
+    this.luz.coletarSujos(this._aoSujar);
+    if (this._lote === 0) this._remontarPendentes();
+
+    const evento = { x, y, z, id, estado, anterior, estadoAnterior, origem };
+    for (let i = 0; i < this.ouvintes.length; i++) {
+      try { this.ouvintes[i](evento); } catch (e) { console.error('Erro num ouvinte de bloco:', e); }
+    }
+    return true;
+  }
+
+  /**
+   * Muda vários blocos de uma vez (porta com as 2 metades, fogo, gelo,
+   * comandos, lotes da rede). Bem mais rápido que chamar definirBloco
+   * várias vezes: cada chunk afetado é remontado UMA vez só, no fim.
+   *   lista:  [[x, y, z, id, estado?], ...] (sem estado = 0; entradas
+   *           inválidas ou fora da altura são puladas)
+   *   origem: 'local' (o jogador daqui) ou 'rede'
+   * Os ouvintes são chamados uma vez, com
+   *   { lote: true, lista, origem }
+   * onde lista[i] = [x, y, z, id, estado, anterior, estadoAnterior], só com
+   * os blocos que mudaram de verdade. Os 5 primeiros números são o mesmo
+   * formato da entrada (é o que a rede manda).
+   * Devolve quantos blocos mudaram.
+   */
+  definirBlocos(lista, origem = 'local') {
+    if (!lista || typeof lista.length !== 'number') return 0;
+    const mudancas = [];
+    this._lote++;
+    try {
+      for (let k = 0; k < lista.length; k++) {
+        const b = lista[k];
+        if (!b || b.length < 4) continue;
+        const x = Math.floor(b[0]);
+        const y = Math.floor(b[1]);
+        const z = Math.floor(b[2]);
+        if (!(y >= 0 && y < ALTURA) || !Number.isFinite(x) || !Number.isFinite(z)) continue;
+        const id = b[3] | 0;
+        if (BLOCOS[id] === undefined) continue;
+        const estado = (b[4] | 0) & 255;
+        const ch = this._garantirDados(x >> BITS, z >> BITS);
+        const iLocal = (x & MASCARA) + (z & MASCARA) * TAM + y * AREA;
+        const anterior = ch.dados[iLocal];
+        const estadoAnterior = ch.estados[iLocal];
+        if (anterior === id && estadoAnterior === estado) continue;
+        this._aplicarMudanca(ch, x, y, z, iLocal, id, estado, anterior);
+        mudancas.push([x, y, z, id, estado, anterior, estadoAnterior]);
+      }
+    } finally {
+      this._lote--;
+    }
+    this.luz.coletarSujos(this._aoSujar);
+    if (this._lote === 0) this._remontarPendentes();
+    if (mudancas.length === 0) return 0;
+
+    const evento = { lote: true, lista: mudancas, origem };
+    for (let i = 0; i < this.ouvintes.length; i++) {
+      try { this.ouvintes[i](evento); } catch (e) { console.error('Erro num ouvinte de bloco:', e); }
+    }
+    return mudancas.length;
+  }
+
+  /**
+   * Parte comum do definirBloco e do definirBlocos: guarda a modificação,
+   * grava no chunk, atualiza a luz e marca as malhas para remontar.
+   */
+  _aplicarMudanca(ch, x, y, z, iLocal, id, estado, anterior) {
     const chaveBloco = x + ',' + y + ',' + z;
-
-    const anterior = ch.dados[iLocal];
-    if (anterior === id) return false;
-
     this.modificacoes.set(chaveBloco, id);
-    const chaveChunk = cx + ',' + cz;
-    let mapa = this.modsPorChunk.get(chaveChunk);
+    if (estado !== 0) this.estadosModificados.set(chaveBloco, estado);
+    else this.estadosModificados.delete(chaveBloco);
+    let mapa = this.modsPorChunk.get(ch.chave);
     if (!mapa) {
       mapa = new Map();
-      this.modsPorChunk.set(chaveChunk, mapa);
+      this.modsPorChunk.set(ch.chave, mapa);
     }
-    mapa.set(iLocal, id);
+    mapa.set(iLocal, id | (estado << 8));
 
-    ch.definir(lx, y, lz, id); // também atualiza o mapa de altura da coluna
-    if (ch.temMalha) this._montarMalha(ch);
+    const lx = x & MASCARA;
+    const lz = z & MASCARA;
+    ch.definir(lx, y, lz, id, estado); // também atualiza o mapa de altura da coluna
+    if (ch.temMalha) this._pendentes.add(ch);
+    // Só o estado mudou (porta abrindo, baú virando): os vizinhos não
+    // mudam (porta e tocha não tapam nada, e o baú continua um cubo)
+    if (anterior === id) return;
+
+    this.luz.alterarBloco(ch, iLocal, anterior, id);
     // Na borda, o vizinho também muda (a face dele e o AO dos cantos).
     // Num canto do chunk, até o vizinho da diagonal.
     const ddx = lx === 0 ? -1 : (lx === MASCARA ? 1 : 0);
     const ddz = lz === 0 ? -1 : (lz === MASCARA ? 1 : 0);
-    if (ddx !== 0) this._remontarSeTiver(cx + ddx, cz);
-    if (ddz !== 0) this._remontarSeTiver(cx, cz + ddz);
-    if (ddx !== 0 && ddz !== 0) this._remontarSeTiver(cx + ddx, cz + ddz);
-
-    const evento = { x, y, z, id, anterior, origem };
-    for (let i = 0; i < this.ouvintes.length; i++) this.ouvintes[i](evento);
-    return true;
+    if (ddx !== 0) this._pendenteSeTiver(ch.cx + ddx, ch.cz);
+    if (ddz !== 0) this._pendenteSeTiver(ch.cx, ch.cz + ddz);
+    if (ddx !== 0 && ddz !== 0) this._pendenteSeTiver(ch.cx + ddx, ch.cz + ddz);
   }
 
-  _remontarSeTiver(cx, cz) {
-    const ch = this._chunkEm(cx, cz);
-    if (ch && ch.temMalha) this._montarMalha(ch);
-  }
-
-  /** Registra uma função chamada a cada bloco alterado. Devolve uma função que cancela. */
+  /** Registra uma função chamada a cada bloco alterado (ou lote). Devolve uma função que cancela. */
   aoAlterarBloco(fn) {
     this.ouvintes.push(fn);
     return () => {
@@ -1177,12 +1437,89 @@ export class Mundo {
     };
   }
 
+  // ----------------------------------------------------------------
+  // Colisão, seleção e luz num ponto
+  // ----------------------------------------------------------------
+
+  /**
+   * Caixa de colisão do bloco (x, y, z): null (não colide) ou
+   * [x0, y0, z0, x1, y1, z1] DENTRO do bloco (de 0 a 1). Cubo sólido =
+   * [0, 0, 0, 1, 1, 1]; porta fechada = tábua fina no lado de longe de quem
+   * a colocou; aberta = tábua fina no lado da dobradiça; tocha = null.
+   * O array é compartilhado (não mude os números).
+   */
+  caixaColisao(x, y, z) {
+    if (y < 0 || y >= ALTURA) return null;
+    x = Math.floor(x);
+    y = Math.floor(y);
+    z = Math.floor(z);
+    const ch = this._chunkEm(x >> BITS, z >> BITS);
+    if (!ch) return null;
+    const i = (x & MASCARA) + (z & MASCARA) * TAM + y * AREA;
+    return caixaColisaoDe(ch.dados[i], ch.estados[i]);
+  }
+
+  /**
+   * Caixa de seleção (o contorno da mira e o que o raycast acerta), no mesmo
+   * formato da caixaColisao. null para ar e água. A tocha tem uma caixa
+   * pequena (mesmo sem colidir) e a porta, a tábua fina.
+   */
+  caixaSelecao(x, y, z) {
+    if (y < 0 || y >= ALTURA) return null;
+    x = Math.floor(x);
+    y = Math.floor(y);
+    z = Math.floor(z);
+    const ch = this._chunkEm(x >> BITS, z >> BITS);
+    if (!ch) return null;
+    const i = (x & MASCARA) + (z & MASCARA) * TAM + y * AREA;
+    return caixaSelecaoDe(ch.dados[i], ch.estados[i]);
+  }
+
+  /**
+   * Quanta luz chega no bloco (x, y, z), de 0 a 1, para personagens e itens:
+   * o maior entre o céu × luz do dia e a luz das tochas. É a mesma conta do
+   * shader (em espaço linear, sem a sombra das faces): dá para multiplicar
+   * direto numa cor. Fora do mundo carregado vale a luz do dia.
+   */
+  luzEm(x, y, z) {
+    const dia = this._uLuzDoDia.value;
+    const minimo = this._uLuzMinima.value;
+    x = Math.floor(x);
+    y = Math.floor(y);
+    z = Math.floor(z);
+    if (y >= ALTURA) return Math.max(dia, minimo);
+    if (!(y >= 0)) return minimo;
+    const ch = this._chunkEm(x >> BITS, z >> BITS);
+    if (!ch) return Math.max(dia, minimo);
+    const col = (x & MASCARA) + (z & MASCARA) * TAM;
+    const ceu = y >= ch.alturas[col] ? 1 : LUZ_CAVERNA_CEU;
+    const b = ch.luzBloco[col + y * AREA] / 15;
+    const v = Math.max(ceu * ceu * dia, Math.pow(b, CURVA_LUZ_BLOCO) * FORCA_LUZ_BLOCO, minimo);
+    return v > 1 ? 1 : v;
+  }
+
+  /** Só a luz das tochas no bloco (x, y, z), de 0 a 1 (linear). Junto com corLuzBloco, serve para tingir. */
+  luzBlocoEm(x, y, z) {
+    if (y < 0 || y >= ALTURA) return 0;
+    x = Math.floor(x);
+    y = Math.floor(y);
+    z = Math.floor(z);
+    const ch = this._chunkEm(x >> BITS, z >> BITS);
+    if (!ch) return 0;
+    const b = ch.luzBloco[(x & MASCARA) + (z & MASCARA) * TAM + y * AREA] / 15;
+    return Math.min(1, Math.pow(b, CURVA_LUZ_BLOCO) * FORCA_LUZ_BLOCO);
+  }
+
   /**
    * Anda pela linha de visão bloco por bloco (algoritmo DDA de
    * Amanatides & Woo) e devolve o primeiro bloco atingido:
-   * { x, y, z, normal: { x, y, z }, id } ou null.
-   * A normal aponta para fora da face atingida (bloco novo vai em posição + normal).
-   * Ignora ar e água. Se a origem já estiver dentro de um bloco, a normal é (0, 0, 0).
+   * { x, y, z, normal: { x, y, z }, id, estado, t } ou null.
+   * A normal aponta para fora da face atingida (bloco novo vai em posição + normal)
+   * e t é a distância até o ponto atingido.
+   * Ignora ar e água. Os modelos (porta, tocha) só contam se o raio passar
+   * pela caixa de seleção deles: mirando no vão ao lado da porta aberta, o
+   * raio segue em frente. Se a origem já estiver dentro do bloco (ou da
+   * caixa), a normal é (0, 0, 0).
    */
   raycast(origem, direcao, alcance = CONFIG.ALCANCE) {
     let dx = direcao.x, dy = direcao.y, dz = direcao.z;
@@ -1205,14 +1542,29 @@ export class Mundo {
     let proxY = passoY > 0 ? (y + 1 - origem.y) * deltaY : (passoY < 0 ? (origem.y - y) * deltaY : Infinity);
     let proxZ = passoZ > 0 ? (z + 1 - origem.z) * deltaZ : (passoZ < 0 ? (origem.z - z) * deltaZ : Infinity);
     let nx = 0, ny = 0, nz = 0;
+    let t = 0;
 
     for (;;) {
-      const id = this.obterBloco(x, y, z);
-      if (id !== B.AR && !LIQUIDO[id]) {
-        return { x, y, z, normal: { x: nx, y: ny, z: nz }, id };
+      if (y >= 0 && y < ALTURA) {
+        const ch = this._chunkEm(x >> BITS, z >> BITS);
+        if (ch) {
+          const i = (x & MASCARA) + (z & MASCARA) * TAM + y * AREA;
+          const id = ch.dados[i];
+          if (id !== B.AR && !LIQUIDO[id]) {
+            const estado = ch.estados[i];
+            if (MODELO[id] === MODELO_CUBO) {
+              return { x, y, z, normal: { x: nx, y: ny, z: nz }, id, estado, t };
+            }
+            // Modelo: confere se o raio passa pela caixa de verdade
+            const c = caixaSelecaoDe(id, estado);
+            if (c && this._raioNaCaixa(origem, dx, dy, dz, x, y, z, c, alcance)) {
+              const a = this._acerto;
+              return { x, y, z, normal: { x: a.nx, y: a.ny, z: a.nz }, id, estado, t: a.t };
+            }
+          }
+        }
       }
       // Atravessa a parede mais próxima
-      let t;
       if (proxX < proxY && proxX < proxZ) {
         x += passoX; t = proxX; proxX += deltaX;
         nx = -passoX; ny = 0; nz = 0;
@@ -1225,6 +1577,56 @@ export class Mundo {
       }
       if (t > alcance) return null;
     }
+  }
+
+  /**
+   * O raio (origem + t × direção, direção com tamanho 1) passa pela caixa c
+   * do bloco (bx, by, bz)? Método das "fatias": para cada eixo, calcula o t
+   * de entrada e de saída entre os dois planos da caixa; o raio acerta se o
+   * maior t de entrada for menor que o menor t de saída. A face atingida é
+   * a do eixo que deu o maior t de entrada. Resultado em this._acerto.
+   */
+  _raioNaCaixa(o, dx, dy, dz, bx, by, bz, c, alcance) {
+    let tEntra = -Infinity, tSai = Infinity, eixo = -1;
+    // eixo X
+    if (dx === 0) {
+      if (o.x < bx + c[0] || o.x > bx + c[3]) return false;
+    } else {
+      let t1 = (bx + c[0] - o.x) / dx, t2 = (bx + c[3] - o.x) / dx;
+      if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; }
+      if (t1 > tEntra) { tEntra = t1; eixo = 0; }
+      if (t2 < tSai) tSai = t2;
+    }
+    // eixo Y
+    if (dy === 0) {
+      if (o.y < by + c[1] || o.y > by + c[4]) return false;
+    } else {
+      let t1 = (by + c[1] - o.y) / dy, t2 = (by + c[4] - o.y) / dy;
+      if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; }
+      if (t1 > tEntra) { tEntra = t1; eixo = 1; }
+      if (t2 < tSai) tSai = t2;
+    }
+    // eixo Z
+    if (dz === 0) {
+      if (o.z < bz + c[2] || o.z > bz + c[5]) return false;
+    } else {
+      let t1 = (bz + c[2] - o.z) / dz, t2 = (bz + c[5] - o.z) / dz;
+      if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; }
+      if (t1 > tEntra) { tEntra = t1; eixo = 2; }
+      if (t2 < tSai) tSai = t2;
+    }
+    if (tEntra > tSai || tSai < 0 || tEntra > alcance) return false;
+    const a = this._acerto;
+    a.nx = 0; a.ny = 0; a.nz = 0;
+    if (tEntra < 0 || eixo < 0) {
+      a.t = 0; // a origem está dentro da caixa
+    } else {
+      a.t = tEntra;
+      if (eixo === 0) a.nx = dx > 0 ? -1 : 1;
+      else if (eixo === 1) a.ny = dy > 0 ? -1 : 1;
+      else a.nz = dz > 0 ? -1 : 1;
+    }
+    return true;
   }
 
   /**
@@ -1395,61 +1797,82 @@ export class Mundo {
   // Modificações (salvar / carregar / rede)
   // ----------------------------------------------------------------
 
-  /** [[x, y, z, id], ...] com tudo que o jogador mudou */
+  /**
+   * [[x, y, z, id, estado], ...] com tudo que o jogador mudou (o save e a
+   * rede usam este formato; o estado é 0 nos blocos comuns).
+   */
   exportarModificacoes() {
     const lista = [];
-    for (const [chave, id] of this.modificacoes) {
-      const [x, y, z] = chave.split(',').map(Number);
-      lista.push([x, y, z, id]);
+    for (const [chaveChunk, mapa] of this.modsPorChunk) {
+      const virgula = chaveChunk.indexOf(',');
+      const bx = +chaveChunk.slice(0, virgula) * TAM;
+      const bz = +chaveChunk.slice(virgula + 1) * TAM;
+      for (const [i, v] of mapa) {
+        lista.push([bx + (i & MASCARA), i >> (2 * BITS), bz + ((i >> BITS) & MASCARA), v & 255, v >> 8]);
+      }
     }
     return lista;
   }
 
   /**
-   * Troca as modificações pelas da lista (de um save). O ideal é chamar
-   * antes de prepararArea; se já houver chunks carregados, eles são
-   * atualizados e remontados. Não chama os ouvintes.
+   * Troca as modificações pelas da lista (de um save ou da rede). Aceita
+   * [x, y, z, id, estado] e também as listas antigas [x, y, z, id] (estado 0).
+   * O ideal é chamar antes de prepararArea; se já houver chunks carregados,
+   * eles são atualizados (blocos e luz) e remontados. Não chama os ouvintes.
    */
   carregarModificacoes(lista) {
     this.modificacoes.clear();
+    this.estadosModificados.clear();
     this.modsPorChunk.clear();
     const afetados = new Set();
     for (const item of lista || []) {
+      if (!item || item.length < 4) continue;
       const x = Math.floor(item[0]);
       const y = Math.floor(item[1]);
       const z = Math.floor(item[2]);
       const id = item[3] | 0;
-      if (y < 0 || y >= ALTURA) continue;
+      const estado = (item[4] | 0) & 255;
+      if (!(y >= 0 && y < ALTURA) || !Number.isFinite(x) || !Number.isFinite(z)) continue;
+      if (BLOCOS[id] === undefined) continue;
       const cx = x >> BITS;
       const cz = z >> BITS;
       const lx = x & MASCARA;
       const lz = z & MASCARA;
       const iLocal = lx + lz * TAM + y * AREA;
-      this.modificacoes.set(x + ',' + y + ',' + z, id);
+      const chaveBloco = x + ',' + y + ',' + z;
+      this.modificacoes.set(chaveBloco, id);
+      if (estado !== 0) this.estadosModificados.set(chaveBloco, estado);
+      else this.estadosModificados.delete(chaveBloco);
       const chaveChunk = cx + ',' + cz;
       let mapa = this.modsPorChunk.get(chaveChunk);
       if (!mapa) {
         mapa = new Map();
         this.modsPorChunk.set(chaveChunk, mapa);
       }
-      mapa.set(iLocal, id);
+      mapa.set(iLocal, id | (estado << 8));
       const ch = this._chunkEm(cx, cz);
       if (ch) {
-        ch.definir(lx, y, lz, id);
+        ch.definir(lx, y, lz, id, estado);
         afetados.add(ch);
       }
     }
-    // Remonta os chunks mexidos e os vizinhos deles (uma vez cada)
-    const remontar = new Set();
+    if (afetados.size === 0) return;
+    // Luz: refaz do zero nos chunks mexidos E nos vizinhos deles (a luz de
+    // uma tocha que sumiu pode ter entrado até 13 blocos no vizinho)
+    const grupo = new Set();
     for (const ch of afetados) {
       for (let dz = -1; dz <= 1; dz++) {
         for (let dx = -1; dx <= 1; dx++) {
           const v = this._chunkEm(ch.cx + dx, ch.cz + dz);
-          if (v && v.temMalha) remontar.add(v);
+          if (v) grupo.add(v);
         }
       }
     }
-    for (const ch of remontar) this._montarMalha(ch);
+    this.luz.recalcular(grupo);
+    // Remonta os chunks mexidos, os vizinhos e quem teve a luz mudada (uma vez cada)
+    for (const ch of grupo) if (ch.temMalha) this._pendentes.add(ch);
+    this.luz.coletarSujos(this._aoSujar);
+    if (this._lote === 0) this._remontarPendentes();
   }
 
   // ----------------------------------------------------------------
@@ -1485,6 +1908,8 @@ export class Mundo {
   destruir() {
     for (const ch of [...this.chunks.values()]) this._descarregar(ch);
     this._reserva.length = 0;
+    this._pendentes.clear();
+    this.luz.limpar();
     if (this.grupo.parent) this.grupo.parent.remove(this.grupo);
     this.materialSolido.dispose();
     this.materialAgua.dispose();

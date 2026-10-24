@@ -11,6 +11,9 @@ import * as MODULO_ITENS from './items.js';
 import { obterItem } from './items.js';
 import { som } from './audio.js';
 import { Personagem } from './character.js';
+import { RECEITAS, podeCriar, criar } from './receitas.js';
+
+const ESPACOS_BAU = 27;   // 3 fileiras x 9
 
 // Espaços de equipamento (mesma ordem do contrato: items.js exporta SLOTS_EQUIPAMENTO)
 const SLOTS = MODULO_ITENS.SLOTS_EQUIPAMENTO || ['roupa', 'capacete', 'peitoral', 'calca', 'botas', 'mao', 'acessorio'];
@@ -70,6 +73,7 @@ const CONTROLES = [
   ['Mouse', 'olhar'],
   ['Botão esq.', 'segurar para quebrar'],
   ['Botão dir.', 'colocar bloco'],
+  ['Botão dir.', 'abrir baú / porta (Shift para colocar)'],
   ['1-9 / roda', 'escolher item'],
   ['E', 'inventário e equipamento'],
   ['C', 'aparência'],
@@ -195,6 +199,11 @@ export class InterfaceJogo {
     this.ultimoSelecionado = inventario.selecionado;
     this.fonteDicaAtual = null;         // função que diz qual item está sob o mouse
     this.menusExtras = [];              // funções de adicionarMenuExtra
+    this.bauAberto = false;             // tela do baú (Fase 6)
+    this.bauEspacos = [];               // cópia local dos 27 espaços do baú
+    this.aoMudarEspacoBau = null;
+    this.aoFecharBau = null;
+    this.linhasReceita = [];            // linhas da coluna "Criar"
 
     // Aparência: a base (cores salvas no navegador) e a completa (com equipamento)
     this.aparenciaBase = this._lerAparenciaSalva();
@@ -234,6 +243,8 @@ export class InterfaceJogo {
     this.previewAparencia = null;
 
     this._montarEspacos();
+    this._montarBau();
+    this._montarReceitas();
     this._montarEquipamento();
     this._montarPaletas();
     this._montarControles();
@@ -327,6 +338,302 @@ export class InterfaceJogo {
     }
   }
 
+  // ------------------------------------------------------------------
+  // Tela do baú (Fase 6)
+  // ------------------------------------------------------------------
+  _montarBau() {
+    const n = CONFIG.ESPACOS_HOTBAR;
+    const clicar = (idx, botao, e) => this._clicarEspaco(idx, botao, e);
+    const fonteInv = (i) => () => {
+      const s = this.inventario.espacos[i];
+      return s ? s.item : null;
+    };
+    const fonteBau = (i) => () => {
+      const s = this.bauEspacos[i];
+      return s ? s.item : null;
+    };
+    this.espacosBau = [];        // os 27 espaços do baú
+    this.espacosBauInv = [];     // inventário (0..35) dentro da tela do baú
+    for (let i = 0; i < ESPACOS_BAU; i++) {
+      const e = this._criarEspaco(i, (idx, botao, ev) => this._clicarEspacoBau(idx, botao, ev), fonteBau(i));
+      $('bau-grade').appendChild(e.el);
+      this.espacosBau.push(e);
+    }
+    for (let i = n; i < CONFIG.ESPACOS_INVENTARIO; i++) {
+      const e = this._criarEspaco(i, clicar, fonteInv(i));
+      $('bau-inv-grade').appendChild(e.el);
+      this.espacosBauInv[i] = e;
+    }
+    for (let i = 0; i < n; i++) {
+      const e = this._criarEspaco(i, clicar, fonteInv(i));
+      $('bau-inv-hotbar').appendChild(e.el);
+      this.espacosBauInv[i] = e;
+    }
+    // Clicar fora do painel com uma pilha na mão solta a pilha
+    $('tela-bau').addEventListener('mousedown', (e) => {
+      if (e.target.closest('.painel-inventario')) return;
+      this._largarMao();
+    });
+  }
+
+  /**
+   * Abre a tela do baú.
+   * espacos: array de 27 ({ item, qtd } ou null). aoMudarEspaco(i, valorOuNull)
+   * é chamado a cada mudança de um espaço do baú; aoFechar() ao fechar.
+   */
+  abrirBau({ titulo, espacos, aoMudarEspaco, aoFechar } = {}) {
+    if (this.bauAberto) this.fecharBau(false);
+    this.bauAberto = true;
+    this.aoMudarEspacoBau = aoMudarEspaco || null;
+    this.aoFecharBau = aoFechar || null;
+    $('bau-titulo').textContent = titulo || 'Baú';
+    this._copiarEspacosBau(espacos);
+    $('tela-bau').classList.remove('oculto');
+    for (const e of this.espacosBauInv) if (e) e.chave = '?';
+    for (const e of this.espacosBau) e.chave = '?';
+    this._atualizarEspacos();
+    this._desenharBau();
+    this.soltarMouse();
+  }
+
+  // Guarda uma cópia (sempre com 27 posições)
+  _copiarEspacosBau(espacos) {
+    this.bauEspacos = new Array(ESPACOS_BAU).fill(null);
+    if (!Array.isArray(espacos)) return;
+    for (let i = 0; i < ESPACOS_BAU && i < espacos.length; i++) {
+      const e = espacos[i];
+      if (e && e.item && e.qtd > 0) this.bauEspacos[i] = { item: e.item, qtd: e.qtd };
+    }
+  }
+
+  /** Outro jogador mexeu no baú: redesenha com o conteúdo novo */
+  atualizarBau(espacos) {
+    if (!this.bauAberto) return;
+    this._copiarEspacosBau(espacos);
+    this._desenharBau();
+    this._mostrarDica(this.fonteDicaAtual);
+  }
+
+  _desenharBau() {
+    for (let i = 0; i < ESPACOS_BAU; i++) this._desenharEspaco(this.espacosBau[i], this.bauEspacos[i]);
+  }
+
+  /**
+   * Fecha o baú. A pilha da mão volta ao inventário (a sobra vai ao chão).
+   * travar = false é usado pelo Esc e pela morte.
+   */
+  fecharBau(travar = true) {
+    if (!this.bauAberto) return;
+    this.bauAberto = false;
+    $('tela-bau').classList.add('oculto');
+    this._esconderDica();
+    this.fonteDicaAtual = null;
+    this.devolverMao(true);
+    const aoFechar = this.aoFecharBau;
+    this.aoFecharBau = null;
+    this.aoMudarEspacoBau = null;
+    if (aoFechar) aoFechar();
+    if (travar) this.travarMouse();
+  }
+
+  // Avisa que o espaço i do baú mudou e redesenha
+  // `antes` = cópia do que o espaço tinha antes do clique. Se nada mudou, não avisa ninguém.
+  _mudouEspacoBau(i, antes = null) {
+    const s = this.bauEspacos[i];
+    const mudou = !(antes ? s && s.item === antes.item && s.qtd === antes.qtd : !s);
+    if (mudou && this.aoMudarEspacoBau) {
+      this.aoMudarEspacoBau(i, s ? { item: s.item, qtd: s.qtd } : null, antes ? { item: antes.item, qtd: antes.qtd } : null);
+    }
+    this._desenharEspaco(this.espacosBau[i], s);
+  }
+
+  // Cópia simples de um espaço ({ item, qtd } ou null)
+  _copiaEspaco(s) {
+    return s ? { item: s.item, qtd: s.qtd } : null;
+  }
+
+  /**
+   * Tira `qtd` do item do jogador: primeiro da mão, depois do inventário.
+   * Devolve quanto foi mesmo removido (pode ser menos, se ele já não tem tudo).
+   */
+  removerItensDoJogador(item, qtd) {
+    let falta = qtd;
+    if (this.mao && this.mao.item === item) {
+      const tira = Math.min(falta, this.mao.qtd);
+      this.mao.qtd -= tira;
+      falta -= tira;
+      if (this.mao.qtd <= 0) this.mao = null;
+      this._desenharMao();
+    }
+    const espacos = this.inventario.espacos;
+    for (let k = 0; k < espacos.length && falta > 0; k++) {
+      const e = espacos[k];
+      if (!e || e.item !== item) continue;
+      falta -= this.inventario.remover(k, Math.min(falta, e.qtd));
+    }
+    return qtd - falta;
+  }
+
+  /** Dá itens ao jogador; o que não couber no inventário vai para o chão */
+  devolverAoJogador(item, qtd) {
+    const sobra = this.inventario.adicionar(item, qtd);
+    if (sobra > 0 && this.aoSoltarItem) this.aoSoltarItem(item, sobra);
+  }
+
+  // Clique num espaço do baú
+  _clicarEspacoBau(i, botao, ev) {
+    // Shift + clique: manda a pilha toda para o inventário
+    if (ev && ev.shiftKey && botao === 0 && !this.mao) {
+      const s = this.bauEspacos[i];
+      if (!s) return;
+      const antes = this._copiaEspaco(s);
+      const sobra = this.inventario.adicionar(s.item, s.qtd);
+      if (sobra >= s.qtd) { this.mostrarMensagem('Inventário cheio!'); return; }
+      this.bauEspacos[i] = sobra > 0 ? { item: s.item, qtd: sobra } : null;
+      this._mudouEspacoBau(i, antes);
+      return;
+    }
+    const antes = this._copiaEspaco(this.bauEspacos[i]);
+    if (!this._mexerNaPilha(this.bauEspacos, i, botao)) return;
+    this._mudouEspacoBau(i, antes);
+    this.inventario.notificar();   // a mão pode ter mudado
+    this._desenharMao();
+  }
+
+  // Shift + clique num item do inventário com o baú aberto: vai para o baú
+  _moverParaBau(i) {
+    const s = this.inventario.espacos[i];
+    if (!s) return;
+    const limite = this.inventario.limiteDaPilha(s.item);
+    let resto = s.qtd;
+    // 1) junta com pilhas iguais; 2) ocupa espaços vazios
+    for (let passo = 0; passo < 2 && resto > 0; passo++) {
+      for (let k = 0; k < ESPACOS_BAU && resto > 0; k++) {
+        const b = this.bauEspacos[k];
+        const antes = this._copiaEspaco(b);
+        if (passo === 0) {
+          if (!b || b.item !== s.item || b.qtd >= limite) continue;
+          const cabe = Math.min(limite - b.qtd, resto);
+          b.qtd += cabe;
+          resto -= cabe;
+        } else {
+          if (b) continue;
+          const poe = Math.min(limite, resto);
+          this.bauEspacos[k] = { item: s.item, qtd: poe };
+          resto -= poe;
+        }
+        this._mudouEspacoBau(k, antes);
+      }
+    }
+    if (resto === s.qtd) { this.mostrarMensagem('O baú está cheio!'); return; }
+    if (resto > 0) s.qtd = resto;
+    else this.inventario.espacos[i] = null;
+    this.inventario.notificar();
+  }
+
+  // ------------------------------------------------------------------
+  // Coluna "Criar" (Fase 6)
+  // ------------------------------------------------------------------
+  _montarReceitas() {
+    const lista = $('criar-lista');
+    lista.innerHTML = '';
+    this.linhasReceita = [];
+    for (const receita of RECEITAS) {
+      // Se algum item ainda não existe, a receita não aparece
+      if (!obterItem(receita.resultado.item) || receita.ingredientes.some((g) => !obterItem(g.item))) continue;
+      const el = document.createElement('div');
+      el.className = 'receita';
+
+      // Ícone do resultado com a quantidade
+      const caixa = document.createElement('div');
+      caixa.className = 'espaco';
+      const img = document.createElement('img');
+      img.draggable = false;
+      img.src = this._icone(receita.resultado.item);
+      caixa.appendChild(img);
+      if (receita.resultado.qtd > 1) {
+        const q = document.createElement('span');
+        q.className = 'qtd';
+        q.textContent = receita.resultado.qtd;
+        caixa.appendChild(q);
+      }
+
+      const info = document.createElement('div');
+      info.className = 'receita-info';
+      const nome = document.createElement('div');
+      nome.className = 'receita-nome';
+      nome.textContent = obterItem(receita.resultado.item).rotulo;
+      const ings = document.createElement('div');
+      ings.className = 'receita-ings';
+      const itensIng = [];
+      for (const g of receita.ingredientes) {
+        const c = document.createElement('span');
+        c.className = 'receita-ing';
+        const im = document.createElement('img');
+        im.draggable = false;
+        im.src = this._icone(g.item);
+        im.title = obterItem(g.item).rotulo;
+        const t = document.createElement('span');
+        c.append(im, t);
+        ings.appendChild(c);
+        itensIng.push({ el: c, texto: t, chave: '' });
+      }
+      info.append(nome, ings);
+      el.append(caixa, info);
+
+      // Clique cria 1; Shift + clique cria o máximo
+      const fonte = () => receita.resultado.item;
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        if (e.button !== 0) return;
+        this._criarReceita(receita, e.shiftKey);
+        this._mostrarDica(this.fonteDicaAtual);
+      });
+      el.addEventListener('mouseenter', () => { this.fonteDicaAtual = fonte; this._mostrarDica(fonte); });
+      el.addEventListener('mouseleave', () => { this.fonteDicaAtual = null; this._esconderDica(); });
+
+      lista.appendChild(el);
+      this.linhasReceita.push({ receita, el, ings: itensIng, ativa: null });
+    }
+  }
+
+  _criarReceita(receita, maximo) {
+    const pode = podeCriar(this.inventario, receita);
+    if (pode < 1) return;
+    const { sobra } = criar(this.inventario, receita, maximo ? pode : 1);
+    if (sobra > 0) {
+      this._soltarOuDevolver(receita.resultado.item, sobra);
+      this.mostrarMensagem('Inventário cheio: o resto foi para o chão.');
+    }
+  }
+
+  // Atualiza os números "tenho/precisa" e deixa opaca a receita impossível
+  _atualizarReceitas() {
+    const espacos = this.inventario.espacos;
+    for (const l of this.linhasReceita) {
+      for (let k = 0; k < l.receita.ingredientes.length; k++) {
+        const g = l.receita.ingredientes[k];
+        let tem = 0;
+        for (let i = 0; i < espacos.length; i++) {
+          const e = espacos[i];
+          if (e && e.item === g.item) tem += e.qtd;
+        }
+        const campo = l.ings[k];
+        const chave = tem + '/' + g.qtd;
+        if (campo.chave !== chave) {
+          campo.chave = chave;
+          campo.texto.textContent = chave;
+          campo.el.classList.toggle('falta', tem < g.qtd);
+        }
+      }
+      const ativa = podeCriar(this.inventario, l.receita) >= 1;
+      if (l.ativa !== ativa) {
+        l.ativa = ativa;
+        l.el.classList.toggle('desativada', !ativa);
+      }
+    }
+  }
+
   // Duplo clique num cristal de poder (tela E): usa o cristal
   _ligarDuploClique(el, fonte) {
     el.addEventListener('dblclick', () => {
@@ -416,6 +723,7 @@ export class InterfaceJogo {
     // A pilha da mão volta ao inventário (sobra vai ao chão), para o inventário fechar de verdade
     this.devolverMao(true);
     // Fecha o que estiver aberto, sem prender o mouse de novo
+    if (this.bauAberto) this.fecharBau(false);
     if (this.inventarioAberto) this.fecharInventario(false);
     if (this.aparenciaAberta) this.fecharAparencia('nada');
     this._esconderPausa();
@@ -557,6 +865,14 @@ export class InterfaceJogo {
         this._desenharEspaco(this.espacosInv[i], inv.espacos[i]);
         this.espacosInv[i].el.classList.toggle('selecionado', i === inv.selecionado);
       }
+      this._atualizarReceitas();
+    }
+    // Inventário dentro da tela do baú
+    if (this.bauAberto) {
+      for (let i = 0; i < CONFIG.ESPACOS_INVENTARIO; i++) {
+        this._desenharEspaco(this.espacosBauInv[i], inv.espacos[i]);
+        this.espacosBauInv[i].el.classList.toggle('selecionado', i === inv.selecionado);
+      }
     }
     // Trocou de espaço: mostra o nome do item por um instante
     if (inv.selecionado !== this.ultimoSelecionado) {
@@ -596,15 +912,24 @@ export class InterfaceJogo {
   // Inventário: mexer nas pilhas
   // ------------------------------------------------------------------
   _clicarEspaco(i, botao, ev) {
-    const espacos = this.inventario.espacos;
-    const s = espacos[i];
-    const m = this.mao;
-
-    // Shift + clique: manda o item direto para o espaço de equipamento certo
-    if (ev && ev.shiftKey && botao === 0 && !m) {
-      if (s) this._equiparRapido(i);
+    // Shift + clique: com o baú aberto vai para o baú; senão, para o equipamento certo
+    if (ev && ev.shiftKey && botao === 0 && !this.mao) {
+      if (this.inventario.espacos[i]) {
+        if (this.bauAberto) this._moverParaBau(i);
+        else this._equiparRapido(i);
+      }
       return;
     }
+    if (!this._mexerNaPilha(this.inventario.espacos, i, botao)) return;
+    this.inventario.notificar();
+    this._desenharMao();
+  }
+
+  // Pegar, soltar, juntar, trocar e dividir pilhas entre a mão e um espaço
+  // de qualquer lista (inventário ou baú). Devolve false se nada aconteceu.
+  _mexerNaPilha(espacos, i, botao) {
+    const s = espacos[i];
+    const m = this.mao;
 
     if (botao === 0) {
       // Botão esquerdo: pega, solta, junta ou troca
@@ -645,10 +970,9 @@ export class InterfaceJogo {
         espacos[i] = m; this.mao = s;
       }
     } else {
-      return;
+      return false;
     }
-    this.inventario.notificar();
-    this._desenharMao();
+    return true;
   }
 
   // Shift+clique num item do inventário: equipa 1 no espaço certo
@@ -994,13 +1318,13 @@ export class InterfaceJogo {
       // Alguns navegadores devolvem uma Promise; se recusar, mantemos a pausa
       if (p && typeof p.catch === 'function') {
         p.catch(() => {
-          if (!this.mouseTravado && !this.inventarioAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta) {
+          if (!this.mouseTravado && !this.inventarioAberto && !this.bauAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta) {
             this._mostrarPausa();
           }
         });
       }
     } catch (e) {
-      if (!this.inventarioAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta) this._mostrarPausa();
+      if (!this.inventarioAberto && !this.bauAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta) this._mostrarPausa();
     }
   }
 
@@ -1013,7 +1337,7 @@ export class InterfaceJogo {
   }
 
   get menuAberto() {
-    if (this.inventarioAberto || this.aparenciaAberta || this.pausaAberta || this.inicialAberta || this.morteAberta) return true;
+    if (this.inventarioAberto || this.bauAberto || this.aparenciaAberta || this.pausaAberta || this.inicialAberta || this.morteAberta) return true;
     for (const fn of this.menusExtras) if (fn()) return true;
     return false;
   }
@@ -1265,7 +1589,7 @@ export class InterfaceJogo {
         // Tira o foco de qualquer campo/controle, para as teclas voltarem ao jogo
         if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
         this._esconderPausa();
-      } else if (!this.inventarioAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta &&
+      } else if (!this.inventarioAberto && !this.bauAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta &&
                  this.elCarregando.classList.contains('oculto')) {
         this._mostrarPausa();
       }
@@ -1300,14 +1624,15 @@ export class InterfaceJogo {
       switch (e.code) {
         case 'KeyE':
           if (!emJogo || e.repeat) return;
-          if (this.inventarioAberto) this.fecharInventario(true);
+          if (this.bauAberto) this.fecharBau(true);
+          else if (this.inventarioAberto) this.fecharInventario(true);
           else this.abrirInventario();
           break;
         case 'KeyC':
           if (e.repeat || carregando) return;
           if (this.aparenciaAberta) {
             if (this.aparenciaOrigem === 'jogo') this.fecharAparencia('travar');
-          } else if (emJogo && !this.inventarioAberto) {
+          } else if (emJogo && !this.inventarioAberto && !this.bauAberto) {
             this.abrirAparencia('jogo');
           }
           break;
@@ -1344,6 +1669,7 @@ export class InterfaceJogo {
           // Esc não conta como gesto do usuário (o navegador recusa o pointer lock):
           // fecha a tela e mostra a pausa; o "Continuar" trava o mouse.
           if (this.aparenciaAberta) this.fecharAparencia('pausa');
+          else if (this.bauAberto) { this.fecharBau(false); this._mostrarPausa(); }
           else if (this.inventarioAberto && this.fecharInventario(false)) this._mostrarPausa();
           break;
       }

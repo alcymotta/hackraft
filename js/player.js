@@ -24,6 +24,9 @@ const ALTURA = CONFIG.ALTURA_JOGADOR;
 const EPS = 0.0001;                 // folguinha para evitar erros de arredondamento
 const PASSO_MAX = 0.3;              // deslocamento máximo por subpasso (em blocos)
 const LIMITE_PITCH = Math.PI / 2 - 0.01;
+const CAIXA_CHEIA = Object.freeze([0, 0, 0, 1, 1, 1]); // caixa de um cubo inteiro (Fase 6)
+const BIT_ABERTA = 4;                // estado da porta: bit 2 = aberta
+const BIT_CIMA = 8;                  // estado da porta: bit 3 = metade de cima
 // Modificadores "sem poder nenhum" (usado enquanto não há `poderes`)
 const MODS_VAZIOS = Object.freeze({
   velocidade: 1, pulo: 1, voar: false, regeneracao: false, quebraInstantanea: false, ataque: null,
@@ -43,7 +46,11 @@ export class Jogador {
    *                Põe um item no chão (o main liga isso à rede, porque no
    *                multiplayer quem cria o item é o anfitrião).
    */
-  constructor({ camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento = null, soltarItem = null, particulas = null, poderes = null }) {
+  constructor({ camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento = null, soltarItem = null, particulas = null, poderes = null, baus = null }) {
+    this.baus = baus;                  // Baus (Fase 6): conteúdo dos baús
+    this.bauAberto = null;             // { x, y, z } do baú com a tela aberta (ou null)
+    this._abrindoBau = false;          // esperando o anfitrião responder?
+    this._cliqueDireito = false;       // o botão direito acabou de ser apertado (portas e baús só reagem ao clique)
     this.camera = camera;
     this.scene = scene;
     this.mundo = mundo;
@@ -302,7 +309,10 @@ export class Jogador {
     document.addEventListener('mousedown', (e) => {
       if (!this.ativo || e.button > 2) return;
       this.botoes[e.button] = true;
-      if (e.button === 2) this.tempoColocar = 0; // coloca na hora
+      if (e.button === 2) {
+        this.tempoColocar = 0; // coloca na hora
+        this._cliqueDireito = true;
+      }
     });
 
     document.addEventListener('mouseup', (e) => {
@@ -314,8 +324,27 @@ export class Jogador {
   // Colisão
   // ------------------------------------------------------------------
 
-  /** true se a caixa do jogador, com os pés em (px, py, pz), encosta num bloco sólido */
-  _colide(px, py, pz) {
+  /**
+   * A caixa de colisão do bloco (x, y, z) com id `id`, em coordenadas do bloco
+   * ([x0, y0, z0, x1, y1, z1], de 0 a 1), ou null se não colide.
+   * Cubos sólidos usam a caixa inteira. Modelos (porta, tocha) pedem ao mundo.
+   */
+  _caixaDoBloco(x, y, z, id) {
+    const def = BLOCOS[id];
+    if (def && def.modelo && def.modelo !== 'cubo' && typeof this.mundo.caixaColisao === 'function') {
+      return this.mundo.caixaColisao(x, y, z);
+    }
+    return SOLIDO[id] ? CAIXA_CHEIA : null;
+  }
+
+  /**
+   * Procura bloqueios para a caixa do jogador com os pés em (px, py, pz).
+   * Sem `eixo`: devolve true se encosta em algo.
+   * Com `eixo` ('x', 'y' ou 'z') e o sentido `d` (+1 ou -1) do movimento:
+   * devolve a posição (naquele eixo) em que o jogador fica encostado na
+   * face do bloqueio mais próxima, ou NaN se não bate em nada.
+   */
+  _bloqueio(px, py, pz, eixo, d) {
     const x0 = Math.floor(px - METADE_LARGURA + EPS);
     const x1 = Math.floor(px + METADE_LARGURA - EPS);
     const y0 = Math.floor(py + EPS);
@@ -323,14 +352,39 @@ export class Jogador {
     const z0 = Math.floor(pz - METADE_LARGURA + EPS);
     const z1 = Math.floor(pz + METADE_LARGURA - EPS);
     const mundo = this.mundo;
+    const jx0 = px - METADE_LARGURA, jx1 = px + METADE_LARGURA;
+    const jy0 = py, jy1 = py + ALTURA;
+    const jz0 = pz - METADE_LARGURA, jz1 = pz + METADE_LARGURA;
+    let melhor = NaN;
     for (let y = y0; y <= y1; y++) {
       for (let z = z0; z <= z1; z++) {
         for (let x = x0; x <= x1; x++) {
-          if (SOLIDO[mundo.obterBloco(x, y, z)]) return true;
+          const id = mundo.obterBloco(x, y, z);
+          if (id === 0) continue; // ar
+          const c = this._caixaDoBloco(x, y, z, id);
+          if (!c) continue;
+          // A caixa do bloco encosta mesmo na caixa do jogador? (cubos inteiros sempre)
+          if (c !== CAIXA_CHEIA) {
+            if (jx0 + EPS >= x + c[3] || jx1 - EPS <= x + c[0] ||
+                jy0 + EPS >= y + c[4] || jy1 - EPS <= y + c[1] ||
+                jz0 + EPS >= z + c[5] || jz1 - EPS <= z + c[2]) continue;
+          }
+          if (!eixo) return true;
+          // Posição do jogador encostado na face
+          let cand;
+          if (eixo === 'x') cand = d > 0 ? x + c[0] - METADE_LARGURA : x + c[3] + METADE_LARGURA;
+          else if (eixo === 'z') cand = d > 0 ? z + c[2] - METADE_LARGURA : z + c[5] + METADE_LARGURA;
+          else cand = d > 0 ? y + c[1] - ALTURA : y + c[4];
+          if (Number.isNaN(melhor) || (d > 0 ? cand < melhor : cand > melhor)) melhor = cand;
         }
       }
     }
-    return false;
+    return eixo ? melhor : false;
+  }
+
+  /** true se a caixa do jogador, com os pés em (px, py, pz), encosta num bloco sólido */
+  _colide(px, py, pz) {
+    return this._bloqueio(px, py, pz, null, 0) === true;
   }
 
   /** Move o jogador no eixo Y; ajusta noChao e a velocidade se bater */
@@ -341,11 +395,12 @@ export class Jogador {
       p.y = novo;
       return;
     }
+    const face = this._bloqueio(p.x, novo, p.z, 'y', d < 0 ? -1 : 1);
     if (d < 0) {
-      p.y = Math.floor(novo + EPS) + 1; // pousa em cima do bloco
+      p.y = Number.isNaN(face) ? p.y : face; // pousa em cima do bloco
       this.noChao = true;
     } else {
-      p.y = Math.floor(novo + ALTURA - EPS) - ALTURA; // bate a cabeça
+      p.y = Number.isNaN(face) ? p.y : face; // bate a cabeça
     }
     this.velocidade.y = 0;
   }
@@ -372,9 +427,8 @@ export class Jogador {
       p.x = novo;
       return;
     }
-    p.x = d > 0
-      ? Math.floor(novo + METADE_LARGURA - EPS) - METADE_LARGURA
-      : Math.floor(novo - METADE_LARGURA + EPS) + 1 + METADE_LARGURA;
+    const face = this._bloqueio(novo, p.y, p.z, 'x', d > 0 ? 1 : -1);
+    if (!Number.isNaN(face)) p.x = face;
     this.velocidade.x = 0;
   }
 
@@ -386,9 +440,8 @@ export class Jogador {
       p.z = novo;
       return;
     }
-    p.z = d > 0
-      ? Math.floor(novo + METADE_LARGURA - EPS) - METADE_LARGURA
-      : Math.floor(novo - METADE_LARGURA + EPS) + 1 + METADE_LARGURA;
+    const face = this._bloqueio(p.x, p.y, novo, 'z', d > 0 ? 1 : -1);
+    if (!Number.isNaN(face)) p.z = face;
     this.velocidade.z = 0;
   }
 
@@ -667,7 +720,7 @@ export class Jogador {
 
     // Contorno
     if (alvo) {
-      this.contorno.position.set(alvo.x + 0.5, alvo.y + 0.5, alvo.z + 0.5);
+      this._ajustarCaixa(this.contorno, alvo.x, alvo.y, alvo.z);
       this.contorno.visible = true;
     } else {
       this.contorno.visible = false;
@@ -722,13 +775,104 @@ export class Jogador {
 
     // ----- Colocar (botão direito) -----
     if (this.botoes[2] && this.tempoColocar <= 0 && alvo) {
-      this._colocar(alvo);
+      const defAlvo = BLOCOS[alvo.id];
+      const shift = !!(this.teclas.ShiftLeft || this.teclas.ShiftRight);
+      if (defAlvo && defAlvo.interativo && !shift) {
+        // Baú e porta: só reagem ao clique (segurar o botão não fica abrindo e fechando)
+        if (this._cliqueDireito) this._usarBloco(alvo, defAlvo);
+      } else {
+        this._colocar(alvo);
+      }
     }
+    this._cliqueDireito = false;
+  }
+
+  /**
+   * Põe o contorno (ou a rachadura) na caixa de seleção do bloco: o modelo
+   * real (porta fina, tocha), ou o cubo inteiro se o mundo não souber dizer.
+   */
+  _ajustarCaixa(obj, x, y, z) {
+    const c = typeof this.mundo.caixaSelecao === 'function' ? this.mundo.caixaSelecao(x, y, z) : null;
+    if (c) {
+      obj.position.set(x + (c[0] + c[3]) / 2, y + (c[1] + c[4]) / 2, z + (c[2] + c[5]) / 2);
+      obj.scale.set(Math.max(0.05, c[3] - c[0]), Math.max(0.05, c[4] - c[1]), Math.max(0.05, c[5] - c[2]));
+    } else {
+      obj.position.set(x + 0.5, y + 0.5, z + 0.5);
+      obj.scale.set(1, 1, 1);
+    }
+  }
+
+  /** Botão direito num bloco interativo: abre o baú ou abre/fecha a porta */
+  _usarBloco(alvo, def) {
+    this.tempoColocar = CONFIG.INTERVALO_COLOCAR;
+    if (alvo.id === B.BAU) {
+      this._abrirBau(alvo.x, alvo.y, alvo.z);
+    } else if (def.modelo === 'porta') {
+      this._alternarPorta(alvo.x, alvo.y, alvo.z, alvo.id);
+    }
+  }
+
+  /** Pede o conteúdo do baú e abre a tela dele */
+  _abrirBau(x, y, z) {
+    if (!this.baus || this._abrindoBau || typeof this.ui.abrirBau !== 'function') return;
+    this._abrindoBau = true;
+    this.baus.abrir(x, y, z).then((espacos) => {
+      this._abrindoBau = false;
+      // Se o baú sumiu enquanto esperava, não abre
+      if (this.mundo.obterBloco(x, y, z) !== B.BAU) { this.baus.fechar(x, y, z); return; }
+      // Se enquanto isso abriu outro menu (inventário, pausa, chat...), não abre o baú
+      if (this.ui.menuAberto || !this.ui.mouseTravado) { this.baus.fechar(x, y, z); return; }
+      this.bauAberto = { x, y, z };
+      this.personagem.animarGolpe();
+      this.ui.abrirBau({
+        titulo: 'Baú',
+        espacos,
+        aoMudarEspaco: (i, v, antes) => this.baus.definirEspaco(x, y, z, i, v, antes),
+        aoFechar: () => {
+          this.bauAberto = null;
+          this.baus.fechar(x, y, z);
+        },
+      });
+    }).catch((erro) => {
+      this._abrindoBau = false;
+      this.ui.mostrarMensagem((erro && erro.message) || 'Não deu para abrir o baú.');
+    });
+  }
+
+  /** Muda vários blocos de uma vez ([x, y, z, id, estado]); sem definirBlocos, um por um */
+  _definirLote(lista) {
+    if (typeof this.mundo.definirBlocos === 'function') {
+      this.mundo.definirBlocos(lista, 'local');
+    } else {
+      for (const b of lista) this.mundo.definirBloco(b[0], b[1], b[2], b[3], 'local', b[4] || 0);
+    }
+  }
+
+  /** Abre ou fecha a porta: troca o bit "aberta" das duas metades */
+  _alternarPorta(x, y, z, id) {
+    const estado = this.mundo.obterEstado ? this.mundo.obterEstado(x, y, z) : 0;
+    const outroY = (estado & BIT_CIMA) ? y - 1 : y + 1;
+    const lista = [[x, y, z, id, estado ^ BIT_ABERTA]];
+    if (this.mundo.obterBloco(x, outroY, z) === id) {
+      const estadoOutro = this.mundo.obterEstado ? this.mundo.obterEstado(x, outroY, z) : 0;
+      lista.push([x, outroY, z, id, estadoOutro ^ BIT_ABERTA]);
+    }
+    this._definirLote(lista);
+    const tipo = BLOCOS[id].som;
+    if (tipo) this.som.colocar(tipo);
+    this.personagem.animarGolpe();
+  }
+
+  /** Direção em que o jogador olha: 0 = -Z, 1 = +X, 2 = +Z, 3 = -X */
+  _direcaoOlhar() {
+    const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
+    if (Math.abs(fx) > Math.abs(fz)) return fx > 0 ? 1 : 3;
+    return fz < 0 ? 0 : 2;
   }
 
   _mostrarRachadura() {
     const estagio = Math.min(9, Math.floor(this.progresso * 10));
-    this.rachadura.position.set(this.alvoX + 0.5, this.alvoY + 0.5, this.alvoZ + 0.5);
+    this._ajustarCaixa(this.rachadura, this.alvoX, this.alvoY, this.alvoZ);
     this.rachadura.visible = true;
     if (estagio !== this.estagioRachadura && this.texturas && this.texturas.rachaduras) {
       this.estagioRachadura = estagio;
@@ -738,7 +882,16 @@ export class Jogador {
 
   _quebrar(alvo, bloco) {
     const idAnterior = alvo.id;
-    this.mundo.definirBloco(alvo.x, alvo.y, alvo.z, B.AR);
+    if (bloco.modelo === 'porta') {
+      // Porta: tirar uma metade tira as duas (num lote só)
+      const estado = this.mundo.obterEstado ? this.mundo.obterEstado(alvo.x, alvo.y, alvo.z) : 0;
+      const outroY = (estado & BIT_CIMA) ? alvo.y - 1 : alvo.y + 1;
+      const lista = [[alvo.x, alvo.y, alvo.z, B.AR, 0]];
+      if (this.mundo.obterBloco(alvo.x, outroY, alvo.z) === idAnterior) lista.push([alvo.x, outroY, alvo.z, B.AR, 0]);
+      this._definirLote(lista);
+    } else {
+      this.mundo.definirBloco(alvo.x, alvo.y, alvo.z, B.AR);
+    }
     if (bloco.item !== null) {
       const sobrou = this.inventario.adicionar(bloco.item, 1);
       if (sobrou > 0) this.ui.mostrarMensagem('Inventário cheio!');
@@ -827,16 +980,41 @@ export class Jogador {
     const destino = this.mundo.obterBloco(x, y, z);
     if (destino !== B.AR && !LIQUIDO[destino]) return;
 
-    // Bloco sólido não pode nascer dentro do jogador
+    const blocoNovo = BLOCOS[def.bloco];
+    const modelo = blocoNovo ? blocoNovo.modelo : 'cubo';
+
+    // Bloco sólido não pode nascer dentro do jogador (a porta ocupa 2 blocos de altura)
     if (SOLIDO[def.bloco]) {
       const p = this.posicao;
+      const altura = modelo === 'porta' ? 2 : 1;
       const cruza = x < p.x + METADE_LARGURA && x + 1 > p.x - METADE_LARGURA &&
-                    y < p.y + ALTURA && y + 1 > p.y &&
+                    y < p.y + ALTURA && y + altura > p.y &&
                     z < p.z + METADE_LARGURA && z + 1 > p.z - METADE_LARGURA;
       if (cruza) return;
     }
 
-    if (this.mundo.definirBloco(x, y, z, def.bloco)) {
+    let colocou = false;
+    if (modelo === 'porta') {
+      // Porta: precisa de 2 blocos livres (baixo e cima); a direção vem do olhar
+      const acima = this.mundo.obterBloco(x, y + 1, z);
+      if (y + 1 >= CONFIG.ALTURA_MUNDO || (acima !== B.AR && !LIQUIDO[acima])) return;
+      const dir = this._direcaoOlhar();
+      this._definirLote([[x, y, z, def.bloco, dir], [x, y + 1, z, def.bloco, dir | BIT_CIMA]]);
+      colocou = true;
+    } else if (modelo === 'tocha') {
+      // Tocha: em cima de um bloco = 0; na lateral = parede (1 a 4, o lado onde ela encosta); embaixo não
+      if (n.y < 0 || !SOLIDO[alvo.id]) return;
+      let estado = 0;
+      if (n.y === 0) estado = n.z > 0 ? 1 : (n.x < 0 ? 2 : (n.z < 0 ? 3 : 4));
+      colocou = !!this.mundo.definirBloco(x, y, z, def.bloco, 'local', estado);
+    } else if (def.bloco === B.BAU) {
+      // Baú: a frente vira para o jogador (o contrário de para onde ele olha)
+      colocou = !!this.mundo.definirBloco(x, y, z, def.bloco, 'local', (this._direcaoOlhar() + 2) % 4);
+    } else {
+      colocou = !!this.mundo.definirBloco(x, y, z, def.bloco);
+    }
+
+    if (colocou) {
       this.inventario.remover(this.inventario.selecionado, 1);
       const tipo = BLOCOS[def.bloco].som;
       if (tipo) this.som.colocar(tipo);

@@ -330,3 +330,152 @@ Exporta também: `SLOTS_EQUIPAMENTO = ['roupa', 'capacete', 'peitoral', 'calca',
   - `Poderes.receberEfeitoRemoto` aceita pontos como `[x, y, z]` ou `{x, y, z}`.
 - Save versão 5 (vida dentro de `jogador`).
 
+
+### Fase 6: baús, construção, luz de tochas e crafting
+**Blocos novos (blocks.js):** 19 `TABUAS`, 20 `VIDRO`, 21 `TIJOLOS`, 22 `PORTA`, 23 `TOCHA`, 24 `BAU`, 25 `MINERIO_CARVAO`.
+Campos novos em `registrar`:
+- `modelo`: 'cubo' (padrão), 'porta' ou 'tocha'
+- `luz`: luz própria de 0 a 15 (tocha 14; minérios de cristal 5)
+- `juntarIguais`: não desenha a face entre dois blocos iguais (vidro)
+- `interativo`: o botão direito usa o bloco em vez de colocar (baú, porta)
+Detalhes:
+- `VIDRO`: opaco false, recorte true (moldura clara e centro transparente com reflexos), `juntarIguais: true`, dureza 0.3, som 'vidro'.
+- `PORTA`: modelo 'porta', opaco false, interativo, dureza 1, som 'madeira'. Ocupa 2 blocos, os dois com o mesmo id; quem diferencia é o estado.
+- `TOCHA`: modelo 'tocha', solido false, opaco false, `luz: 14`, dureza 0, som 'madeira'.
+- `BAU`: cubo opaco com frente própria, interativo, dureza 1, som 'madeira'.
+- `MINERIO_CARVAO`: solta `carvao`.
+
+**Estado do bloco** (um byte por posição, guardado à parte):
+- porta: bits 0–1 = direção (0 = -Z, 1 = +X, 2 = +Z, 3 = -X), bit 2 = aberta, bit 3 = metade de cima
+- tocha: 0 = no chão; 1 a 4 = na parede, encostada no lado -Z, +X, +Z ou -X
+- baú: bits 0–1 = direção da frente
+
+**Itens novos (items.js):** blocos `tabuas`, `vidro`, `tijolos`, `porta` (coloca 2 blocos), `tocha`, `bau`; tipo novo `'material'`: `graveto`, `carvao`.
+
+**world.js / chunk.js:**
+- `definirBloco(x, y, z, id, origem = 'local', estado = 0)`, `obterEstado(x, y, z)` → 0..255
+- `definirBlocos(lista, origem = 'local')`: lista de `[x, y, z, id, estado?]`; remonta cada chunk uma vez só e chama os ouvintes uma vez, com `{ lista, origem }` (campo `lote: true`)
+- `modificacoes` / `exportarModificacoes()`: `[x, y, z, id, estado]` (aceita listas antigas de 4 posições)
+- Malha:
+  - 'porta': caixa fina (3/16) na posição da direção e aberta/fechada; textura de cima/baixo pelo bit 3
+  - 'tocha': palito de 2×10/16 com a ponta acesa (brilho), inclinado na parede
+  - o resto continua cubo
+- Luz de bloco: propagação em largura (BFS) a partir de blocos com `luz`, perdendo 1 por bloco, atravessando blocos não opacos e as bordas dos chunks. Atributo `aLuzBloco` no shader, cor quente; luz final = max(céu × luzDoDia, bloco). Colocar ou tirar uma tocha atualiza a luz em menos de ~5 ms.
+- `luzEm(x, y, z)` → 0..1 (combina céu × dia e bloco) para personagens e itens.
+- `caixaColisao(x, y, z)` → null (não colide) ou `[x0, y0, z0, x1, y1, z1]` dentro do bloco (cubo = `[0,0,0,1,1,1]`; porta fechada = fina; aberta = fina no lado da dobradiça; tocha = null)
+- `caixaSelecao(x, y, z)`: a caixa do contorno e do raycast. O `raycast` acerta as caixas reais dos modelos.
+- Etapa de minérios: o carvão é comum (y de 5 a 70, veios de 3 a 8 blocos).
+
+**receitas.js:** `RECEITAS = [{ id, resultado: { item, qtd }, ingredientes: [{ item, qtd }] }]`, `podeCriar(inventario, receita)` → quantas vezes, `criar(inventario, receita, vezes = 1)` → `{ criados, sobra }` (a sobra vai para o chão por quem chamou). Receitas:
+- tronco 1 → tábuas 4
+- tábuas 2 → gravetos 4
+- graveto 1 + carvão 1 → tochas 4
+- tábuas 8 → baú
+- tábuas 6 → porta
+- areia 1 → vidro 1
+- pedra 2 + terra 2 → tijolos 4
+
+**ui.js:**
+- Coluna "Criar" na tela E: a lista de receitas, com o ícone do resultado, o nome e os ingredientes (ícone + "2/8", em vermelho quando falta). Clique cria 1 e Shift+clique cria o máximo. A coluna atualiza quando o inventário muda.
+- `abrirBau({ titulo, espacos, aoMudarEspaco(i, valor), aoFechar })`: tela com os 27 espaços do baú + o inventário, com a mesma mecânica de arrastar; Shift+clique move entre os dois. Conta como menu; E fecha.
+- `atualizarBau(espacos)`, `bauAberto`
+
+**baus.js:** `export class Baus({ mundo, rede, itensChao })`:
+- `abrir(x, y, z)` → Promise de `espacos[27]`; `definirEspaco(x, y, z, i, valor)` (valor `{ item, qtd }` ou null); `aoMudar(fn(x, y, z, i, valor))`; `fechar(x, y, z)`
+- No anfitrião/sozinho, um ouvinte de `mundo.aoAlterarBloco` larga o conteúdo de um baú quebrado (de qualquer jogador) como itens no chão e apaga o registro.
+- `exportar()` / `carregar(obj)` (`"x,y,z"` → espacos)
+
+**Rede (protocolo versão 5):**
+- `bloco` ganha o campo `e` (estado)
+- `blocos` (lote) `{ lista }` com até 512 entradas
+- `bauAbrir` `{ x, y, z }` (cliente→anfitrião) → `bauConteudo` `{ x, y, z, espacos }`
+- `bauEspaco` `{ x, y, z, i, item, qtd }` (nos dois sentidos; o anfitrião repassa para os outros)
+- Tudo validado.
+
+**Player:**
+- Com o botão direito num bloco interativo: baú → abre a tela do baú; porta → abre/fecha as duas metades com `definirBlocos`. Segurando Shift, coloca o bloco normalmente.
+- Colocar:
+  - porta precisa de 2 espaços livres, direção pelo yaw;
+  - tocha no chão (face de cima) ou na parede (face lateral; nunca embaixo);
+  - baú virado para o jogador.
+- Quebrar uma metade da porta tira as duas.
+- A colisão e o raycast usam `caixaColisao` / `caixaSelecao`.
+- O fogo e o gelo dos poderes passam a usar `definirBlocos`.
+
+**Save versão 6:** `baus` + modificações com estado.
+**Como ficou a Fase 6:**
+- `world.js`:
+  - `definirBloco` → true se mudou o id ou o estado (recusa id desconhecido ou NaN); `definirBlocos` → quantos mudaram.
+  - Evento simples: `{ x, y, z, id, estado, anterior, estadoAnterior, origem }`. Lote: `{ lote: true, lista: [[x, y, z, id, estado, anterior, estadoAnterior]], origem }`, só com os que mudaram.
+  - `modificacoes` continua `"x,y,z"` → id; os estados diferentes de 0 ficam em `estadosModificados`. `exportarModificacoes()` → sempre 5 números.
+  - `caixaColisao` e `caixaSelecao` devolvem um array COMPARTILHADO (não altere).
+  - `raycast` ganhou `estado` e `t`.
+  - Extras: `luzEm`, `luzBlocoEm`, `corLuzBloco`, `direcaoDoYaw(yaw)`, `estadoTochaPelaNormal(normal)`.
+  - Chaves opcionais no config: `COR_LUZ_TOCHA`, `FORCA_LUZ_TOCHA`, `CURVA_LUZ_TOCHA`.
+- `chunk.js` exporta `Iluminacao` (BFS de luz de bloco, remoção com duas filas), `caixaColisaoDe`/`caixaSelecaoDe` e as tabelas `MODELO`, `TAPA` e `LUZ_PROPRIA`. Porta e tocha nunca são opacas.
+- Estados (direções 0 = -Z, 1 = +X, 2 = +Z, 3 = -X):
+  - porta: bits 0–1 = direção do olhar de quem colocou, 4 = aberta, 8 = metade de cima;
+  - tocha: 0 = no chão, 1 a 4 = encostada no bloco em -Z/+X/+Z/-X;
+  - baú: a frente aponta para a direção (o player grava olhar + 2).
+- `baus.js`:
+  - `Baus` tem também `obter(x, y, z)`;
+  - `aoMudar` só dispara para mudanças de outros jogadores;
+  - o cliente guarda só a cópia do baú aberto.
+- Rede (protocolo versão 5):
+  - `bloco.e`; `blocos { lista }` com até 512 entradas (uma inválida anula o lote);
+  - `bauAbrir`, `bauConteudo`, `bauEspaco` (vazio = item null, qtd 0); distância máxima de 12 blocos até o baú;
+  - `mods` com 5 inteiros por bloco;
+  - `rede.aoBau`, `enviarBauAbrir`, `enviarBauEspaco`.
+- `player.js`: recebe `baus`; `jogador.bauAberto` (`{x, y, z}` ou null); o botão direito interativo age só no clique.
+- `ui.js`: `abrirBau`, `atualizarBau`, `fecharBau(travar)`, `bauAberto`; coluna Criar na tela E. `receitas.js`: `criar` → `{ criados, sobra }`.
+- Save versão 6 (`baus`).
+### Fase 7: mobs (animais de dia, monstros à noite), combate e comida
+**mobs.js (motor de mobs; o anfitrião simula, os clientes só mostram):** `export class Mobs({ scene, mundo, ceu, rede, particulas, som, itensChao, ui, obterJogadores })`
+- `obterJogadores()` → `[{ id, posicao, local, defesa }]`: o anfitrião usa para gerar mobs perto de cada jogador e escolher alvos.
+- Registro de tipos: `TIPOS_MOB[tipo] = { nome, vidaMax, velocidade, dano, alcance, visao, altura, raio, hostil, diurno, sobeParede, voa, xp, drops: [{ item, min, max, chance }], comportamento }`. Fase 7: `porco`, `galinha` (pacíficos, de dia), `zumbi`, `aranha` (hostis, de noite). Pronto para a Fase 8 trazer mais (esqueleto com flechas, orcs, dragão voador, hidra).
+- **Anfitrião:**
+  - Gera mobs a 24–48 blocos de cada jogador, em chunks prontos: animais sobre grama, de dia (máx. ~8 por jogador); monstros à noite, em lugares escuros (`luzEm` < 0.35), até ~10 por jogador, e também em cavernas escuras.
+  - Mobs a mais de 96 blocos de todos somem.
+  - Ao amanhecer, os monstros na luz do sol pegam fogo (partículas) e somem em 3 s.
+- **IA simples por estados:**
+  - passear: animais andam e param;
+  - fugir: o animal que apanha corre para longe por 4 s;
+  - perseguir: o monstro vê um jogador a até `visao` blocos (ignora `/voar` alto);
+  - atacar: dentro do `alcance`, com 1 s entre os ataques.
+  - Movimento com gravidade e colisão de caixa com o mundo (pode reutilizar `caixaColisao`); pula degraus de 1 bloco; a aranha sobe paredes; não entra na água funda de propósito; evita cair de mais de 3 blocos ao perseguir.
+- **Dano no jogador:** o anfitrião manda `dano { qtd, de: [x, y, z] }` só para o alvo. O jogador local aplica `qtd × (1 − min(0.8, defesa × 0.04))` e recebe um empurrão para longe do mob.
+- **Atacar mob:**
+  - o cliente manda `atacarMob { id, dano, dir }`; o anfitrião aplica se a distância for ≤ 5 (6 para poderes);
+  - recuo, piscar vermelho e barra de vida acima do mob por 3 s depois de apanhar;
+  - morte: o mob tomba de lado, fica vermelho e some, os drops viram itens no chão e quem matou recebe `xp` (a Fase 8 usa).
+- `mobs.alvosParaPoderes()` devolve a lista para `poderes.registrarAlvos`; o `receberDano` desse alvo encaminha ao anfitrião (no cliente) ou aplica (no anfitrião). Os efeitos `queimar` (dano por 3 s) e `lento` (velocidade × 0.4 por 4 s, cor azulada) funcionam.
+- `raycastMob(origem, dir, alcance)` → `{ id, t }` ou null (caixas dos mobs).
+- `atualizar(dt)`; `exportar()`/`carregar()` NÃO precisam (os mobs não são salvos).
+- **Rede:**
+  - `mobs` (anfitrião→todos, ~10/s): estado compacto `[id, tipoIdx, x, y, z, yaw, flags (andando/atacando/apanhou/queimando/lento), vida%]` num `Float32Array`;
+  - `mobNovo { id, tipo }` e `mobRemovido { id, morreu }`;
+  - `atacarMob` (cliente→anfitrião), `dano` (anfitrião→alvo), `xp { qtd }` (anfitrião→quem matou).
+  - Os clientes interpolam (100 ms de atraso).
+
+**modelos_mobs.js:** `criarModeloMob(tipo)` → `{ grupo, altura, raio, animar(dt, vel, estado), piscarDano(), morrer(t0a1), definirLuz(v), dispose() }`. Bonecos de caixas com textura pixelada gerada por código, como o personagem, olhando para -Z:
+- porco: rosa, focinho e rabinho;
+- galinha: branca, crista vermelha, bico amarelo, asinhas que batem;
+- zumbi: pele verde, camisa azul rasgada, braços esticados para frente;
+- aranha: corpo escuro peludo, 8 pernas animadas, olhos vermelhos com emissive.
+Barra de vida: sprite com canvas que mostra a % de vida, e `definirVida(frac)`.
+
+**Comida e drops (items.js / blocks.js):**
+- Tipo `'comida'`, com o campo `cura`: `costeleta` (porco, cura 6), `coxinha` (galinha, cura 4), `maca` (as folhas soltam com 8% de chance ao quebrar, cura 3).
+- Materiais: `pena` (galinha), `carne_podre` (zumbi; comer cura 1, mas tem 50% de chance de tirar 1), `fio_seda` (aranha).
+- Comer: com comida na mão, segurar o botão direito por 0.8 s (com som de mastigar) consome 1 e cura. Só funciona se a vida não estiver cheia, exceto a maçã.
+
+**Combate do jogador:**
+- O botão esquerdo com um mob na mira (mais perto que o bloco, até 4 blocos) bate no mob em vez de quebrar o bloco.
+- Dano: mão 1, espada = `dano` do item na mão principal do equipamento (a espada de madeira dá 4). Pode bater de novo a cada 0.5 s.
+- O braço faz `animarGolpe`.
+
+**Sons (audio.js):** `som.mob(tipo, evento)` com evento 'idle', 'dano' ou 'morte' para cada tipo (porco: oinc; galinha: cocoricó curto; zumbi: gemido grave; aranha: chiado), `som.golpeMob()`, `som.comer()`.- Baús no multiplayer ("comparar e trocar"):
+  - `bauEspaco` leva `antes` (o valor que o cliente via no espaço);
+  - o anfitrião só aplica se o espaço atual for igual a `antes`; se não for, responde `bauRecusado { x, y, z, i, antes, valor, atual }`;
+  - o cliente desfaz no inventário (`ui.removerItensDoJogador` / `ui.devolverAoJogador`) e corrige a tela;
+  - `baus.aoRecusar(fn)` e `ui aoMudarEspaco(i, valor, antes)`, que só é chamado se o espaço mudou de fato.

@@ -28,6 +28,14 @@ export const B = {
   MINERIO_RAIO: 16,
   MINERIO_GELO: 17,
   GELO: 18,
+  // Construção (Fase 6)
+  TABUAS: 19,
+  VIDRO: 20,
+  TIJOLOS: 21,
+  PORTA: 22,
+  TOCHA: 23,
+  BAU: 24,
+  MINERIO_CARVAO: 25,
 };
 
 // BLOCOS[id] devolve a descrição completa do bloco
@@ -60,6 +68,11 @@ const porNome = new Map();
  *  - corXray: cor CSS do contorno do raio-X (null = verde padrão)
  *  - brilho: o bloco brilha pulsando, visível até no escuro (padrão false).
  *    A malha passa este valor para o shader (minérios de cristal).
+ *  - modelo: forma do bloco: 'cubo' (padrão), 'porta' ou 'tocha'
+ *  - luz: luz própria de 0 a 15 (padrão 0; tocha 14, minérios de cristal 5)
+ *  - juntarIguais: não desenha a face entre dois blocos iguais (vidro). Padrão false.
+ *  - interativo: o botão direito usa o bloco em vez de colocar outro (baú, porta). Padrão false.
+ *  - texturaFrente: nome da textura da face da frente (baú). null = sem frente própria.
  */
 function registrar(id, def) {
   const bloco = {
@@ -78,6 +91,11 @@ function registrar(id, def) {
     xray: def.xray ?? false,
     corXray: def.corXray ?? null,
     brilho: def.brilho ?? false,
+    modelo: def.modelo ?? 'cubo',
+    luz: def.luz ?? 0,
+    juntarIguais: def.juntarIguais ?? false,
+    interativo: def.interativo ?? false,
+    texturaFrente: def.texturaFrente ?? null,
   };
   BLOCOS[id] = bloco;
   SOLIDO[id] = bloco.solido ? 1 : 0;
@@ -154,12 +172,48 @@ for (const [chave, sufixo, texto, cor] of CRISTAIS_BLOCOS) {
     dureza: 2, som: 'pedra',
     item: 'cristal_' + sufixo,
     xray: true, corXray: cor,
-    brilho: true,
+    brilho: true, luz: 5,
   });
 }
 registrar(B.GELO, {
   nome: 'gelo', rotulo: 'Gelo', texturas: igual('gelo'),
   dureza: 0.5, som: 'pedra',
+});
+
+registrar(B.TABUAS, {
+  nome: 'tabuas', rotulo: 'Tábuas', texturas: igual('tabuas'),
+  dureza: 0.8, som: 'madeira',
+});
+registrar(B.VIDRO, {
+  nome: 'vidro', rotulo: 'Vidro', texturas: igual('vidro'),
+  opaco: false, recorte: true, juntarIguais: true,
+  dureza: 0.3, som: 'pedra', // som próprio do vidro fica para depois
+});
+registrar(B.TIJOLOS, {
+  nome: 'tijolos', rotulo: 'Tijolos', texturas: igual('tijolos'),
+  dureza: 1.5, som: 'pedra',
+});
+registrar(B.PORTA, {
+  nome: 'porta', rotulo: 'Porta',
+  // o mundo escolhe cima/baixo pelo estado (topo = metade de cima, lado = metade de baixo)
+  texturas: { topo: 'porta_cima', lado: 'porta_baixo', baixo: 'porta_baixo' },
+  modelo: 'porta', opaco: false, interativo: true,
+  dureza: 1, som: 'madeira', item: 'porta',
+});
+registrar(B.TOCHA, {
+  nome: 'tocha', rotulo: 'Tocha', texturas: igual('tocha'),
+  modelo: 'tocha', solido: false, opaco: false, luz: 14,
+  dureza: 0, som: 'madeira', item: 'tocha',
+});
+registrar(B.BAU, {
+  nome: 'bau', rotulo: 'Baú',
+  texturas: { topo: 'bau_topo', lado: 'bau_lado', baixo: 'bau_topo' },
+  texturaFrente: 'bau_frente',
+  interativo: true, dureza: 1, som: 'madeira', item: 'bau',
+});
+registrar(B.MINERIO_CARVAO, {
+  nome: 'minerio_carvao', rotulo: 'Minério de carvão', texturas: igual('minerio_carvao'),
+  dureza: 1.5, som: 'pedra', item: 'carvao',
 });
 
 /** Devolve o id do bloco a partir do nome (ou undefined se não existir) */
@@ -179,5 +233,6 @@ export function texturaDaFace(id, face) {
 /** Lista (sem repetição) de todas as texturas que os blocos usam */
 export const NOMES_TEXTURAS = [...new Set(
   BLOCOS.filter((b) => b && b.texturas)
-    .flatMap((b) => [b.texturas.topo, b.texturas.lado, b.texturas.baixo])
+    .flatMap((b) => [b.texturas.topo, b.texturas.lado, b.texturas.baixo, b.texturaFrente])
+    .filter(Boolean)
 )];

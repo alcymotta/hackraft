@@ -32,9 +32,25 @@
 //     pos        { x, y, z, yaw, pitch, noAr, quebrando }
 //                Posição, ~15 vezes por segundo (só se mudou; no mínimo
 //                1 vez por segundo, que serve de "ainda estou aqui").
-//     bloco      { x, y, z, id }
+//     bloco      { x, y, z, id, e }
 //                O cliente mudou um bloco (ele já mudou na tela dele).
-//     meuEstado  { pos: [x, y, z], yaw, pitch, inventario, equipamento }
+//                `e` = estado do bloco, 0 a 255 (porta aberta, tocha na
+//                parede, direção do baú...). Sem `e` vale 0 (Fase 6).
+//     blocos     { lista: [[x, y, z, id, e], ...] }   (Fase 6)
+//                Várias mudanças de uma vez (lote), de 1 a 512 entradas.
+//                Se UMA entrada for inválida, o anfitrião ignora o lote todo.
+//     bauAbrir   { x, y, z }   (Fase 6)
+//                "Quero abrir o baú daqui". O anfitrião confere que é um baú,
+//                que está perto do jogador, e responde `bauConteudo`.
+//     bauEspaco  { x, y, z, i, item, qtd, antes? }   (Fase 6, nos dois sentidos)
+//                O espaço `i` (0 a 26) do baú mudou. `item` = nome e `qtd` = 1
+//                a 64 (até o tamanho da pilha do item); sem item (ou qtd 0) =
+//                espaço vazio. O anfitrião aplica e repassa para os outros clientes.
+//                Do cliente vem também `antes`: `{ item, qtd }` ou null, o que
+//                o cliente via no espaço ANTES da mudança ("comparar e trocar").
+//                O anfitrião só aplica se o espaço dele for igual a `antes`;
+//                senão responde `bauRecusado` e não repassa.
+//     meuEstado { pos: [x, y, z], yaw, pitch, inventario, equipamento }
 //                A cada 10 s (ou ~1 s depois de pegar/soltar um item) e
 //                ao fechar a página. O anfitrião guarda pelo apelido em
 //                `dadosJogadores`, que vai no save dele.
@@ -88,18 +104,27 @@
 //     mods       { n, dados }
 //                Logo depois do `bemvindo` vêm `lotes` mensagens destas
 //                com os blocos mudados do mundo. `dados` é um Int32Array
-//                [x, y, z, id, x, y, z, id, ...] com até MODS_POR_LOTE
-//                blocos (1000 blocos = 16 KB, cabe numa mensagem só do
-//                WebRTC, sem precisar o PeerJS picar em pedaços).
+//                [x, y, z, id, estado, x, y, z, id, estado, ...] (5 números
+//                por bloco desde a Fase 6) com até MODS_POR_LOTE blocos.
 //     recusado   { motivo }    não deu para entrar (sala cheia, versão diferente)
 //     entrou     { id, apelido, cores }   alguém novo chegou
 //     saiu       { id }                   alguém foi embora
 //     pos        { id, x, y, z, yaw, pitch, noAr, quebrando }
 //                Posição de outro jogador (o anfitrião ou um repasse).
-//     bloco      { x, y, z, id, de }
+//     bloco      { x, y, z, id, e, de }
 //                Um bloco mudou. `de` = id de quem mudou. O anfitrião manda
 //                para TODOS, inclusive para quem mudou: para esse, a
 //                mensagem é a "confirmação" (veja _blocoDoAnfitriao).
+//     blocos     { lista: [[x, y, z, id, e], ...], de }   (Fase 6)
+//                O mesmo, em lote (até 512 entradas).
+//     bauConteudo { x, y, z, espacos }   (Fase 6)
+//                Resposta ao `bauAbrir`: 27 posições, cada uma `{ item, qtd }`
+//                ou null. `bauEspaco` também vem do anfitrião (alguém mexeu).
+//     bauRecusado { x, y, z, i, antes, valor, atual }   (Fase 6)
+//                Só para o cliente cuja mudança `bauEspaco` foi recusada porque
+//                outro jogador mexeu no espaço antes. `antes` e `valor` são os
+//                do pedido; `atual` é o que o espaço tem de verdade ({ item, qtd }
+//                ou null). O cliente desfaz o efeito no inventário e corrige a tela.
 //     hora       { hora, por? }   a cada 5 s (segundos desde o nascer do sol).
 //                Quando alguém mudou a hora de propósito, vem `por` (o
 //                apelido): todos aplicam na hora (sem tolerância) e mostram
@@ -120,6 +145,18 @@
 //                manda, ao entrar alguém, os poderes de quem já estava na sala.
 //
 // PROTOCOLO VERSÃO 4 (Fase 5): acrescentou `efeito` e `poderes`.
+// PROTOCOLO VERSÃO 5 (Fase 6): `bloco` com `e`, `blocos` (lote), `bauAbrir`,
+//   `bauConteudo`, `bauEspaco`, e o `mods` com 5 números por bloco.
+//
+// BAÚS (Fase 6): o conteúdo mora no anfitrião (classe Baus, baus.js). A Rede só
+//   transporta: `rede.aoBau(fn)` registra o ouvinte do Baus, que recebe
+//     { tipo: 'abrir', x, y, z }                → devolve os 27 espaços (ou null)
+//     { tipo: 'conteudo', x, y, z, espacos }    (cliente)
+//     { tipo: 'espaco', x, y, z, i, valor, antes?, comparar? }
+//                → devolve true se aceitou, ou { recusado: true, atual } se
+//                  `comparar` e o espaço não era igual a `antes`
+//     { tipo: 'recusado', x, y, z, i, antes, valor, atual }   (cliente)
+//   e `rede.enviarBauAbrir(x, y, z)` / `rede.enviarBauEspaco(x, y, z, i, valor, antes)`.
 //
 // ITENS NO CHÃO: o anfitrião é a autoridade
 //   Só o anfitrião cria e remove itens no chão (no modo sozinho, é o
@@ -153,7 +190,7 @@ import { Equipamento } from './equipamento.js';
 import { quantoCabe } from './itens_chao.js';
 
 const PREFIXO_ID = 'hackraft-';
-const VERSAO_PROTOCOLO = 4;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5)
+const VERSAO_PROTOCOLO = 5;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5, 5 = Fase 6)
 const MAX_QTD_ITEM = 64;             // maior pilha aceita numa mensagem de item
 const VEL_MAX_ITEM = 20;             // maior velocidade aceita para um item solto
 const DIST_SOLTAR = 8;               // o cliente só solta itens até 8 blocos de onde está
@@ -191,6 +228,62 @@ function blocoValido(x, y, z, id) {
     y >= 0 && y < CONFIG.ALTURA_MUNDO &&
     Math.abs(x) <= LIMITE_COORD && Math.abs(z) <= LIMITE_COORD &&
     idDeBlocoValido(id);
+}
+
+/** Estado de bloco: inteiro de 0 a 255 (ausente vale 0). Devolve o número ou -1 se inválido. */
+function lerEstadoBloco(e) {
+  if (e === undefined || e === null) return 0;
+  return Number.isInteger(e) && e >= 0 && e <= 255 ? e : -1;
+}
+
+/**
+ * Lote de blocos vindo da rede, conferido. Devolve [[x, y, z, id, e], ...]
+ * ou null se vier algo estranho (lista vazia, grande demais ou entrada inválida).
+ */
+function lerListaBlocos(lista) {
+  if (!Array.isArray(lista) || lista.length === 0 || lista.length > CONFIG.BLOCOS_POR_LOTE_MAX) return null;
+  const r = [];
+  for (const b of lista) {
+    if (!Array.isArray(b) || b.length < 4 || b.length > 5) return null;
+    const e = lerEstadoBloco(b[4]);
+    if (e < 0 || !blocoValido(b[0], b[1], b[2], b[3])) return null;
+    r.push([b[0], b[1], b[2], b[3], e]);
+  }
+  return r;
+}
+
+// ----- Baús (Fase 6) -----
+const ESPACOS_BAU = CONFIG.ESPACOS_BAU;
+
+/** Coordenadas inteiras de um baú (mesmas regras de um bloco) */
+function posBauValida(x, y, z) {
+  return Number.isInteger(x) && Number.isInteger(y) && Number.isInteger(z) &&
+    y >= 0 && y < CONFIG.ALTURA_MUNDO && Math.abs(x) <= LIMITE_COORD && Math.abs(z) <= LIMITE_COORD;
+}
+
+/**
+ * Um espaço de baú vindo da rede: `{ item, qtd }` ou null (vazio).
+ * Devolve undefined se for inválido (nome desconhecido, qtd fora de 1 a 64...).
+ */
+function lerValorEspaco(item, qtd) {
+  if ((item === undefined || item === null) && (qtd === undefined || qtd === null || qtd === 0)) return null;
+  if (!itemValido(item) || !qtdValida(qtd)) return undefined;
+  if (qtd > ITENS.get(item).pilha) return undefined;   // maior que a pilha do item
+  return { item, qtd };
+}
+
+/** Conteúdo completo de um baú (27 posições) conferido, ou null */
+function lerEspacosBau(lista) {
+  if (!Array.isArray(lista) || lista.length !== ESPACOS_BAU) return null;
+  const r = [];
+  for (const s of lista) {
+    if (s === null) { r.push(null); continue; }
+    if (!s || typeof s !== 'object') return null;
+    const v = lerValorEspaco(s.item, s.qtd);
+    if (v === undefined) return null;
+    r.push(v);
+  }
+  return r;
 }
 
 /** Apelido limpo: texto sem caracteres de controle, até 16 letras. Vazio vira "Jogador". */
@@ -516,22 +609,24 @@ function traduzirErro(err) {
   }
 }
 
+// Quantos números cada bloco ocupa no lote `mods`: x, y, z, id, estado
+const NUMEROS_POR_BLOCO = 5;
+
 /**
- * Transforma o Map de modificações do mundo ("x,y,z" → id) num Int32Array
- * [x, y, z, id, x, y, z, id, ...]. É bem menor e mais rápido de mandar do
- * que uma lista de listas.
+ * Transforma a lista de modificações do mundo ([[x, y, z, id, estado], ...])
+ * num Int32Array [x, y, z, id, estado, x, y, z, id, estado, ...]. É bem menor
+ * e mais rápido de mandar do que uma lista de listas.
  */
-function modificacoesEmInt32(mapa) {
-  const plano = new Int32Array(mapa.size * 4);
+function modificacoesEmInt32(lista) {
+  const plano = new Int32Array(lista.length * NUMEROS_POR_BLOCO);
   let i = 0;
-  for (const [chave, id] of mapa) {
-    const a = chave.indexOf(',');
-    const b = chave.indexOf(',', a + 1);
-    plano[i] = +chave.slice(0, a);
-    plano[i + 1] = +chave.slice(a + 1, b);
-    plano[i + 2] = +chave.slice(b + 1);
-    plano[i + 3] = id;
-    i += 4;
+  for (const m of lista) {
+    plano[i] = m[0];
+    plano[i + 1] = m[1];
+    plano[i + 2] = m[2];
+    plano[i + 3] = m[3];
+    plano[i + 4] = m[4] | 0; // lista antiga de 4 posições: estado 0
+    i += NUMEROS_POR_BLOCO;
   }
   return plano;
 }
@@ -608,7 +703,8 @@ export class Rede {
     this.jogadores = new Map();       // id → { id, apelido, cores, anfitriao, estado, temEstado } (inclui você)
     this._entrada = null;             // promessa de entrarNaSala em andamento
     this._recebendo = null;           // bemvindo + lotes chegando
-    this._blocosAntesDeLigar = [];    // blocos que chegaram enquanto o mundo era montado
+    this._blocosAntesDeLigar = [];    // blocos que chegaram enquanto o mundo era montado ([x, y, z, id, e, de])
+    this._ouvintesBau = [];           // fn(ev) do Baus (Fase 6)
     this._horaPendente = null;
     this._pendentes = new Map();      // "x,y,z" → quantas mudanças minhas o anfitrião ainda não confirmou
     this._itensPendentes = new Map(); // itens no chão que chegaram enquanto o mundo era montado (id → dados)
@@ -880,6 +976,15 @@ export class Rede {
         case 'bloco':
           if (cli.pronto) this._blocoDoCliente(cli, msg);
           return;
+        case 'blocos':
+          if (cli.pronto) this._blocosDoCliente(cli, msg);
+          return;
+        case 'bauAbrir':
+          if (cli.pronto) this._bauAbrirDoCliente(cli, msg);
+          return;
+        case 'bauEspaco':
+          if (cli.pronto) this._bauEspacoDoCliente(cli, msg);
+          return;
         case 'meuEstado':
           if (cli.pronto) {
             const est = limparEstadoJogador(msg);
@@ -1114,8 +1219,8 @@ export class Rede {
     cli.cores = limparCores(msg.cores);
 
     // 1) bemvindo: tudo o que o cliente precisa para montar o mundo
-    const mapa = this.mundo.modificacoes;
-    const total = mapa.size;
+    const modificacoes = this.mundo.exportarModificacoes(); // [[x, y, z, id, estado], ...]
+    const total = modificacoes.length;
     const porLote = Math.max(1, CONFIG.MODS_POR_LOTE | 0);
     const lotes = Math.ceil(total / porLote);
     const p = this.jogador.posicao;
@@ -1138,10 +1243,10 @@ export class Rede {
     //    o que o anfitrião mandar depois (outros blocos, posições) chega
     //    DEPOIS destes lotes: o cliente nunca perde uma mudança.
     if (lotes > 0) {
-      const plano = modificacoesEmInt32(mapa);
+      const plano = modificacoesEmInt32(modificacoes);
       for (let n = 0; n < lotes; n++) {
-        const ini = n * porLote * 4;
-        const fim = Math.min(total, (n + 1) * porLote) * 4;
+        const ini = n * porLote * NUMEROS_POR_BLOCO;
+        const fim = Math.min(total, (n + 1) * porLote) * NUMEROS_POR_BLOCO;
         this._enviar(cli.conn, { tipo: 'mods', n, dados: plano.subarray(ini, fim) });
       }
     }
@@ -1205,13 +1310,64 @@ export class Rede {
 
   _blocoDoCliente(cli, msg) {
     const x = msg.x, y = msg.y, z = msg.z, id = msg.id;
-    if (!blocoValido(x, y, z, id)) return;
-    const atual = this._aplicarBlocoDaRede(x, y, z, id);
+    const e = lerEstadoBloco(msg.e);
+    if (e < 0 || !blocoValido(x, y, z, id)) return;
+    const atual = this._aplicarBlocoDaRede(x, y, z, id, e); // [id, estado] que ficou
     // Manda para TODOS, inclusive para quem mudou (é a confirmação dele)
-    const aviso = { tipo: 'bloco', x, y, z, id: atual, de: cli.id };
-    for (const c of this.clientes.values()) {
-      if (c.pronto) this._enviar(c.conn, aviso);
+    this._avisarTodos({ tipo: 'bloco', x, y, z, id: atual[0], e: atual[1], de: cli.id });
+  }
+
+  /** Lote de blocos de um cliente (Fase 6): aplica tudo de uma vez e confirma para todos */
+  _blocosDoCliente(cli, msg) {
+    const lista = lerListaBlocos(msg.lista);
+    if (!lista) return;
+    const final = this._aplicarBlocosDaRede(lista);
+    this._avisarTodos({ tipo: 'blocos', lista: final, de: cli.id });
+  }
+
+  /** O cliente está perto o bastante do baú (x, y, z)? Sem posição conhecida, não. */
+  _clientePertoDoBau(cli, x, y, z) {
+    if (!cli.temEstado) return false;   // ainda não mandou posição
+    const e = cli.estado;
+    const dx = x + 0.5 - e.x, dy = y + 0.5 - (e.y + 0.9), dz = z + 0.5 - e.z;
+    const d = CONFIG.BAU_DIST_MAX;
+    return dx * dx + dy * dy + dz * dz <= d * d;
+  }
+
+  /** Um cliente quer abrir um baú: confere e responde com o conteúdo */
+  _bauAbrirDoCliente(cli, msg) {
+    const x = msg.x, y = msg.y, z = msg.z;
+    if (!posBauValida(x, y, z) || !this._clientePertoDoBau(cli, x, y, z)) return;
+    const espacos = this._perguntarBaus({ tipo: 'abrir', x, y, z });
+    if (!Array.isArray(espacos)) return; // não é um baú (ou não existe)
+    this._enviar(cli.conn, { tipo: 'bauConteudo', x, y, z, espacos });
+  }
+
+  /** Um cliente mexeu num espaço do baú: o Baus aplica e a gente repassa para os outros */
+  _bauEspacoDoCliente(cli, msg) {
+    const x = msg.x, y = msg.y, z = msg.z, i = msg.i;
+    if (!posBauValida(x, y, z) || !Number.isInteger(i) || i < 0 || i >= ESPACOS_BAU) return;
+    if (!this._clientePertoDoBau(cli, x, y, z)) return;
+    const valor = lerValorEspaco(msg.item, msg.qtd);
+    if (valor === undefined) return;
+    const antes = msg.antes == null ? null : lerValorEspaco(msg.antes.item, msg.antes.qtd);
+    if (antes === undefined) return;
+    const aceitou = this._perguntarBaus({ tipo: 'espaco', x, y, z, i, valor, antes, comparar: true });
+    if (aceitou && aceitou.recusado) {
+      // Alguém mexeu antes: não repassa, avisa só quem pediu
+      const atual = aceitou.atual;
+      this._enviar(cli.conn, {
+        tipo: 'bauRecusado', x, y, z, i,
+        antes: antes ? { item: antes.item, qtd: antes.qtd } : null,
+        valor: valor ? { item: valor.item, qtd: valor.qtd } : null,
+        atual: atual ? { item: atual.item, qtd: atual.qtd } : null,
+      });
+      return;
     }
+    if (aceitou !== true) return;
+    this._avisarTodos({
+      tipo: 'bauEspaco', x, y, z, i, item: valor ? valor.item : null, qtd: valor ? valor.qtd : 0,
+    }, cli);
   }
 
   /** Guarda a última posição conhecida do cliente em dadosJogadores */
@@ -1388,6 +1544,10 @@ export class Rede {
           return;
         case 'pos': this._posDoAnfitriao(msg); return;
         case 'bloco': this._blocoDoAnfitriao(msg); return;
+        case 'blocos': this._blocosDoAnfitriao(msg); return;
+        case 'bauConteudo': this._bauConteudoDoAnfitriao(msg); return;
+        case 'bauEspaco': this._bauEspacoDoAnfitriao(msg); return;
+        case 'bauRecusado': this._bauRecusadoDoAnfitriao(msg); return;
         case 'entrou': this._alguemEntrou(msg); return;
         case 'saiu': this._alguemSaiu(msg); return;
         case 'hora':
@@ -1485,9 +1645,10 @@ export class Rede {
     const dados = lerLote(msg.dados);
     if (dados) {
       const lista = r.modificacoes;
-      for (let i = 0; i + 3 < dados.length; i += 4) {
+      for (let i = 0; i + NUMEROS_POR_BLOCO - 1 < dados.length; i += NUMEROS_POR_BLOCO) {
         const x = dados[i], y = dados[i + 1], z = dados[i + 2], id = dados[i + 3];
-        if (blocoValido(x, y, z, id)) lista.push([x, y, z, id]);
+        const e = dados[i + 4];
+        if (blocoValido(x, y, z, id) && e >= 0 && e <= 255) lista.push([x, y, z, id, e]);
       }
     }
     r.lotesFaltando--;
@@ -1548,24 +1709,128 @@ export class Rede {
    */
   _blocoDoAnfitriao(msg) {
     const x = msg.x, y = msg.y, z = msg.z, id = msg.id;
-    if (!blocoValido(x, y, z, id)) return;
+    const e = lerEstadoBloco(msg.e);
+    if (e < 0 || !blocoValido(x, y, z, id)) return;
     const de = typeof msg.de === 'string' ? msg.de : '';
     if (!this.ligado) {
       // O mundo ainda está sendo montado: aplica depois, em ligar()
-      if (this._blocosAntesDeLigar.length < 100000) this._blocosAntesDeLigar.push([x, y, z, id, de]);
+      if (this._blocosAntesDeLigar.length < 100000) this._blocosAntesDeLigar.push([x, y, z, id, e, de]);
       return;
     }
+    if (this._vaiAplicarBloco(x, y, z, de)) this._aplicarBlocoDaRede(x, y, z, id, e);
+  }
+
+  /** Lote de blocos vindo do anfitrião (Fase 6) */
+  _blocosDoAnfitriao(msg) {
+    const lista = lerListaBlocos(msg.lista);
+    if (!lista) return;
+    const de = typeof msg.de === 'string' ? msg.de : '';
+    if (!this.ligado) {
+      for (const b of lista) {
+        if (this._blocosAntesDeLigar.length < 100000) this._blocosAntesDeLigar.push([b[0], b[1], b[2], b[3], b[4], de]);
+      }
+      return;
+    }
+    const aplicar = [];
+    for (const b of lista) {
+      if (this._vaiAplicarBloco(b[0], b[1], b[2], de)) aplicar.push(b);
+    }
+    if (aplicar.length > 0) this._aplicarBlocosDaRede(aplicar);
+  }
+
+  /**
+   * (Cliente) Decide se uma mudança vinda do anfitrião deve ser aplicada,
+   * seguindo a regra do comentário de _blocoDoAnfitriao (mudanças minhas
+   * ainda não confirmadas têm prioridade).
+   */
+  _vaiAplicarBloco(x, y, z, de) {
     const chave = x + ',' + y + ',' + z;
     const pendentes = this._pendentes.get(chave);
     if (pendentes !== undefined) {
-      if (de !== this.meuId) return;
+      if (de !== this.meuId) return false;
       if (pendentes > 1) {
         this._pendentes.set(chave, pendentes - 1);
-        return;
+        return false;
       }
       this._pendentes.delete(chave);
     }
-    this._aplicarBlocoDaRede(x, y, z, id);
+    return true;
+  }
+
+  // ------------------------------------------------------------------
+  // Baús (Fase 6): o conteúdo mora no Baus; aqui só transportamos
+  // ------------------------------------------------------------------
+
+  /** Registra o ouvinte do Baus (veja o cabeçalho). Devolve uma função que remove o ouvinte. */
+  aoBau(fn) {
+    if (typeof fn !== 'function') return () => {};
+    this._ouvintesBau.push(fn);
+    return () => {
+      const i = this._ouvintesBau.indexOf(fn);
+      if (i >= 0) this._ouvintesBau.splice(i, 1);
+    };
+  }
+
+  /** Chama os ouvintes do Baus e devolve a primeira resposta que não for undefined */
+  _perguntarBaus(ev) {
+    for (const fn of this._ouvintesBau) {
+      try {
+        const r = fn(ev);
+        if (r !== undefined) return r;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return undefined;
+  }
+
+  /** (Cliente) Pede ao anfitrião o conteúdo do baú. Devolve false se não deu para mandar. */
+  enviarBauAbrir(x, y, z) {
+    if (this.modo !== 'cliente' || this._caiu || this.encerrado) return false;
+    this._enviar(this.conexaoAnfitriao, { tipo: 'bauAbrir', x, y, z });
+    return true;
+  }
+
+  /** Avisa que um espaço do baú mudou (`valor` = { item, qtd } ou null). Sozinho: não faz nada. */
+  enviarBauEspaco(x, y, z, i, valor, antes = null) {
+    if (this.modo === 'sozinho' || !this.ligado || this.encerrado || this._caiu) return false;
+    const msg = {
+      tipo: 'bauEspaco', x, y, z, i, item: valor ? valor.item : null, qtd: valor ? valor.qtd : 0,
+    };
+    if (this.modo === 'anfitriao') {
+      this._avisarTodos(msg);   // o anfitrião é a autoridade: sem comparar
+    } else {
+      msg.antes = antes ? { item: antes.item, qtd: antes.qtd } : null;
+      this._enviar(this.conexaoAnfitriao, msg);
+    }
+    return true;
+  }
+
+  /** O anfitrião recusou uma mudança minha no baú (alguém mexeu ao mesmo tempo) */
+  _bauRecusadoDoAnfitriao(msg) {
+    const x = msg.x, y = msg.y, z = msg.z, i = msg.i;
+    if (!this.ligado || !posBauValida(x, y, z) || !Number.isInteger(i) || i < 0 || i >= ESPACOS_BAU) return;
+    const ler = (v) => (v == null ? null : lerValorEspaco(v.item, v.qtd));
+    const antes = ler(msg.antes), valor = ler(msg.valor), atual = ler(msg.atual);
+    if (antes === undefined || valor === undefined || atual === undefined) return;
+    this._perguntarBaus({ tipo: 'recusado', x, y, z, i, antes, valor, atual });
+  }
+
+  /** O anfitrião mandou o conteúdo do baú que pedi */
+  _bauConteudoDoAnfitriao(msg) {
+    if (!this.ligado || !posBauValida(msg.x, msg.y, msg.z)) return;
+    const espacos = lerEspacosBau(msg.espacos);
+    if (!espacos) return;
+    this._perguntarBaus({ tipo: 'conteudo', x: msg.x, y: msg.y, z: msg.z, espacos });
+  }
+
+  /** O anfitrião repassou a mudança de um espaço feita por outro jogador */
+  _bauEspacoDoAnfitriao(msg) {
+    const x = msg.x, y = msg.y, z = msg.z, i = msg.i;
+    if (!this.ligado || !posBauValida(x, y, z) || !Number.isInteger(i) || i < 0 || i >= ESPACOS_BAU) return;
+    const valor = lerValorEspaco(msg.item, msg.qtd);
+    if (valor === undefined) return;
+    this._perguntarBaus({ tipo: 'espaco', x, y, z, i, valor });
   }
 
   /** Alguém mudou a hora de propósito: aplica já e avisa */
@@ -1780,7 +2045,7 @@ export class Rede {
         if (j.poderes && j.poderes.length > 0) this._definirPoderesRemotos(j.id, j.poderes);
       }
       // Blocos, itens e hora que chegaram durante a montagem do mundo
-      for (const b of this._blocosAntesDeLigar) this._blocoDoAnfitriao({ x: b[0], y: b[1], z: b[2], id: b[3], de: b[4] });
+      for (const b of this._blocosAntesDeLigar) this._blocoDoAnfitriao({ x: b[0], y: b[1], z: b[2], id: b[3], e: b[4], de: b[5] });
       this._blocosAntesDeLigar.length = 0;
       if (itensChao) {
         for (const d of this._itensPendentes.values()) {
@@ -2091,27 +2356,72 @@ export class Rede {
   /** Ouvinte de mundo.aoAlterarBloco: manda as mudanças locais */
   _blocoLocal(ev) {
     if (ev.origem !== 'local') return;
+    if (ev.lote && Array.isArray(ev.lista)) {
+      this._blocosLocais(ev.lista);
+      return;
+    }
+    const e = this._estadoNoMundo(ev.x, ev.y, ev.z, ev.estado);
     if (this.modo === 'anfitriao') {
-      const aviso = { tipo: 'bloco', x: ev.x, y: ev.y, z: ev.z, id: ev.id, de: this.meuId };
-      for (const c of this.clientes.values()) {
-        if (c.pronto) this._enviar(c.conn, aviso);
-      }
+      this._avisarTodos({ tipo: 'bloco', x: ev.x, y: ev.y, z: ev.z, id: ev.id, e, de: this.meuId });
     } else if (this.modo === 'cliente' && !this._caiu) {
       const chave = ev.x + ',' + ev.y + ',' + ev.z;
       this._pendentes.set(chave, (this._pendentes.get(chave) || 0) + 1);
-      this._enviar(this.conexaoAnfitriao, { tipo: 'bloco', x: ev.x, y: ev.y, z: ev.z, id: ev.id });
+      this._enviar(this.conexaoAnfitriao, { tipo: 'bloco', x: ev.x, y: ev.y, z: ev.z, id: ev.id, e });
     }
   }
 
+  /** Lote local (mundo.definirBlocos com origem 'local'): sai como `blocos`, em pedaços de até 512 */
+  _blocosLocais(lista) {
+    const max = CONFIG.BLOCOS_POR_LOTE_MAX;
+    for (let ini = 0; ini < lista.length; ini += max) {
+      const parte = [];
+      for (let k = ini; k < Math.min(lista.length, ini + max); k++) {
+        const b = lista[k];
+        parte.push([b[0], b[1], b[2], b[3], this._estadoNoMundo(b[0], b[1], b[2], b[4])]);
+      }
+      if (this.modo === 'anfitriao') {
+        this._avisarTodos({ tipo: 'blocos', lista: parte, de: this.meuId });
+      } else if (this.modo === 'cliente' && !this._caiu) {
+        for (const b of parte) {
+          const chave = b[0] + ',' + b[1] + ',' + b[2];
+          this._pendentes.set(chave, (this._pendentes.get(chave) || 0) + 1);
+        }
+        this._enviar(this.conexaoAnfitriao, { tipo: 'blocos', lista: parte });
+      }
+    }
+  }
+
+  /** Estado que o bloco tem agora no mundo (ou `reserva`, se o mundo ainda não sabe responder) */
+  _estadoNoMundo(x, y, z, reserva) {
+    const m = this.mundo;
+    if (m && typeof m.obterEstado === 'function') return m.obterEstado(x, y, z) & 255;
+    return Number.isInteger(reserva) ? reserva & 255 : 0;
+  }
+
   /**
-   * Aplica um bloco que veio da rede e devolve o valor que ficou.
+   * Aplica um bloco que veio da rede e devolve [id, estado] que ficou.
    * (Se o chunk não estiver carregado aqui, o definirBloco gera os dados
    * dele antes, então o obterBloco logo depois já sabe o valor certo.)
    */
-  _aplicarBlocoDaRede(x, y, z, id) {
+  _aplicarBlocoDaRede(x, y, z, id, e = 0) {
     const m = this.mundo;
-    m.definirBloco(x, y, z, id, 'rede');
-    return m.obterBloco(x, y, z);
+    m.definirBloco(x, y, z, id, 'rede', e);
+    return [m.obterBloco(x, y, z), this._estadoNoMundo(x, y, z, e)];
+  }
+
+  /** Aplica um lote da rede de uma vez e devolve a lista final [[x, y, z, id, e], ...] */
+  _aplicarBlocosDaRede(lista) {
+    const m = this.mundo;
+    if (typeof m.definirBlocos === 'function') {
+      m.definirBlocos(lista, 'rede');
+    } else {
+      for (const b of lista) m.definirBloco(b[0], b[1], b[2], b[3], 'rede', b[4]);
+    }
+    const final = [];
+    for (const b of lista) {
+      final.push([b[0], b[1], b[2], m.obterBloco(b[0], b[1], b[2]), this._estadoNoMundo(b[0], b[1], b[2], b[4])]);
+    }
+    return final;
   }
 
   // ------------------------------------------------------------------

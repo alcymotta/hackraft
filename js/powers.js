@@ -685,20 +685,34 @@ export class Poderes {
 
   _ehMadeira(id) {
     if (id === B.TRONCO || id === B.FOLHAS) return true;
+    // O fogo não apaga tocha, não quebra baú e não deixa meia porta
+    if (id === B.PORTA || id === B.TOCHA || id === B.BAU) return false;
     return id !== B.PRESENTE && BLOCOS[id]?.som === 'madeira';
   }
 
   /** Queima a madeira num raio de 1 em volta do bloco atingido */
   _queimar(cx, cy, cz) {
+    const lista = []; // [x, y, z, id] de tudo que vai virar ar (mandado de uma vez só)
     for (let x = cx - 1; x <= cx + 1; x++) {
       for (let y = cy - 1; y <= cy + 1; y++) {
         for (let z = cz - 1; z <= cz + 1; z++) {
           const id = this.mundo.obterBloco(x, y, z);
           if (!this._ehMadeira(id)) continue;
-          this.mundo.definirBloco(x, y, z, B.AR, 'local');
+          lista.push([x, y, z, B.AR]);
           this._fumacaDeBloco(x + 0.5, y + 0.5, z + 0.5);
         }
       }
+    }
+    this._aplicarLote(lista);
+  }
+
+  /** Muda vários blocos de uma vez (lote). Sem definirBlocos no mundo, um por um. */
+  _aplicarLote(lista) {
+    if (lista.length === 0) return;
+    if (typeof this.mundo.definirBlocos === 'function') {
+      this.mundo.definirBlocos(lista, 'local');
+    } else {
+      for (const b of lista) this.mundo.definirBloco(b[0], b[1], b[2], b[3], 'local');
     }
   }
 
@@ -716,13 +730,14 @@ export class Poderes {
   /** Transforma água em gelo num raio de 2 em volta do ponto */
   _congelar(cx, cy, cz) {
     const r = GELO.raioCongelar;
+    const lista = [];
     for (let x = cx - r; x <= cx + r; x++) {
       for (let y = cy - r; y <= cy + r; y++) {
         for (let z = cz - r; z <= cz + r; z++) {
           const dx = x - cx, dy = y - cy, dz = z - cz;
           if (dx * dx + dy * dy + dz * dz > r * r + 1) continue;
           if (this.mundo.obterBloco(x, y, z) !== B.AGUA) continue;
-          this.mundo.definirBloco(x, y, z, B.GELO, 'local');
+          lista.push([x, y, z, B.GELO]);
           this.particulas?.emitir?.({
             x: x + 0.5, y: y + 0.5, z: z + 0.5, qtd: 3, cores: ['#a8f0ff', '#ffffff'],
             velocidade: 1, espalhar: 0.4, gravidade: 2, vida: 0.6, tamanho: 0.08, aditivo: false,
@@ -730,6 +745,7 @@ export class Poderes {
         }
       }
     }
+    this._aplicarLote(lista);
   }
 
   // ===================================================================

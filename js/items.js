@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------
 // Um item é qualquer coisa que pode ficar no inventário. Ele é
 // identificado por um nome em texto (ex.: 'grama').
-// Tipos: 'bloco' | 'roupa' | 'armadura' | 'arma' | 'acessorio' | 'poder'
+// Tipos: 'bloco' | 'material' | 'roupa' | 'armadura' | 'arma' | 'acessorio' | 'poder'
 // Este arquivo não usa three nem o DOM (dá para testar no Node).
 // =====================================================================
 
@@ -46,12 +46,34 @@ export function registrarItem(def) {
   });
 }
 
+// Descrições dos itens de bloco da Fase 6
+const DESCRICOES_BLOCOS = {
+  tabuas: 'Madeira polida para construir casas.',
+  vidro: 'Transparente: deixa a luz e a vista passarem.',
+  tijolos: 'Parede forte e bonita, de cor vermelha.',
+  porta: 'Ocupa 2 blocos de altura. Botão direito para abrir e fechar.',
+  tocha: 'Ilumina o escuro. Pode ficar no chão ou na parede.',
+  bau: 'Guarde até 27 pilhas de itens. Botão direito para abrir.',
+};
+
 // Todo bloco que solta item vira automaticamente um item do tipo 'bloco'
 for (const b of BLOCOS) {
   if (b && b.item === b.nome) {
-    registrarItem({ nome: b.nome, rotulo: b.rotulo, tipo: 'bloco', bloco: b.id });
+    registrarItem({ nome: b.nome, rotulo: b.rotulo, tipo: 'bloco', bloco: b.id, descricao: DESCRICOES_BLOCOS[b.nome] });
   }
 }
+
+// ---------------------------------------------------------------------
+// Materiais (Fase 6): servem para fazer outras coisas
+// ---------------------------------------------------------------------
+registrarItem({
+  nome: 'graveto', rotulo: 'Graveto', tipo: 'material', pilha: 64,
+  descricao: 'Feito de tábuas. Use para fazer tochas.',
+});
+registrarItem({
+  nome: 'carvao', rotulo: 'Carvão', tipo: 'material', pilha: 64,
+  descricao: 'Pedra preta que queima. Use para fazer tochas.',
+});
 
 // ---------------------------------------------------------------------
 // Roupas

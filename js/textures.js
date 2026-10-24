@@ -394,7 +394,183 @@ export const RECEITAS = {
     }
     salpicar(ctx, base, 12, 20);
   },
+
+  // ---------------- Fase 6: construção ----------------
+
+  // Tábuas: 4 tábuas horizontais com veios, frestas e pregos
+  tabuas(ctx) {
+    const base = [184, 148, 92];
+    for (let fila = 0; fila < 4; fila++) {
+      const tomFila = (rnd() - 0.5) * 26;
+      const y0 = fila * 4;
+      for (let y = y0; y < y0 + 4; y++) {
+        for (let x = 0; x < T; x++) {
+          pixel(ctx, x, y, tom(base, tomFila + (rnd() - 0.5) * 10));
+        }
+      }
+      // veios (traços horizontais mais escuros)
+      for (let i = 0; i < 3; i++) {
+        const x = inteiro(T - 4);
+        const y = y0 + inteiro(3);
+        const c = tom(base, tomFila - 24);
+        for (let k = 0; k < 3 + inteiro(3); k++) pixel(ctx, x + k, y, c);
+      }
+      // fresta escura embaixo de cada tábua
+      for (let x = 0; x < T; x++) pixel(ctx, x, y0 + 3, tom(base, -62 + (rnd() - 0.5) * 10));
+      // fresta vertical (emenda), em posição diferente por fila
+      const emenda = (fila * 7 + 3) % T;
+      for (let y = y0; y < y0 + 3; y++) pixel(ctx, emenda, y, tom(base, -48));
+      // pregos nas pontas
+      pixel(ctx, 1, y0 + 1, tom(base, -70));
+      pixel(ctx, T - 2, y0 + 1, tom(base, -70));
+    }
+  },
+
+  // Vidro: moldura clara de 1 px, centro transparente e reflexos diagonais
+  vidro(ctx) {
+    ctx.clearRect(0, 0, T, T);
+    const moldura = [206, 224, 230];
+    for (let i = 0; i < T; i++) {
+      pixel(ctx, i, 0, tom(moldura, 12));
+      pixel(ctx, 0, i, tom(moldura, 12));
+      pixel(ctx, i, T - 1, tom(moldura, -22 + (rnd() - 0.5) * 8));
+      pixel(ctx, T - 1, i, tom(moldura, -22));
+    }
+    // reflexos: traços diagonais brancos semitransparentes
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    for (let k = 0; k < 4; k++) ctx.fillRect(3 + k, 8 - k, 1, 1);
+    ctx.fillRect(3, 11, 1, 1);
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    for (let k = 0; k < 3; k++) ctx.fillRect(8 + k, 12 - k, 1, 1);
+    ctx.fillRect(11, 4, 1, 1);
+  },
+
+  // Tijolos: fileiras alternadas com rejunte cinza
+  tijolos(ctx) {
+    const tijolo = [168, 74, 58];
+    const rejunte = [168, 166, 158];
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) pixel(ctx, x, y, tom(rejunte, (rnd() - 0.5) * 14));
+    }
+    for (let fila = 0; fila < 4; fila++) {
+      const desloc = (fila % 2) * 4;
+      for (let bloco = -1; bloco < 3; bloco++) {
+        const x0 = bloco * 8 + desloc;
+        const tomBloco = (rnd() - 0.5) * 36;
+        for (let y = fila * 4; y < fila * 4 + 3; y++) {
+          for (let x = x0; x < x0 + 7; x++) {
+            // luz em cima e sombra embaixo
+            const borda = y === fila * 4 ? 10 : y === fila * 4 + 2 ? -14 : 0;
+            pixel(ctx, x, y, tom(tijolo, tomBloco + borda + (rnd() - 0.5) * 14));
+          }
+        }
+      }
+    }
+  },
+
+  // Porta (metade de baixo): madeira com moldura e maçaneta escura
+  porta_baixo(ctx) {
+    portaBase(ctx);
+    pixel(ctx, 12, 7, [58, 58, 64]);
+    pixel(ctx, 12, 8, [38, 38, 44]);
+    pixel(ctx, 11, 7, [96, 96, 104]);
+    pixel(ctx, 1, 2, [70, 70, 76]); pixel(ctx, 1, 13, [70, 70, 76]); // dobradiças
+  },
+
+  // Porta (metade de cima): madeira com moldura e 2 janelinhas transparentes
+  porta_cima(ctx) {
+    portaBase(ctx);
+    for (const x0 of [3, 9]) {
+      // moldura escura em volta das janelas
+      for (let x = x0 - 1; x <= x0 + 4; x++) { pixel(ctx, x, 2, [92, 62, 30]); pixel(ctx, x, 8, [92, 62, 30]); }
+      for (let y = 2; y <= 8; y++) { pixel(ctx, x0 - 1, y, [92, 62, 30]); pixel(ctx, x0 + 4, y, [92, 62, 30]); }
+      // vidro: transparente
+      for (let y = 3; y <= 7; y++) {
+        for (let x = x0; x < x0 + 4; x++) ctx.clearRect(x, y, 1, 1);
+      }
+    }
+    pixel(ctx, 1, 2, [70, 70, 76]); pixel(ctx, 1, 13, [70, 70, 76]);
+  },
+
+  // Tocha: palito de madeira com o topo aceso (fundo transparente)
+  tocha(ctx) {
+    ctx.clearRect(0, 0, T, T);
+    const madeira = [120, 84, 44];
+    for (let y = 6; y < T; y++) {
+      pixel(ctx, 7, y, tom(madeira, 14 + (rnd() - 0.5) * 16));
+      pixel(ctx, 8, y, tom(madeira, -18 + (rnd() - 0.5) * 16));
+    }
+    // topo: brasa, chama laranja e ponta amarela
+    pixel(ctx, 7, 5, [190, 90, 20]); pixel(ctx, 8, 5, [160, 70, 16]);
+    pixel(ctx, 7, 4, [255, 170, 40]); pixel(ctx, 8, 4, [240, 130, 28]);
+    pixel(ctx, 7, 3, [255, 226, 90]); pixel(ctx, 8, 3, [255, 190, 50]);
+    pixel(ctx, 7, 2, [255, 244, 170]);
+  },
+
+  // Baú: topo, lado e frente (com a fechadura metálica)
+  bau_topo(ctx) {
+    bauBase(ctx);
+  },
+  bau_lado(ctx) {
+    bauBase(ctx);
+    for (let x = 1; x < T - 1; x++) pixel(ctx, x, 5, [70, 44, 18]); // linha da tampa
+  },
+  bau_frente(ctx) {
+    bauBase(ctx);
+    for (let x = 1; x < T - 1; x++) pixel(ctx, x, 5, [70, 44, 18]);
+    mancha(ctx, 6, 4, 4, 5, [176, 178, 186]);
+    mancha(ctx, 7, 6, 2, 3, [58, 58, 66]);
+    for (let x = 6; x < 10; x++) pixel(ctx, x, 4, [220, 222, 230]);
+    pixel(ctx, 9, 8, [120, 122, 130]);
+  },
+
+  // Minério de carvão: pedra com pontos pretos foscos (sem brilho)
+  minerio_carvao(ctx) {
+    pedraBase(ctx);
+    const grupos = 6 + inteiro(3);
+    for (let g = 0; g < grupos; g++) {
+      const cx = 1 + inteiro(T - 3);
+      const cy = 1 + inteiro(T - 3);
+      const n = 3 + inteiro(3);
+      for (let k = 0; k < n; k++) {
+        const v = 18 + inteiro(14);
+        pixel(ctx, cx + inteiro(3), cy + inteiro(2), [v, v, v + 2]);
+      }
+    }
+  },
 };
+
+/** Madeira da porta: tom base, veios, moldura escura de 2 px */
+function portaBase(ctx) {
+  const base = [150, 106, 56];
+  ruidoBase(ctx, base, 10);
+  for (let i = 0; i < 6; i++) {
+    const x = 2 + inteiro(T - 4);
+    const y = inteiro(T - 5);
+    for (let k = 0; k < 4; k++) pixel(ctx, x, y + k, tom(base, -22));
+  }
+  const moldura = [100, 66, 32];
+  for (let i = 0; i < T; i++) {
+    for (const k of [0, 1, T - 2, T - 1]) {
+      pixel(ctx, i, k, tom(moldura, (rnd() - 0.5) * 12));
+      pixel(ctx, k, i, tom(moldura, (rnd() - 0.5) * 12));
+    }
+  }
+  for (let i = 2; i < T - 2; i++) { pixel(ctx, i, 2, tom(base, 18)); pixel(ctx, 2, i, tom(base, 18)); }
+}
+
+/** Madeira escura do baú, com borda mais escura e pregos nos cantos */
+function bauBase(ctx) {
+  const base = [146, 98, 42];
+  ruidoBase(ctx, base, 10);
+  for (let x = 3; x < T; x += 4) for (let y = 1; y < T - 1; y++) pixel(ctx, x, y, tom(base, -20));
+  const borda = [78, 48, 20];
+  for (let i = 0; i < T; i++) {
+    pixel(ctx, i, 0, borda); pixel(ctx, i, T - 1, borda);
+    pixel(ctx, 0, i, borda); pixel(ctx, T - 1, i, borda);
+  }
+  for (const [x, y] of [[1, 1], [T - 2, 1], [1, T - 2], [T - 2, T - 2]]) pixel(ctx, x, y, [60, 60, 66]);
+}
 
 // Receitas dos minérios de cristal (uma por cor), todas com o helper minerioCristal
 const COR_MINERIOS = {
@@ -616,7 +792,7 @@ export async function criarTexturas() {
     if (cacheItens.has(nome)) return cacheItens.get(nome);
     let url;
     const item = obterItem(nome);
-    if (item && item.tipo === 'bloco') url = iconeBloco(item.bloco);
+    if (item && item.tipo === 'bloco' && !ICONES_ESPECIAIS.has(nome)) url = iconeBloco(item.bloco);
     else url = desenharIconeItem(item);
     cacheItens.set(nome, url);
     return url;
@@ -929,10 +1105,87 @@ function gema(g, cor) {
   ponto(g, 12, 0, tom(cor, 120)); ponto(g, 12, 1, tom(cor, 120));
 }
 
+// --- Fase 6: graveto, carvão, tocha e porta ---
+function graveto(g) {
+  const madeira = [136, 96, 52];
+  for (let i = 0; i < 11; i++) {
+    ponto(g, 2 + i, 13 - i, tom(madeira, 16));
+    ponto(g, 3 + i, 13 - i, tom(madeira, -20));
+  }
+  ponto(g, 8, 6, tom(madeira, 30)); ponto(g, 9, 8, tom(madeira, -30)); // nós da madeira
+  ponto(g, 12, 2, tom(madeira, 34)); // ponta clara
+}
+
+function carvaoIcone(g) {
+  const preto = [34, 34, 38];
+  const forma = [
+    '....XXXX....',
+    '..XXXXXXXX..',
+    '.XXXXXXXXXX.',
+    'XXXXXXXXXXXX',
+    'XXXXXXXXXXXX',
+    '.XXXXXXXXXX.',
+    '..XXXXXXXX..',
+  ];
+  forma.forEach((linha, j) => {
+    for (let i = 0; i < linha.length; i++) {
+      if (linha[i] !== 'X') continue;
+      const d = (i + j) % 3 === 0 ? 8 : 0;
+      ponto(g, 2 + i, 4 + j, tom(preto, d - (j > 4 ? 10 : 0)));
+    }
+  });
+  // brilho cinza
+  ponto(g, 5, 5, [150, 150, 160]); ponto(g, 6, 5, [112, 112, 122]); ponto(g, 5, 6, [112, 112, 122]);
+  ponto(g, 9, 7, [86, 86, 96]);
+}
+
+function tochaIcone(g) {
+  const madeira = [128, 90, 48];
+  for (let y = 7; y <= 14; y++) {
+    ponto(g, 7, y, tom(madeira, 14));
+    ponto(g, 8, y, tom(madeira, -20));
+  }
+  retangulo(g, 7, 5, 8, 6, [180, 84, 20]);
+  ponto(g, 7, 4, [255, 170, 40]); ponto(g, 8, 4, [240, 130, 28]);
+  ponto(g, 6, 5, [255, 150, 36]); ponto(g, 9, 5, [240, 120, 26]);
+  ponto(g, 7, 3, [255, 226, 90]); ponto(g, 8, 3, [255, 190, 50]);
+  ponto(g, 7, 2, [255, 245, 170]);
+}
+
+function portaIcone(g) {
+  const madeira = [150, 106, 56];
+  const moldura = [100, 66, 32];
+  retangulo(g, 4, 1, 11, 14, madeira);
+  retangulo(g, 4, 1, 11, 1, moldura); retangulo(g, 4, 14, 11, 14, moldura);
+  retangulo(g, 4, 1, 4, 14, moldura); retangulo(g, 11, 1, 11, 14, moldura);
+  // janelinhas
+  retangulo(g, 5, 3, 6, 5, [150, 210, 240]); retangulo(g, 9, 3, 10, 5, [150, 210, 240]);
+  ponto(g, 5, 3, [235, 248, 255]); ponto(g, 9, 3, [235, 248, 255]);
+  // painel de baixo e maçaneta
+  retangulo(g, 6, 8, 9, 12, tom(madeira, -16));
+  retangulo(g, 5, 7, 10, 7, tom(madeira, -30));
+  ponto(g, 10, 9, [40, 40, 46]); ponto(g, 10, 10, [60, 60, 66]);
+}
+
+// Itens de bloco que usam um ícone próprio em vez do cubinho
+const ICONES_ESPECIAIS = new Set(['porta', 'tocha']);
+
 /** Desenha o ícone de um item que não é bloco (item pode ser undefined) */
 function desenharIconeItem(item) {
   const g = novaGrade();
-  if (item && item.tipo === 'poder' && item.cor) {
+  if (item && item.nome === 'graveto') {
+    graveto(g);
+    contornar(g);
+  } else if (item && item.nome === 'carvao') {
+    carvaoIcone(g);
+    contornar(g);
+  } else if (item && item.nome === 'tocha') {
+    tochaIcone(g);
+    contornar(g);
+  } else if (item && item.nome === 'porta') {
+    portaIcone(g);
+    contornar(g);
+  } else if (item && item.tipo === 'poder' && item.cor) {
     gema(g, corHex(item.cor));
     contornar(g);
   } else if (item && item.tipo === 'roupa' && ROUPA_ICONE[item.visual]) {

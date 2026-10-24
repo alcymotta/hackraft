@@ -34,3 +34,25 @@ Desde a Fase 3, o Claude segue direto até a Fase 11 sem parar a cada fase, como
 - **Vida antecipada:** a barra de vida (corações), o dano de queda, a morte e o renascer na casa vieram para esta fase, para o cristal verde (regeneração) ter efeito. Na Fase 7, os monstros passam a causar dano usando esse sistema.
 - **Morrer não perde itens**, para não frustrar uma criança.
 - **Poderes de ataque antes dos monstros:** a bola de fogo queima madeira e folhas, o gelo congela a água (vira bloco de gelo) e o raio cai onde você mira. Quando os monstros chegarem (Fase 7), os três passam a acertá-los também.
+
+## Fase 6: baús e construção
+- **Crafting em lista:** em vez da grade 3×3 do Minecraft, a tela E mostra uma lista de receitas. Basta clicar, o que é mais fácil para criança.
+- **Receitas simples:**
+  - tronco → 4 tábuas
+  - tábuas → gravetos, baú ou porta
+  - graveto + carvão → 4 tochas
+  - areia → vidro, sem precisar de fornalha
+  - pedra + terra → tijolos
+- **Carvão novo:** veio comum no subsolo, porque é preciso para fazer tochas.
+- **Luz de verdade:** as tochas iluminam em volta, de bloco em bloco, e os cristais de poder soltam uma luz fraquinha nas cavernas.
+- **Botão direito:** num baú abre e numa porta abre/fecha. Segure **Shift** para colocar um bloco encostado nele.
+- **Baú quebrado:** o conteúdo cai no chão.
+- **Baús no multiplayer:** os dois jogadores podem mexer no mesmo baú, e quem mexe por último no mesmo espaço vence.
+## Fase 7: mobs
+- **O anfitrião controla os mobs:** os dois jogadores veem os mesmos bichos, e os mobs não são salvos (reaparecem ao jogar).
+- **Defesa da armadura:** cada ponto tira 4% do dano, até no máximo 80%.
+- **Comida:**
+  - porco → costeleta, galinha → coxinha; as folhas às vezes soltam maçã (ela será usada na maçã dourada da Fase 11);
+  - comer é segurar o botão direito com a comida na mão;
+  - não existe fome, para ficar simples: comida só cura.
+- **Monstros ao amanhecer:** pegam fogo e somem.
