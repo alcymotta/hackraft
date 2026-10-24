@@ -37,6 +37,9 @@
   <!-- Aviso que some sozinho -->
   <div id="mensagem" class="oculto"></div>
 
+  <!-- Selo da sala (canto superior direito; escondido no modo sozinho) -->
+  <div id="selo-sala" class="oculto"></div>
+
   <!-- Hotbar -->
   <div id="hud-inferior">
     <div id="nome-item"></div>
@@ -62,9 +65,19 @@
     <div class="conteudo-central">
       <h1 class="logo">HACKRAFT</h1>
       <p class="subtitulo">Construa, explore e divirta-se!</p>
-      <div class="botoes">
-        <button id="btn-jogar" class="botao">Jogar</button>
-        <button id="btn-novo-inicial" class="botao">Novo mundo</button>
+      <div class="botoes caixa-sala">
+        <label class="rotulo-campo" for="campo-apelido">Seu apelido</label>
+        <input id="campo-apelido" class="campo" type="text" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Jogador">
+        <button id="btn-criar-sala" class="botao">Criar sala</button>
+        <p class="nota-pequena">Joga no seu mundo. O outro jogador entra com o código.</p>
+        <div class="separador-ou"><span>ou</span></div>
+        <label class="rotulo-campo" for="campo-codigo">Código da sala</label>
+        <div class="linha-codigo">
+          <input id="campo-codigo" class="campo campo-codigo" type="text" maxlength="5" autocomplete="off" spellcheck="false" placeholder="ABCDE">
+          <button id="btn-entrar" class="botao botao-pequeno">Entrar</button>
+        </div>
+        <button id="btn-novo-inicial" class="botao botao-pequeno">Novo mundo</button>
+        <p id="status-inicial" class="status-inicial"></p>
       </div>
       <div class="painel caixa-controles">
         <h3>Controles</h3>
@@ -85,6 +98,14 @@
         <input id="volume" type="range" min="0" max="100" step="1" value="70">
         <button id="btn-mudo" class="botao botao-pequeno">Som ligado</button>
       </div>
+      <div id="area-sala" class="painel area-sala oculto">
+        <div class="nota-sala">Código da sala</div>
+        <div id="codigo-sala" class="codigo-grande"></div>
+        <div class="nota-sala">Passe este código para o outro jogador</div>
+        <button id="btn-copiar" class="botao botao-pequeno">Copiar código</button>
+        <div class="nota-sala">Jogadores online</div>
+        <ul id="lista-jogadores" class="lista-jogadores"></ul>
+      </div>
       <div class="botoes">
         <button id="btn-novo-pausa" class="botao">Novo mundo</button>
       </div>
@@ -100,6 +121,8 @@
     <p id="carregando-texto">Carregando...</p>
   </div>
 
+  <!-- PeerJS (multiplayer): precisa vir ANTES do main.js -->
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
   <script type="module" src="js/main.js"></script>
   <script>
     // Bloqueia o menu do botão direito na página toda

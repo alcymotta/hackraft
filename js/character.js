@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 
 const ESCALA = 1.8 / 32; // tamanho de 1 pixel de skin, em blocos
+const DURACAO_GOLPE = 0.25; // segundos do balanço do braço ao golpear
 
 // Cores padrão (strings CSS)
 const CORES_PADRAO = {
@@ -251,6 +252,34 @@ function desenharSkin(canvas, cores) {
 }
 
 // ---------------------------------------------------------------------
+// Cores por apelido: cada jogador ganha uma camisa diferente
+// ---------------------------------------------------------------------
+const PALETA = [
+  { camisa: '#2f8fd8', calca: '#2b3a6e' }, // azul
+  { camisa: '#d83a3a', calca: '#3a3a44' }, // vermelho
+  { camisa: '#3fae44', calca: '#3b3326' }, // verde
+  { camisa: '#e8d238', calca: '#3d3a5c' }, // amarelo
+  { camisa: '#8a46c8', calca: '#2e2e3a' }, // roxo
+  { camisa: '#f08a24', calca: '#33383f' }, // laranja
+  { camisa: '#30d0d0', calca: '#2a3b50' }, // ciano
+  { camisa: '#f06aa8', calca: '#3a3340' }, // rosa
+];
+
+/** Escolhe a cor da camisa (e da calça) a partir de um hash simples do apelido */
+export function coresPorApelido(apelido) {
+  const texto = String(apelido || '');
+  // Hash FNV-1a + mistura final dos bits (sem a mistura, nomes parecidos
+  // como "Pai" e "Filho" caíam na mesma cor)
+  let h = 2166136261;
+  for (let i = 0; i < texto.length; i++) h = Math.imul(h ^ texto.charCodeAt(i), 16777619);
+  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  const p = PALETA[(h >>> 0) % PALETA.length];
+  return { ...CORES_PADRAO, camisa: p.camisa, calca: p.calca };
+}
+
+// ---------------------------------------------------------------------
 // Classe Personagem
 // ---------------------------------------------------------------------
 export class Personagem {
@@ -318,6 +347,12 @@ export class Personagem {
     this._amplitude = 0;  // amplitude atual do balanço (suavizada)
     this._tempo = 0;      // para a respiração
     this._abertura = 0;   // quanto as pernas estão abertas (no ar)
+    this._golpe = -1;     // tempo do golpe em andamento (-1 = sem golpe)
+  }
+
+  /** Balanço rápido do braço direito para a frente e de volta (~0.25 s) */
+  animarGolpe() {
+    this._golpe = 0;
   }
 
   /**
@@ -335,7 +370,14 @@ export class Personagem {
     if (this._amplitude < 0.002 && alvo === 0) this._amplitude = 0;
 
     const balanco = Math.sin(this._fase) * this._amplitude;
-    this.pivoBracoD.rotation.x = balanco;
+    // Golpe: um arco (seno) que vai à frente e volta, somado ao balanço de andar
+    let golpe = 0;
+    if (this._golpe >= 0) {
+      this._golpe += dt;
+      if (this._golpe >= DURACAO_GOLPE) this._golpe = -1;
+      else golpe = Math.sin((this._golpe / DURACAO_GOLPE) * Math.PI) * 1.6;
+    }
+    this.pivoBracoD.rotation.x = balanco + golpe;
     this.pivoBracoE.rotation.x = -balanco;
     this.pivoPernaD.rotation.x = -balanco;
     this.pivoPernaE.rotation.x = balanco;

@@ -36,7 +36,8 @@ js/audio.js         som: passos, quebrar, colocar (arquivos .ogg ou sons sinteti
 js/player.js        Jogador: física, controles, câmera 1ª/3ª pessoa, quebrar/colocar
 js/save.js          salvar/carregar no localStorage
 js/main.js          junta tudo e roda o loop
-js/network.js       (Fase 2) multiplayer
+js/network.js       Rede: multiplayer P2P com PeerJS (anfitrião é a autoridade)
+js/jogadores_remotos.js  JogadoresRemotos: bonecos e nomes dos outros jogadores
 js/chat.js          (Fase 4) chat e comandos
 js/powers.js        (Fase 5) poderes
 js/mobs.js          (Fase 7) animais e monstros
@@ -138,6 +139,41 @@ Estado: `{ versao: 1, semente, modificacoes, jogador, inventario, hora }`
 
 ### main.js
 Cria o renderer (canvas `#tela`, sem antialias, pixelRatio ≤ 2), a cena e a câmera, e monta todos os módulos. Roda o loop (dt limitado a 0.05 s), salva sozinho e expõe `window.jogo = { mundo, ceu, jogador, inventario, ui, som, salvar }` para depuração e para os comandos do chat.
+Na Fase 2, o fluxo passou a ser: texturas → UI → tela inicial → (Criar sala | Entrar com código) → só então cria Mundo/Céu/Jogador. No modo cliente, o mundo vem do anfitrião e **nada é salvo** no navegador do cliente (para não apagar o mundo dele).
+
+### network.js (Fase 2)
+PeerJS 1.5.5 vem por `<script>` no index.html (UMD), então use `window.Peer`. Código da sala: 5 letras/números sem caracteres confusos (sem 0/O/1/I/L). O id no PeerJS é `'hackraft-' + codigo`.
+`export class Rede` com `constructor({ apelido, cores })` (`cores` é opcional e vai na mensagem `ola`). Também exporta `normalizarCodigo(texto)`. O protocolo completo (ola, bemvindo, mods, recusado, entrou, saiu, pos, bloco, hora, meuEstado, tchau) está documentado no cabeçalho do network.js.
+- `modo`: `'sozinho' | 'anfitriao' | 'cliente'`; `codigo`; `meuId`
+- `async criarSala()` → código. Se o PeerJS falhar (sem internet), rejeita, e o main segue no modo `'sozinho'`.
+- `async entrarNaSala(codigo)` → `{ apelido, semente, modificacoes, hora, meuEstado, posAnfitriao: [x, y, z], jogadores }`. O `apelido` é o final, que pode virar "Pai 2" se o nome já existir na sala. `meuEstado` é `{ pos, yaw, pitch, inventario }` ou null. Rejeita com uma mensagem em português se não achar a sala (tempo limite de ~10 s).
+- `ligar({ mundo, ceu, jogador, inventario, remotos, ui })`: começa a sincronizar, depois que o mundo existe
+- `atualizar(dt)`: a cada quadro (envia a posição ~15×/s, o horário a cada 5 s etc.)
+- `listaJogadores()` → `[{ id, apelido, anfitriao }]` (inclui você); `quantidadeJogadores` (getter)
+- Anfitrião: `carregarDadosJogadores(obj)` / `exportarDadosJogadores()`: posição e inventário de cada visitante, por apelido, salvos no mundo do anfitrião
+- `aoDesconectar(fn)`: o cliente perdeu o anfitrião
+- `encerrar()`
+- Regras: o anfitrião é a autoridade. Os blocos alterados vão por `mundo.aoAlterarBloco` (só envia quando `origem === 'local'`); a alteração recebida é aplicada com `definirBloco(..., 'rede')`, o anfitrião repassa para os outros, e o cliente aplica a própria mudança na hora (otimista). O horário vem do anfitrião. A lista de modificações pode ser grande: use a serialização padrão do PeerJS (binary, que divide mensagens grandes) ou mande em lotes.
+
+### jogadores_remotos.js (Fase 2)
+`export class JogadoresRemotos` com `constructor(scene)`:
+- `adicionar(id, apelido, cores)`, `remover(id)`, `limpar()`
+- `receberEstado(id, { x, y, z, yaw, pitch, noAr, quebrando })`
+- `atualizar(dt)`: move suavemente até o último estado recebido (interpolação), anima com `Personagem.animar` e mantém o nome acima da cabeça
+- `posicaoDe(id)` → `Vector3` ou null (para o /tp da Fase 4); `apelidoDe(id)`
+
+### character.js (Fase 2)
+- `export function coresPorApelido(apelido)` → objeto `cores` com a camisa (e a calça) escolhidas de uma paleta a partir de um hash do apelido, para cada jogador ter uma cor diferente
+- `animarGolpe()`: balanço curto do braço direito (ao quebrar ou colocar bloco)
+
+### ui.js (Fase 2)
+- `mostrarTelaInicial({ aoCriarSala(apelido), aoEntrar(apelido, codigo), aoNovoMundo })` substitui `aoJogar`. Os callbacks devolvem uma Promise: enquanto ela não resolve, a tela mostra "Conectando..." e desativa os botões. Se resolver, esconde a tela e trava o mouse (se o navegador recusar, aparece a pausa com "Continuar"). Se rejeitar, mostra o erro na tela inicial e reativa os botões.
+- O apelido fica salvo no localStorage (`'hackraft-apelido'`), com no máximo 16 caracteres. Vazio vira "Jogador".
+- `mostrarSala(codigo)`: um selo "Sala: ABCDE" no canto superior direito e, na pausa, o código em destaque, com o texto "Passe este código para o outro jogador"
+- `atualizarJogadores(lista)`: na pausa, mostra a lista de quem está online; no selo, a quantidade
+
+### Save (Fase 2)
+`versao: 2` acrescenta `jogadores: { [apelido]: { pos, yaw, pitch, inventario } }`. `carregarJogo` aceita a versão 1 (sem `jogadores`).
 
 ## Subagentes e fluxo de trabalho
 - A conversa principal é a **coordenadora**: divide cada fase em tarefas e manda cada uma para o agente certo, em paralelo quando são independentes.
@@ -152,7 +188,7 @@ Cria o renderer (canvas `#tela`, sem antialias, pixelRatio ≤ 2), a cena e a c�
 ## Fases
 - [x] Fase 0: preparação (agentes, /planejar, Git, estrutura)
 - [x] Fase 1: mundo e movimento
-- [ ] Fase 2: multiplayer
+- [x] Fase 2: multiplayer
 - [ ] Fase 3: personagem e roupinhas
 - [ ] Fase 4: chat e comandos (+ /hacker)
 - [ ] Fase 5: minérios de poder
@@ -162,6 +198,11 @@ Cria o renderer (canvas `#tela`, sem antialias, pixelRatio ≤ 2), a cena e a c�
 - [ ] Fase 9: armas, armaduras, minérios e forja
 - [ ] Fase 10: roupas como itens e camadas de equipamento
 - [ ] Fase 11: montarias
+
+## Pendências técnicas
+- `world.js`: `definirBloco` num chunk não carregado compara com "ar" em vez do bloco gerado. O network.js contorna isso chamando `mundo._garantirDados(cx, cz)` antes de aplicar. O certo é corrigir dentro do `definirBloco`.
+- Fase 4 (comandos que mudam muitos blocos): criar uma mensagem de rede em lote e um `definirBlocos(lista)` que remonte cada chunk uma vez só.
+- Com a aba do anfitrião escondida, o loop do jogo dele para, e o horário dos clientes para junto.
 
 ## Voltar para uma versão anterior (Git)
 - `git log --oneline`: lista as versões salvas

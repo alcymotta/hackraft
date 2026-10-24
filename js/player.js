@@ -101,8 +101,21 @@ export class Jogador {
     return this.ui.mouseTravado && !this.ui.menuAberto;
   }
 
+  /** true se o evento de teclado veio de um campo de texto */
+  _digitando(e) {
+    const t = e.target;
+    return !!t && ((t.tagName === 'INPUT' && t.type !== 'range') || t.tagName === 'TEXTAREA');
+  }
+
+  /** true enquanto o botão esquerdo está segurado com um alvo (para a rede animar o golpe) */
+  get quebrando() {
+    return this.botoes[0] && this.temAlvoQuebra;
+  }
+
   _ligarEventos() {
     window.addEventListener('keydown', (e) => {
+      // Digitando num campo de texto (apelido, código): não mexe no jogador
+      if (this._digitando(e)) return;
       // F5 ou V trocam a câmera. No F5 também tentamos impedir que a página
       // recarregue. Em muitos notebooks, porém, a tecla F5 (sem o Fn) manda o
       // comando "Atualizar" do sistema, que o navegador não deixa bloquear.
@@ -121,7 +134,9 @@ export class Jogador {
     });
 
     window.addEventListener('keyup', (e) => {
+      // Sempre solta a tecla, mesmo dentro de um campo de texto (senão o boneco fica andando)
       this.teclas[e.code] = false;
+      if (this._digitando(e)) return;
     });
 
     // Se a janela perder o foco, ninguém fica "preso" andando
@@ -444,6 +459,7 @@ export class Jogador {
         if (this.tempoGolpe <= 0) {
           this.tempoGolpe = CONFIG.INTERVALO_GOLPE;
           if (bloco.som) this.som.golpe(bloco.som);
+          this.personagem.animarGolpe();
         }
         if (this.progresso >= 1) {
           this._quebrar(alvo, bloco);
@@ -511,6 +527,7 @@ export class Jogador {
       const tipo = BLOCOS[def.bloco].som;
       if (tipo) this.som.colocar(tipo);
       this.tempoColocar = CONFIG.INTERVALO_COLOCAR;
+      this.personagem.animarGolpe();
     }
   }
 

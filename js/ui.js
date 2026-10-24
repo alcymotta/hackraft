@@ -63,6 +63,8 @@ export class InterfaceJogo {
     this.elMensagem = $('mensagem');
     this.elSubmerso = $('submerso');
 
+    this.codigoSala = null;
+    this.jogadoresOnline = 0;
     this.temporizadorNome = null;
     this.temporizadorMensagem = null;
     this.temporizadorMensagem2 = null;
@@ -388,22 +390,143 @@ export class InterfaceJogo {
   // ------------------------------------------------------------------
   // Telas
   // ------------------------------------------------------------------
-  mostrarTelaInicial({ aoJogar, aoNovoMundo }) {
+  mostrarTelaInicial({ aoCriarSala, aoEntrar, aoNovoMundo }) {
     this.aoNovoMundo = aoNovoMundo;
     this.inicialAberta = true;
     this.elInicial.classList.remove('oculto');
 
-    $('btn-jogar').onclick = (e) => {
-      e.currentTarget.blur(); // o Espaço do jogo não deve "clicar" no botão
+    const campoApelido = $('campo-apelido');
+    const campoCodigo = $('campo-codigo');
+    const btnCriar = $('btn-criar-sala');
+    const btnEntrar = $('btn-entrar');
+    const btnNovo = $('btn-novo-inicial');
+    const status = $('status-inicial');
+
+    // Apelido salvo da última vez
+    campoApelido.value = this._lerApelidoSalvo();
+
+    // Código: sempre em maiúsculas e sem espaços
+    campoCodigo.oninput = () => {
+      campoCodigo.value = campoCodigo.value.toUpperCase().replace(/\s+/g, '');
+    };
+
+    const mostrarStatus = (texto, erro = false) => {
+      status.textContent = texto;
+      status.classList.toggle('erro', erro);
+    };
+    // Voltando de uma queda de conexão: já deixa o código preenchido
+    try {
+      const reentrar = sessionStorage.getItem('hackraft-reentrar');
+      if (reentrar !== null) {
+        sessionStorage.removeItem('hackraft-reentrar');
+        if (reentrar) {
+          campoCodigo.value = reentrar.toUpperCase().replace(/\s+/g, '');
+          mostrarStatus('A conexão caiu. Clique em Entrar para voltar.');
+        }
+      }
+    } catch (e) { /* sem sessionStorage: segue normal */ }
+    const ocupar = (sim) => {
+      for (const b of [btnCriar, btnEntrar, btnNovo]) b.disabled = sim;
+      campoApelido.disabled = sim;
+      campoCodigo.disabled = sim;
+    };
+
+    // Roda a ação (que devolve uma Promise) e trata o resultado
+    const executar = async (acao) => {
+      const apelido = this._normalizarApelido(campoApelido.value);
+      campoApelido.value = apelido;
+      this._salvarApelido(apelido);
       som.iniciar();
+      mostrarStatus('Conectando...');
+      ocupar(true);
+      try {
+        await acao(apelido);
+      } catch (erro) {
+        mostrarStatus((erro && erro.message) || 'Não foi possível conectar.', true);
+        ocupar(false);
+        return;
+      }
+      // Deu certo: esconde a tela inicial e prende o mouse
+      ocupar(false);
+      mostrarStatus('');
       this.inicialAberta = false;
       this.elInicial.classList.add('oculto');
-      if (aoJogar) aoJogar();
       this.travarMouse();
     };
-    this._confirmarDoisCliques($('btn-novo-inicial'), () => {
+
+    btnCriar.onclick = (e) => {
+      e.currentTarget.blur(); // o Espaço do jogo não deve "clicar" no botão
+      if (aoCriarSala) executar((apelido) => aoCriarSala(apelido));
+    };
+    const entrar = () => {
+      const codigo = campoCodigo.value.toUpperCase().replace(/\s+/g, '');
+      if (codigo.length !== 5) {
+        mostrarStatus('Digite o código de 5 letras', true);
+        return;
+      }
+      if (aoEntrar) executar((apelido) => aoEntrar(apelido, codigo));
+    };
+    btnEntrar.onclick = (e) => { e.currentTarget.blur(); entrar(); };
+    campoCodigo.onkeydown = (e) => { if (e.key === 'Enter') entrar(); };
+
+    this._confirmarDoisCliques(btnNovo, () => {
       if (this.aoNovoMundo) this.aoNovoMundo();
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Apelido (salvo no navegador)
+  // ------------------------------------------------------------------
+  _normalizarApelido(texto) {
+    const t = String(texto || '').trim().slice(0, 16);
+    return t || 'Jogador';
+  }
+
+  _lerApelidoSalvo() {
+    try {
+      const salvo = localStorage.getItem('hackraft-apelido');
+      if (salvo) return this._normalizarApelido(salvo);
+    } catch (e) { /* sem localStorage: segue sem apelido salvo */ }
+    return '';
+  }
+
+  _salvarApelido(apelido) {
+    try { localStorage.setItem('hackraft-apelido', apelido); } catch (e) { /* ignora */ }
+  }
+
+  // ------------------------------------------------------------------
+  // Sala (multiplayer)
+  // ------------------------------------------------------------------
+  mostrarSala(codigo) {
+    this.codigoSala = codigo || null;
+    if (!this.codigoSala) this.jogadoresOnline = 0;
+    $('codigo-sala').textContent = this.codigoSala || '';
+    $('area-sala').classList.toggle('oculto', !this.codigoSala);
+    this._atualizarSelo();
+  }
+
+  atualizarJogadores(lista) {
+    lista = lista || [];
+    this.jogadoresOnline = lista.length;
+    const ul = $('lista-jogadores');
+    ul.innerHTML = '';
+    for (const j of lista) {
+      const li = document.createElement('li');
+      li.textContent = j.apelido; // textContent: apelido nunca vira HTML
+      ul.appendChild(li);
+    }
+    this._atualizarSelo();
+  }
+
+  _atualizarSelo() {
+    const selo = $('selo-sala');
+    if (!this.codigoSala) {
+      selo.classList.add('oculto');
+      return;
+    }
+    const n = this.jogadoresOnline || 1;
+    selo.textContent = 'Sala: ' + this.codigoSala + ' · ' + n + (n === 1 ? ' jogador' : ' jogadores');
+    selo.classList.remove('oculto');
   }
 
   mostrarCarregando(texto) {
@@ -448,6 +571,15 @@ export class InterfaceJogo {
       this.travarMouse();
     };
 
+    $('btn-copiar').onclick = async (e) => {
+      const botao = e.currentTarget;
+      botao.blur();
+      try {
+        await navigator.clipboard.writeText(this.codigoSala || '');
+        this.mostrarMensagem('Código copiado!');
+      } catch (erro) { /* sem permissão: o código continua visível para copiar à mão */ }
+    };
+
     $('volume').addEventListener('input', (e) => {
       som.definirVolume(Number(e.target.value) / 100);
     });
@@ -469,6 +601,8 @@ export class InterfaceJogo {
   _ligarEventos() {
     document.addEventListener('pointerlockchange', () => {
       if (this.mouseTravado) {
+        // Tira o foco de qualquer campo/controle, para as teclas voltarem ao jogo
+        if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
         this._esconderPausa();
       } else if (!this.inventarioAberto && !this.inicialAberta &&
                  this.elCarregando.classList.contains('oculto')) {
@@ -485,6 +619,10 @@ export class InterfaceJogo {
     }, { passive: true });
 
     window.addEventListener('keydown', (e) => {
+      // Digitando num campo de texto: nenhum atalho do jogo vale
+      const alvo = e.target;
+      if (alvo && ((alvo.tagName === 'INPUT' && alvo.type !== 'range') || alvo.tagName === 'TEXTAREA')) return;
+
       // Durante o carregamento, E e 1-9 são ignoradas
       const carregando = !this.elCarregando.classList.contains('oculto');
       const emJogo = !this.inicialAberta && !this.pausaAberta && !carregando;

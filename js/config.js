@@ -62,6 +62,17 @@ export const CONFIG = {
   // ----- Salvamento -----
   CHAVE_SAVE: 'hackraft-save-v1',
   AUTOSAVE_SEGUNDOS: 30,
+
+  // ----- Multiplayer -----
+  MAX_JOGADORES: 8,              // máximo de jogadores numa sala (contando o anfitrião)
+  ENVIOS_POSICAO_POR_SEGUNDO: 15, // quantas vezes por segundo a posição é enviada
+  INTERVALO_HORA_S: 5,           // a cada quantos segundos o anfitrião manda a hora do dia
+  TOLERANCIA_HORA_S: 1,          // o cliente só corrige a hora se a diferença passar disso
+  INTERVALO_ESTADO_S: 10,        // a cada quantos segundos o cliente manda inventário e posição para o anfitrião guardar
+  TEMPO_LIMITE_CONEXAO_S: 10,    // tempo máximo esperando o servidor ou a sala responder
+  TEMPO_SEM_RESPOSTA_S: 20,      // sem nenhuma mensagem por esse tempo = a conexão caiu (aba travada, internet caiu)
+  MODS_POR_LOTE: 1000,           // blocos mudados por mensagem ao mandar o mundo para quem entra (1000 = 16 KB, cabe numa mensagem só)
+  ESPERA_AO_CAIR_S: 3,           // segundos mostrando o aviso antes de voltar ao início (cliente)
 };
 
 // Duração total de um dia completo (dia + noite), em segundos
