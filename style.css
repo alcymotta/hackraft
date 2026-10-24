@@ -103,7 +103,7 @@ img { image-rendering: pixelated; }
 #chat {
   position: fixed;
   left: 10px;
-  bottom: 118px;              /* acima da hotbar e dos corações */
+  bottom: 150px;              /* acima da hotbar, da barra de XP e das 2 fileiras de corações */
   width: min(520px, 46vw);
   z-index: 9;
   pointer-events: none;

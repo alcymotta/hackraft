@@ -44,6 +44,10 @@ export const B = {
   MINERIO_DIAMANTE: 30,
   MINERIO_DRACONIO: 31,
   FORJA: 32,
+  // Alfaiate, fogueira e ovo de dragão (Fases 10 e 11)
+  MESA_ALFAIATE: 33,
+  FOGUEIRA: 34,
+  OVO_DRAGAO: 35,
 };
 
 // BLOCOS[id] devolve a descrição completa do bloco
@@ -252,6 +256,25 @@ registrar(B.FORJA, {
   texturas: { topo: 'forja_topo', lado: 'forja_lado', baixo: 'forja_lado' },
   texturaFrente: 'forja_frente',
   interativo: true, dureza: 2, som: 'pedra', item: 'forja',
+});
+
+// Mesa do alfaiate (Fase 10): topo com tecido, tesoura e fita; lados de madeira com carretéis
+registrar(B.MESA_ALFAIATE, {
+  nome: 'mesa_alfaiate', rotulo: 'Mesa do alfaiate',
+  texturas: { topo: 'alfaiate_topo', lado: 'alfaiate_lado', baixo: 'alfaiate_lado' },
+  texturaFrente: 'alfaiate_frente',
+  interativo: true, dureza: 1, som: 'madeira', item: 'mesa_alfaiate',
+});
+// Fogueira: por enquanto um cubo opaco simples (o mundo só desenha cubo, porta e tocha)
+registrar(B.FOGUEIRA, {
+  nome: 'fogueira', rotulo: 'Fogueira',
+  texturas: { topo: 'fogueira_topo', lado: 'fogueira_lado', baixo: 'fogueira_lado' },
+  luz: 13, brilho: true, dureza: 0.5, som: 'madeira', item: 'fogueira',
+});
+// Ovo de dragão (Fase 11): choca perto de uma fogueira
+registrar(B.OVO_DRAGAO, {
+  nome: 'ovo_dragao', rotulo: 'Ovo de dragão', texturas: igual('ovo_dragao'),
+  luz: 4, brilho: true, dureza: 1, som: 'pedra', item: 'ovo_dragao',
 });
 
 /** Devolve o id do bloco a partir do nome (ou undefined se não existir) */

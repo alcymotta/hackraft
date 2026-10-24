@@ -266,6 +266,31 @@ export function forjar(inventario, receita) {
 }
 
 // ---------------------------------------------------------------------
+// Especiais: itens únicos feitos na forja. Para criar mais (Fase 11...),
+// é só acrescentar uma linha na lista abaixo.
+// ---------------------------------------------------------------------
+export const RECEITAS_ESPECIAIS = [
+  {
+    id: 'especial_maca_dourada',
+    resultado: 'maca_dourada', qtd: 1,
+    descricao: 'Usada para domar cavalos',
+    entradas: [{ item: 'maca', qtd: 1 }, { item: 'barra_ouro', qtd: 4 }],
+  },
+];
+
+/** Faz um item especial. Devolve { ok, motivo } */
+export function forjarEspecial(inventario, receita) {
+  if (!receita || !obterItem(receita.resultado)) return { ok: false, motivo: 'Esse item ainda não existe.' };
+  const lista = faltando(inventario, receita.entradas, 1);
+  if (lista.length > 0) return { ok: false, motivo: motivoFalta(lista) };
+  const qtd = receita.qtd ?? 1;
+  if (!trocar(inventario, receita.entradas, [{ item: receita.resultado, qtd }], 1)) {
+    return { ok: false, motivo: 'Seu inventário está cheio.' };
+  }
+  return { ok: true, motivo: `Você fez: ${textoQuantidade(receita.resultado, qtd)}!` };
+}
+
+// ---------------------------------------------------------------------
 // Melhorar (+1 a +5)
 // ---------------------------------------------------------------------
 
@@ -489,7 +514,7 @@ export class TelaForja {
     // Clicar fora do painel também fecha
     raiz.addEventListener('mousedown', (e) => { if (e.target === raiz) this.fechar(true); });
 
-    for (const [id, texto] of [['fundir', 'Fundir'], ['forjar', 'Forjar'], ['melhorar', 'Melhorar']]) {
+    for (const [id, texto] of [['fundir', 'Fundir'], ['forjar', 'Forjar'], ['melhorar', 'Melhorar'], ['especiais', 'Especiais']]) {
       const b = document.createElement('button');
       b.className = 'forja-aba';
       b.textContent = texto;
@@ -589,6 +614,7 @@ export class TelaForja {
     this.elCorpo.textContent = '';
     if (this._aba === 'fundir') this._desenharFundir();
     else if (this._aba === 'forjar') this._desenharForjar();
+    else if (this._aba === 'especiais') this._desenharEspeciais();
     else this._desenharMelhorar();
     this.elMsg.textContent = this._msg.texto;
     this.elMsg.className = 'forja-msg ' + this._msg.tipo;
@@ -618,6 +644,36 @@ export class TelaForja {
       this.elCorpo.appendChild(linha);
     }
     if (!this.elCorpo.firstChild) this.elCorpo.appendChild(this._el('p', 'forja-vazia', 'Nenhuma receita disponível.'));
+  }
+
+  _desenharEspeciais() {
+    for (const r of RECEITAS_ESPECIAIS) {
+      if (!obterItem(r.resultado)) continue;
+      const linha = this._el('div', 'forja-linha');
+      for (const { item, qtd } of r.entradas) {
+        linha.appendChild(this._ingrediente(item, qtd, contarItem(this.inventario, item)));
+      }
+      linha.appendChild(this._el('span', 'forja-seta', '→'));
+      linha.appendChild(this._icone(r.resultado));
+      const info = this._el('span');
+      info.appendChild(this._el('b', '', rotuloDoItem(r.resultado)));
+      info.appendChild(this._el('small', '', ' ' + (r.descricao ?? '')));
+      info.style.display = 'flex';
+      info.style.flexDirection = 'column';
+      linha.appendChild(info);
+      linha.appendChild(this._el('span', 'forja-espaco'));
+      const b = this._el('button', 'forja-btn', 'Fazer');
+      b.disabled = faltando(this.inventario, r.entradas, 1).length > 0;
+      b.addEventListener('click', () => this._acaoEspecial(r));
+      linha.appendChild(b);
+      this.elCorpo.appendChild(linha);
+    }
+    if (!this.elCorpo.firstChild) this.elCorpo.appendChild(this._el('p', 'forja-vazia', 'Nenhum item especial ainda.'));
+  }
+
+  _acaoEspecial(receita) {
+    const r = forjarEspecial(this.inventario, receita);
+    this._depoisDaAcao(r, r.ok ? receita.resultado : null);
   }
 
   _desenharForjar() {

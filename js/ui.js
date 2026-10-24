@@ -44,7 +44,7 @@ const CORES_BASE_PADRAO = {
 const COR_TIPO = { roupa: '#c58bff', armadura: '#6ab4ff', arma: '#ff6b6b', acessorio: '#ffd35a' };
 
 // ----- Vida (corações) -----
-const CORACOES = 10;                 // quantos corações aparecem (cada um vale 2 de vida)
+const CORACOES = 20;                 // quantos corações existem no máximo (cada um vale 2 de vida; 10 por fileira)
 const VIDA_BAIXA = 4;                // com esta vida ou menos os corações tremem
 const TEMPO_DANO_MS = 400;           // tempo da vinheta vermelha
 const TEMPO_PISCAR_MS = 200;         // tempo dos corações brancos
@@ -249,6 +249,7 @@ export class InterfaceJogo {
     this._montarPaletas();
     this._montarControles();
     this._montarCoracoes();
+    this._criarElementosFase8();
     this._ligarBotoes();
     this._ligarEventos();
 
@@ -695,9 +696,16 @@ export class InterfaceJogo {
     if (vida === this.vidaMostrada && max === this.vidaMaxMostrada) return;
     this.vidaMostrada = vida;
     this.vidaMaxMostrada = max;
+    const visiveis = Math.min(CORACOES, Math.max(1, Math.ceil(max / 2)));
     for (let i = 0; i < CORACOES; i++) {
       const tipo = vida >= 2 * i + 2 ? 'cheio' : (vida >= 2 * i + 1 ? 'meio' : 'vazio');
       const img = this.coracoes[i];
+      // Corações além da vida máxima ficam escondidos (a vida máxima sobe com o nível)
+      const mostrar = i < visiveis;
+      if (img.dataset.oculto !== (mostrar ? '0' : '1')) {
+        img.dataset.oculto = mostrar ? '0' : '1';
+        img.style.display = mostrar ? '' : 'none';
+      }
       if (img.dataset.tipo !== tipo) {
         img.dataset.tipo = tipo;
         img.src = this.imagensCoracao[tipo];
@@ -1745,6 +1753,150 @@ export class InterfaceJogo {
     el.textContent = '+' + qtd + ' XP';
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 1500);
+  }
+
+  // ------------------------------------------------------------------
+  // Fase 8: barra de XP, efeitos (veneno, lento, fogo) e barra de chefão
+  // ------------------------------------------------------------------
+
+  /** Desenha um ícone 16x16 de efeito e devolve o dataURL */
+  _iconeEfeito(tipo) {
+    const c = document.createElement('canvas');
+    c.width = 16; c.height = 16;
+    const g = c.getContext('2d');
+    const px = (cor, x, y, w = 1, h = 1) => { g.fillStyle = cor; g.fillRect(x, y, w, h); };
+    if (tipo === 'veneno') {
+      // gota verde
+      px('#1d4a12', 7, 1, 2, 2); px('#1d4a12', 6, 3, 4, 2); px('#1d4a12', 4, 5, 8, 8); px('#1d4a12', 5, 13, 6, 2);
+      px('#5bd13a', 7, 2, 2, 2); px('#5bd13a', 6, 4, 4, 2); px('#5bd13a', 5, 6, 6, 7); px('#8dff6a', 6, 7, 2, 3);
+    } else if (tipo === 'lento') {
+      // floco de neve azul
+      px('#1b3b7a', 7, 1, 2, 14); px('#1b3b7a', 1, 7, 14, 2); px('#1b3b7a', 3, 3, 2, 2); px('#1b3b7a', 11, 3, 2, 2);
+      px('#1b3b7a', 3, 11, 2, 2); px('#1b3b7a', 11, 11, 2, 2);
+      px('#7ab8ff', 7, 2, 2, 12); px('#7ab8ff', 2, 7, 12, 2); px('#bfe0ff', 7, 7, 2, 2);
+    } else {
+      // chama
+      px('#7a1f00', 7, 1, 2, 3); px('#7a1f00', 5, 4, 6, 3); px('#7a1f00', 4, 7, 8, 6); px('#7a1f00', 5, 13, 6, 2);
+      px('#ff7a1a', 7, 3, 2, 3); px('#ff7a1a', 6, 6, 4, 3); px('#ff7a1a', 5, 8, 6, 5);
+      px('#ffd23a', 6, 10, 4, 3); px('#fff2a0', 7, 11, 2, 2);
+    }
+    return c.toDataURL();
+  }
+
+  /** Cria (uma vez) a barra de XP, os ícones de efeitos, as telas de efeito e a barra de chefão */
+  _criarElementosFase8() {
+    const estilo = document.createElement('style');
+    estilo.textContent = `
+#vida { position: relative; height: auto !important; width: 238px; flex-wrap: wrap-reverse; align-content: flex-start; }
+#vida.veneno .coracao { filter: hue-rotate(95deg) saturate(0.9) brightness(1.05); }
+#vida.veneno.piscando .coracao { filter: brightness(4) saturate(0); }
+#efeitos-hud { position: absolute; left: 100%; bottom: 0; margin-left: 8px; display: flex; gap: 3px; }
+#efeitos-hud img { width: 22px; height: 22px; image-rendering: pixelated; }
+#barra-xp { position: relative; width: calc(var(--tam-espaco) * 9 + 14px); height: 12px; margin-bottom: 4px;
+  background: rgba(0, 0, 0, 0.6); border: 2px solid #000; box-sizing: border-box; }
+#barra-xp .xp-enchimento { height: 100%; width: 0%; background: linear-gradient(#8dff6a, #3fae44); }
+#barra-xp .xp-nivel { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center;
+  font-family: var(--fonte-pixel); font-size: 9px; line-height: 9px; color: #d6ffc4;
+  text-shadow: 1px 1px 0 #1f3f1f, -1px -1px 0 #1f3f1f, 1px -1px 0 #1f3f1f, -1px 1px 0 #1f3f1f; }
+.tela-efeito { position: fixed; inset: 0; pointer-events: none; z-index: 5; display: none; }
+#efeito-lento { box-shadow: inset 0 0 130px 30px rgba(60, 120, 255, 0.38); background: rgba(80, 140, 255, 0.07); }
+#efeito-fogo { background: linear-gradient(to top, rgba(255, 90, 0, 0.5), rgba(255, 90, 0, 0) 32%);
+  box-shadow: inset 0 0 100px 12px rgba(255, 110, 0, 0.45); animation: chama-tela 0.35s steps(2) infinite alternate; }
+@keyframes chama-tela { from { opacity: 0.75; } to { opacity: 1; } }
+#barra-chefao { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); width: min(520px, 70vw);
+  z-index: 7; pointer-events: none; text-align: center; }
+#barra-chefao.oculto { display: none; }
+#barra-chefao .chefao-nome { font-family: var(--fonte-pixel); font-size: 14px; color: #f0d8ff; margin-bottom: 6px;
+  text-shadow: 2px 2px 0 #2a0a3a; }
+#barra-chefao .chefao-caixa { height: 18px; background: rgba(0, 0, 0, 0.7); border: 3px solid #000; box-sizing: border-box; }
+#barra-chefao .chefao-vida { height: 100%; width: 100%; background: linear-gradient(#d04aff, #8a1ab0 55%, #c01818);
+  transition: width 0.25s ease-out; }
+`;
+    document.head.appendChild(estilo);
+
+    // Barra de XP: entre os corações e a hotbar
+    const xp = document.createElement('div');
+    xp.id = 'barra-xp';
+    xp.innerHTML = '<div class="xp-enchimento"></div><div class="xp-nivel">1</div>';
+    this.elHotbar.parentNode.insertBefore(xp, this.elHotbar);
+    this.elXp = xp;
+    this.elXpEnchimento = xp.querySelector('.xp-enchimento');
+    this.elXpNivel = xp.querySelector('.xp-nivel');
+    this.xpNivelMostrado = 1;
+    this.xpFracaoMostrada = 0;
+
+    // Ícones dos efeitos ativos, ao lado dos corações
+    const efeitos = document.createElement('div');
+    efeitos.id = 'efeitos-hud';
+    this.elVida.appendChild(efeitos);
+    this.elEfeitos = efeitos;
+    this.iconesEfeito = {};
+    for (const tipo of ['veneno', 'lento', 'fogo']) {
+      const img = document.createElement('img');
+      img.src = this._iconeEfeito(tipo);
+      img.draggable = false;
+      img.title = { veneno: 'Envenenado', lento: 'Lento', fogo: 'Pegando fogo' }[tipo];
+      img.style.display = 'none';
+      efeitos.appendChild(img);
+      this.iconesEfeito[tipo] = img;
+    }
+
+    // Telas coloridas dos efeitos lento e fogo
+    this.elTelaLento = document.createElement('div');
+    this.elTelaLento.id = 'efeito-lento';
+    this.elTelaLento.className = 'tela-efeito';
+    this.elTelaFogo = document.createElement('div');
+    this.elTelaFogo.id = 'efeito-fogo';
+    this.elTelaFogo.className = 'tela-efeito';
+    document.body.appendChild(this.elTelaLento);
+    document.body.appendChild(this.elTelaFogo);
+
+    // Barra de chefão (topo da tela)
+    const chefao = document.createElement('div');
+    chefao.id = 'barra-chefao';
+    chefao.className = 'oculto';
+    chefao.innerHTML = '<div class="chefao-nome"></div><div class="chefao-caixa"><div class="chefao-vida"></div></div>';
+    document.body.appendChild(chefao);
+    this.elChefao = chefao;
+    this.elChefaoNome = chefao.querySelector('.chefao-nome');
+    this.elChefaoVida = chefao.querySelector('.chefao-vida');
+  }
+
+  /** Barra de XP verde: `nivel` aparece no meio e `fracao` (0 a 1) enche a barra */
+  atualizarXp(nivel, fracao = 0) {
+    const f = Math.max(0, Math.min(1, Number.isFinite(fracao) ? fracao : 0));
+    if (nivel !== this.xpNivelMostrado) {
+      this.xpNivelMostrado = nivel;
+      this.elXpNivel.textContent = String(nivel);
+    }
+    if (Math.abs(f - this.xpFracaoMostrada) > 0.002) {
+      this.xpFracaoMostrada = f;
+      this.elXpEnchimento.style.width = (f * 100).toFixed(1) + '%';
+    }
+  }
+
+  /** Mostra (true) ou esconde cada efeito: ícone ao lado dos corações, corações verdes e telas */
+  definirEfeitos(veneno, lento, fogo) {
+    this.iconesEfeito.veneno.style.display = veneno ? '' : 'none';
+    this.iconesEfeito.lento.style.display = lento ? '' : 'none';
+    this.iconesEfeito.fogo.style.display = fogo ? '' : 'none';
+    this.elVida.classList.toggle('veneno', !!veneno);
+    this.elTelaLento.style.display = lento ? 'block' : 'none';
+    this.elTelaFogo.style.display = fogo ? 'block' : 'none';
+  }
+
+  /** Barra grande de chefão no topo. `frac` de 0 a 1 mostra; null (ou nome vazio) esconde. */
+  mostrarBarraChefao(nome, frac) {
+    if (frac === null || frac === undefined || !Number.isFinite(frac)) {
+      this.elChefao.classList.add('oculto');
+      return;
+    }
+    if (nome !== this.chefaoNomeMostrado) {
+      this.chefaoNomeMostrado = nome;
+      this.elChefaoNome.textContent = nome || '';
+    }
+    this.elChefao.classList.remove('oculto');
+    this.elChefaoVida.style.width = (Math.max(0, Math.min(1, frac)) * 100).toFixed(1) + '%';
   }
 
   definirSubmerso(sim) {

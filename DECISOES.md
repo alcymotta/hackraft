@@ -77,3 +77,5 @@ Desde a Fase 3, o Claude segue direto até a Fase 11 sem parar a cada fase, como
 - **Fogueira em vez de lava:** como o mundo não tem lava, o ovo de dragão é chocado perto de uma fogueira por 1 dia de jogo (5 minutos).
 - **Aranha gigante:** precisa estar enfraquecida (menos de 30% de vida) para tentar domar, como pedido.
 - **Sela obrigatória:** toda montaria precisa de sela para montar, e a sela é feita de couro de orc.
+- **Veneno não mata:** o veneno para em 1 coração, como no Minecraft. O fogo e os ataques podem matar.
+- **XP e níveis antes dos chefões:** cada nível dá +1 coração (até 20) e +1 de força no golpe.

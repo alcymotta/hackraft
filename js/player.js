@@ -12,6 +12,10 @@
 // Fase 5: vida (machucar, curar, morrer), dano de queda e os poderes dos
 // cristais (velocidade, pulo, voar, quebra instantânea, ataque). Os poderes
 // vêm do objeto `poderes` (ligado depois, com `jogador.poderes = poderes`).
+//
+// Fases 8 a 10: XP e níveis (mais vida e força), efeitos (veneno, lento e
+// fogo), a forja (botão direito no bloco FORJA) e os bônus das roupas
+// (pulo, queda segura, nado e duração dos poderes).
 // =====================================================================
 
 import * as THREE from 'three';
@@ -46,7 +50,10 @@ export class Jogador {
    *                Põe um item no chão (o main liga isso à rede, porque no
    *                multiplayer quem cria o item é o anfitrião).
    */
-  constructor({ camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento = null, soltarItem = null, particulas = null, poderes = null, baus = null }) {
+  constructor({ camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento = null, soltarItem = null, particulas = null, poderes = null, baus = null, telaForja = null, telaAlfaiate = null }) {
+    this.telaAlfaiate = telaAlfaiate;  // TelaAlfaiate (Fase 10): abre ao clicar numa MESA_ALFAIATE
+    this.obterAparenciaBase = null;    // o main liga: () => cores da skin base (prévia da mesa)
+    this.telaForja = telaForja;        // TelaForja (Fase 9): abre ao clicar numa FORJA
     this.baus = baus;                  // Baus (Fase 6): conteúdo dos baús
     this.bauAberto = null;             // { x, y, z } do baú com a tela aberta (ou null)
     this._abrindoBau = false;          // esperando o anfitrião responder?
@@ -75,7 +82,24 @@ export class Jogador {
 
     // Bônus do equipamento, guardados aqui (o loop não pede um objeto
     // novo ao equipamento a cada quadro). Atualizados quando ele muda.
-    this.bonus = { velocidade: 0, defesa: 0, silencioso: false };
+    // pulo, queda segura, nado e duração dos poderes vêm das roupas (Fase 10);
+    // `resistenciaVeneno` vem da armadura de escamas de hidra (Fase 9).
+    this.bonus = {
+      velocidade: 0, defesa: 0, silencioso: false,
+      pulo: 0, quedaSegura: 0, nado: 0, duracaoPoderes: 0, resistenciaVeneno: false,
+    };
+
+    // XP e nível (Fase 8): o nível sai do XP total
+    this._xp = 0;
+    this._nivel = 1;
+    this._xpNoNivel = 0;               // XP já ganho dentro do nível atual
+    this._xpParaProximo = CONFIG.XP_BASE;
+
+    // Efeitos (Fase 8): segundos restantes de cada um
+    this.efeitos = { veneno: 0, lento: 0, fogo: 0 };
+    this._tickEfeito = { veneno: 0, fogo: 0 };   // contagem até o próximo 1 de dano
+    this._tempoParticulasEfeito = 0;
+    this._mascaraEfeitos = 0;          // quais efeitos a UI está mostrando
     this._contPassos = 0;
     if (equipamento) {
       this.atualizarBonus();
@@ -109,7 +133,6 @@ export class Jogador {
     this._esperaGolpe = 0;             // tempo até poder bater de novo
     this._tempoComendo = 0;            // há quanto tempo está comendo
     this._comendoItem = null;          // nome da comida que está sendo comida
-    this.xpTotal = 0;                  // XP ganho matando mobs (a Fase 8 usa)
 
     // Passos e submersão
     this.distPasso = 0;
@@ -157,6 +180,186 @@ export class Jogador {
     this.bonus.velocidade = Math.max(-0.9, Math.min(2, vel)); // limites de segurança
     this.bonus.defesa = b && Number.isFinite(b.defesa) ? b.defesa : 0;
     this.bonus.silencioso = !!(b && b.silencioso);
+
+    // Bônus extras da roupa (Fase 10), lidos direto da definição do item
+    const eq = this.equipamento;
+    const rb = eq ? (obterItem(eq.espacos.roupa)?.bonus || null) : null;
+    const num = (v) => (Number.isFinite(v) && v > 0 ? Math.min(v, 5) : 0);
+    this.bonus.pulo = rb ? num(rb.pulo) : 0;
+    this.bonus.quedaSegura = rb ? num(rb.quedaSegura) : 0;
+    this.bonus.nado = rb ? num(rb.nado) : 0;
+    this.bonus.duracaoPoderes = rb ? num(rb.duracaoPoderes) : 0;
+    // Resistência a veneno: qualquer peça de armadura com `resistencia: 'veneno'`
+    let resiste = false;
+    if (eq) {
+      for (const parte of ['capacete', 'peitoral', 'calca', 'botas']) {
+        if (obterItem(eq.espacos[parte])?.resistencia === 'veneno') resiste = true;
+      }
+    }
+    this.bonus.resistenciaVeneno = resiste;
+    if (resiste && this.efeitos && this.efeitos.veneno > 0) {
+      this.efeitos.veneno = 0;
+      this._atualizarMascaraEfeitos();
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // XP e níveis (Fase 8)
+  // ------------------------------------------------------------------
+
+  /** XP total (soma de tudo que já ganhou). Mudar o valor recalcula o nível. */
+  get xpTotal() { return this._xp; }
+  set xpTotal(v) {
+    const antes = this._nivel;
+    this._definirXp(v);
+    if (this._nivel > antes) this._subiuDeNivel();
+    this.atualizarHud();
+  }
+
+  /** Nível atual (começa em 1) */
+  get nivel() { return this._nivel; }
+
+  /** Vida máxima: 20 no nível 1, +2 por nível, até 40 */
+  get vidaMax() {
+    return Math.min(CONFIG.VIDA_MAX_NIVEIS, CONFIG.VIDA_MAX + CONFIG.VIDA_POR_NIVEL * (this._nivel - 1));
+  }
+
+  /** XP necessário para sair do nível `n` para o próximo */
+  static xpParaSubir(n) {
+    return Math.floor(CONFIG.XP_BASE * Math.pow(n, CONFIG.XP_EXPOENTE));
+  }
+
+  /** Soma XP (pode subir de nível) */
+  ganharXp(qtd) {
+    if (!Number.isFinite(qtd) || qtd <= 0) return;
+    this.xpTotal = this._xp + Math.floor(qtd);
+  }
+
+  /** Define o XP total sem comemorar (usado ao carregar o jogo) e recalcula o nível */
+  _definirXp(v) {
+    this._xp = Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+    let n = 1;
+    let resto = this._xp;
+    while (n < 999) {
+      const precisa = Jogador.xpParaSubir(n);
+      if (resto < precisa) break;
+      resto -= precisa;
+      n++;
+    }
+    this._nivel = n;
+    this._xpNoNivel = resto;
+    this._xpParaProximo = Jogador.xpParaSubir(n);
+  }
+
+  /** Redesenha corações e barra de XP (o main chama ao começar) */
+  atualizarHud() {
+    if (this.ui && this.ui.atualizarXp) this.ui.atualizarXp(this._nivel, this._xpNoNivel / this._xpParaProximo);
+    if (this.ui && this.ui.atualizarVida) this.ui.atualizarVida(this.vida, this.vidaMax);
+  }
+
+  /** Festa de subir de nível: partículas douradas, som, mensagem e um pouco de vida */
+  _subiuDeNivel() {
+    const p = this.posicao;
+    // Já no teto de 40 de vida? Então este nível só deu força
+    const teto = CONFIG.VIDA_MAX + CONFIG.VIDA_POR_NIVEL * (this._nivel - 1) > CONFIG.VIDA_MAX_NIVEIS;
+    if (this.particulas && typeof this.particulas.emitir === 'function') {
+      this.particulas.emitir({
+        x: p.x, y: p.y + 1, z: p.z, qtd: 50, cores: ['#ffd23a', '#fff2a0', '#ffb300'],
+        velocidade: 3.5, espalhar: 0.6, gravidade: -2, vida: 1.2, tamanho: 0.12, aditivo: true,
+      });
+    }
+    try { if (this.som && typeof this.som.poder === 'function') this.som.poder('nivel'); } catch (e) { /* o som é opcional */ }
+    this.ui.mostrarMensagem('Nível ' + this._nivel + '! (' + (teto ? '' : '+1 coração, ') + '+1 força)');
+    this.curar(CONFIG.CURA_AO_SUBIR_NIVEL);
+  }
+
+  // ------------------------------------------------------------------
+  // Efeitos: veneno, lento e fogo (Fase 8)
+  // ------------------------------------------------------------------
+
+  /**
+   * Aplica um efeito por `segundos` (fica com o maior tempo entre o que já
+   * tinha e o novo). Devolve true se o efeito pegou. O veneno não pega com a
+   * armadura de escamas de hidra, e o fogo não pega dentro da água.
+   */
+  aplicarEfeito(tipo, segundos) {
+    if (this.morto || !(tipo in this.efeitos)) return false;
+    const padrao = { veneno: CONFIG.EFEITO_VENENO_PADRAO_S, lento: CONFIG.EFEITO_LENTO_PADRAO_S, fogo: CONFIG.EFEITO_FOGO_PADRAO_S };
+    const seg = Number.isFinite(segundos) && segundos > 0 ? Math.min(segundos, 60) : padrao[tipo];
+    if (tipo === 'veneno' && this.bonus.resistenciaVeneno) return false;
+    if (tipo === 'fogo' && this.naAgua) return false;
+    if (this.efeitos[tipo] <= 0 && tipo !== 'lento') this._tickEfeito[tipo] = 0;
+    this.efeitos[tipo] = Math.max(this.efeitos[tipo], seg);
+    this._atualizarMascaraEfeitos();
+    return true;
+  }
+
+  /** Tira todos os efeitos (ao morrer) */
+  limparEfeitos() {
+    this.efeitos.veneno = this.efeitos.lento = this.efeitos.fogo = 0;
+    this._atualizarMascaraEfeitos();
+  }
+
+  /** Avisa a UI quando o conjunto de efeitos ativos muda (ícones, corações verdes, telas) */
+  _atualizarMascaraEfeitos() {
+    const e = this.efeitos;
+    const m = (e.veneno > 0 ? 1 : 0) | (e.lento > 0 ? 2 : 0) | (e.fogo > 0 ? 4 : 0);
+    if (m === this._mascaraEfeitos) return;
+    this._mascaraEfeitos = m;
+    if (this.ui.definirEfeitos) this.ui.definirEfeitos(!!(m & 1), !!(m & 2), !!(m & 4));
+  }
+
+  /** Conta o tempo dos efeitos, dá o dano de 1 por segundo e solta partículas */
+  _atualizarEfeitos(dt) {
+    const e = this.efeitos;
+    if (this._mascaraEfeitos === 0 && e.veneno <= 0 && e.lento <= 0 && e.fogo <= 0) return;
+    if (this.morto) { this.limparEfeitos(); return; }
+    // Entrar na água apaga o fogo
+    if (e.fogo > 0 && this.naAgua) {
+      e.fogo = 0;
+      if (this.particulas) {
+        this.particulas.emitir({
+          x: this.posicao.x, y: this.posicao.y + 1, z: this.posicao.z, qtd: 12, cor: '#cccccc',
+          velocidade: 1, espalhar: 0.4, gravidade: -1, vida: 0.8, tamanho: 0.12, aditivo: false,
+        });
+      }
+    }
+    const intervalo = CONFIG.EFEITO_DANO_INTERVALO_S;
+    for (const tipo of ['veneno', 'fogo']) {
+      if (e[tipo] <= 0) continue;
+      e[tipo] -= dt;
+      this._tickEfeito[tipo] += dt;
+      if (this._tickEfeito[tipo] >= intervalo) {
+        this._tickEfeito[tipo] -= intervalo;
+        // O veneno nunca mata: para em 1 de vida (como no Minecraft). O fogo pode matar.
+        if (tipo !== 'veneno' || this.vida > 1) this.machucar(1, tipo);
+        if (this.morto) return; // _morrer já limpou os efeitos
+      }
+    }
+    if (e.lento > 0) e.lento -= dt;
+    if (e.veneno < 0) e.veneno = 0;
+    if (e.fogo < 0) e.fogo = 0;
+    if (e.lento < 0) e.lento = 0;
+
+    // Partículas: ~6 vezes por segundo
+    this._tempoParticulasEfeito += dt;
+    if (this._tempoParticulasEfeito >= 0.16 && this.particulas) {
+      this._tempoParticulasEfeito = 0;
+      const p = this.posicao;
+      if (e.veneno > 0) {
+        this.particulas.emitir({
+          x: p.x, y: p.y + 1.2, z: p.z, qtd: 2, cores: ['#5bd13a', '#8dff6a'],
+          velocidade: 0.5, espalhar: 0.35, gravidade: -1, vida: 0.8, tamanho: 0.09, aditivo: true,
+        });
+      }
+      if (e.fogo > 0) {
+        this.particulas.emitir({
+          x: p.x, y: p.y + 0.9, z: p.z, qtd: 3, cores: ['#ff7a1a', '#ffd23a', '#ff4a1a'],
+          velocidade: 0.8, espalhar: 0.35, gravidade: -3, vida: 0.6, tamanho: 0.1, aditivo: true,
+        });
+      }
+    }
+    this._atualizarMascaraEfeitos();
   }
 
   // ------------------------------------------------------------------
@@ -186,7 +389,7 @@ export class Jogador {
     if (this.morto || !Number.isFinite(qtd) || qtd <= 0) return this.vida;
     this.vida = Math.max(0, this.vida - qtd);
     if (this.ui.sinalizarDano) this.ui.sinalizarDano();
-    if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, CONFIG.VIDA_MAX);
+    if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, this.vidaMax);
     // Empurrãozinho se o golpe tem direção
     const dir = causa && typeof causa === 'object' ? causa.direcao : null;
     if (dir && Number.isFinite(dir.x) && Number.isFinite(dir.z)) {
@@ -204,10 +407,10 @@ export class Jogador {
   /** Devolve vida (sem passar do máximo). Não revive quem já morreu. */
   curar(qtd) {
     if (this.morto || !Number.isFinite(qtd) || qtd <= 0) return this.vida;
-    const nova = Math.min(CONFIG.VIDA_MAX, this.vida + qtd);
+    const nova = Math.min(this.vidaMax, this.vida + qtd);
     if (nova !== this.vida) {
       this.vida = nova;
-      if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, CONFIG.VIDA_MAX);
+      if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, this.vidaMax);
     }
     return this.vida;
   }
@@ -218,6 +421,9 @@ export class Jogador {
     this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
     this.teclas = {};
     this._limparQuebra();
+    this.limparEfeitos();
+    if (this.telaForja && this.telaForja.aberta) this.telaForja.fechar(false);
+    if (this.telaAlfaiate && this.telaAlfaiate.aberta) this.telaAlfaiate.fechar(false);
     for (const fn of this._ouvintesMorte) {
       try { fn(); } catch (e) { console.error(e); }
     }
@@ -228,10 +434,11 @@ export class Jogador {
     this.morto = false;
     this.teclas = {};
     this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
-    this.vida = CONFIG.VIDA_MAX;
+    this.vida = this.vidaMax;
     this._caindo = false;
     this.velocidade.set(0, 0, 0);
-    if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, CONFIG.VIDA_MAX);
+    this.limparEfeitos();
+    if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, this.vidaMax);
   }
 
   /** Controla o dano de queda: guarda o y mais alto e, ao pousar, aplica (queda - QUEDA_SEGURA) */
@@ -246,7 +453,7 @@ export class Jogador {
     if (this.noChao) {
       if (this._caindo) {
         this._caindo = false;
-        const dano = Math.floor(this._yTopo - p.y - CONFIG.QUEDA_SEGURA + 0.001);
+        const dano = Math.floor(this._yTopo - p.y - (CONFIG.QUEDA_SEGURA + this.bonus.quedaSegura) + 0.001);
         if (dano > 0) this.machucar(dano, 'queda');
       }
       this._yTopo = p.y;
@@ -479,6 +686,9 @@ export class Jogador {
       this._caindo = false;
     }
 
+    // Veneno, lento e fogo (dano de 1 por segundo, partículas)
+    this._atualizarEfeitos(dt);
+
     // Caiu no vazio: volta ao ponto de nascimento
     if (p.y < CONFIG.Y_ABISMO) {
       const s = mundo.pontoDeNascimento();
@@ -544,8 +754,10 @@ export class Jogador {
     }
 
     // Velocidade básica × bônus da roupa (ninja: +10%)
-    const vel = (naAgua ? CONFIG.VEL_NADAR : (correndo ? CONFIG.VEL_CORRER : CONFIG.VEL_ANDAR)) *
-      (1 + this.bonus.velocidade) * (this._mods.velocidade || 1);
+    // Lento (efeito) corta pela metade; a roupa de pirata acelera o nado
+    const vel = (naAgua ? CONFIG.VEL_NADAR * (1 + this.bonus.nado) : (correndo ? CONFIG.VEL_CORRER : CONFIG.VEL_ANDAR)) *
+      (1 + this.bonus.velocidade) * (this._mods.velocidade || 1) *
+      (this.efeitos.lento > 0 ? CONFIG.EFEITO_LENTO_FATOR : 1);
     const alvoX = dx * vel;
     const alvoZ = dz * vel;
     const acel = (naAgua ? CONFIG.ACEL_AGUA : (this.noChao ? CONFIG.ACEL_CHAO : CONFIG.ACEL_AR)) * dt;
@@ -572,14 +784,14 @@ export class Jogador {
         if (!cabecaNaAgua) {
           if (v.y < CONFIG.VEL_PULO * 0.8) v.y = CONFIG.VEL_PULO * 0.8;
         } else {
-          v.y += (CONFIG.VEL_SUBIR_AGUA - v.y) * Math.min(1, 8 * dt);
+          v.y += (CONFIG.VEL_SUBIR_AGUA * (1 + this.bonus.nado) - v.y) * Math.min(1, 8 * dt);
         }
       }
     } else {
       v.y -= CONFIG.GRAVIDADE * dt;
       if (v.y < -CONFIG.VEL_MAX_QUEDA) v.y = -CONFIG.VEL_MAX_QUEDA;
       if (pulando && this.noChao) {
-        v.y = CONFIG.VEL_PULO * (this._mods.pulo || 1);
+        v.y = CONFIG.VEL_PULO * (this._mods.pulo || 1) * (1 + this.bonus.pulo); // astronauta pula mais
         this.noChao = false;
       }
     }
@@ -627,7 +839,8 @@ export class Jogador {
   _fisicaVoando(dt, ativo, dx, dz) {
     const v = this.velocidade;
     const t = this.teclas;
-    const vel = CONFIG.VEL_VOAR * (1 + this.bonus.velocidade) * (this._mods.velocidade || 1);
+    const vel = CONFIG.VEL_VOAR * (1 + this.bonus.velocidade) * (this._mods.velocidade || 1) *
+      (this.efeitos.lento > 0 ? CONFIG.EFEITO_LENTO_FATOR : 1);
     const acel = CONFIG.ACEL_VOAR * dt;
 
     // Horizontal: aproxima da velocidade desejada
@@ -815,9 +1028,9 @@ export class Jogador {
   // Combate (Fase 7)
   // ------------------------------------------------------------------
 
-  /** Dano extra de força. A Fase 8 (níveis) vai trocar isto; por enquanto é 0. */
+  /** Dano extra de força: +1 por nível acima do primeiro (Fase 8) */
   forcaExtra() {
-    return 0;
+    return this._nivel - 1;
   }
 
   /** Dano de um golpe: a arma na mão principal do equipamento (ou 1 sem arma) + força */
@@ -830,7 +1043,10 @@ export class Jogador {
   /** Bate no mob mirado (`m` = { id, t }) e começa a espera até o próximo golpe */
   _baterNoMob(m) {
     this._esperaGolpe = CONFIG.INTERVALO_GOLPE_MOB;
-    this.mobs.atacar(m.id, this._danoDoGolpe(), this._dir);
+    // Armas de chefão (espada do dragão/hidra) acrescentam fogo ou veneno ao golpe
+    const mao = this.equipamento ? this.equipamento.espacos.mao : null;
+    const efeitoArma = (mao && obterItem(mao) && obterItem(mao).efeitoArma) || undefined;
+    this.mobs.atacar(m.id, this._danoDoGolpe(), this._dir, efeitoArma);
     this.personagem.animarGolpe();
     if (this.som && typeof this.som.golpeMob === 'function') this.som.golpeMob();
   }
@@ -852,7 +1068,7 @@ export class Jogador {
     const sel = this.botoes[2] && !mirandoInterativo ? this.inventario.itemSelecionado() : null;
     const def = sel ? obterItem(sel.item) : null;
     // Só come comida, e só com a vida abaixo do máximo (a maçã pode sempre)
-    if (!def || def.tipo !== 'comida' || (this.vida >= CONFIG.VIDA_MAX && def.nome !== 'maca')) {
+    if (!def || def.tipo !== 'comida' || (this.vida >= this.vidaMax && def.nome !== 'maca')) {
       this._pararComer();
       return;
     }
@@ -877,8 +1093,9 @@ export class Jogador {
   /** Come 1 unidade da comida `def`: cura (ou machuca, se for enjoada) */
   _comer(def) {
     this.inventario.remover(this.inventario.selecionado, 1);
-    if (def.enjoo && Math.random() < def.enjoo) this.machucar(1, 'enjoo');
-    else this.curar(def.cura || 0);
+    // Cura sempre; a comida enjoada depois pode tirar 1 (assim nunca mata quem está com 1 de vida)
+    this.curar(def.cura || 0);
+    if (def.enjoo && Math.random() < def.enjoo && this.vida > 1) this.machucar(1, 'enjoo');
     if (this.som && typeof this.som.comer === 'function') this.som.comer();
     // Migalhas saindo da boca
     if (this.particulas && typeof this.particulas.emitir === 'function') {
@@ -927,9 +1144,42 @@ export class Jogador {
     this.tempoColocar = CONFIG.INTERVALO_COLOCAR;
     if (alvo.id === B.BAU) {
       this._abrirBau(alvo.x, alvo.y, alvo.z);
+    } else if (alvo.id === B.FORJA) {
+      this._abrirForja(alvo.x, alvo.y, alvo.z);
+    } else if (alvo.id === B.MESA_ALFAIATE) {
+      this._abrirAlfaiate(alvo.x, alvo.y, alvo.z);
     } else if (def.modelo === 'porta') {
       this._alternarPorta(alvo.x, alvo.y, alvo.z, alvo.id);
     }
+  }
+
+  /** Abre a tela da forja (Fase 9). A TelaForja cuida de soltar o mouse e do menuAberto. */
+  _abrirForja(x, y, z) {
+    if (!this.telaForja || this.telaForja.aberta) return;
+    this.personagem.animarGolpe();
+    this.telaForja.abrir({
+      inventario: this.inventario,
+      equipamento: this.equipamento,
+      particulas: this.particulas,
+      som: this.som,
+      posForja: { x, y, z },
+      aoFechar: () => {},
+    });
+  }
+
+  /** Abre a tela da mesa do alfaiate (Fase 10) */
+  _abrirAlfaiate(x, y, z) {
+    if (!this.telaAlfaiate || this.telaAlfaiate.aberta) return;
+    this.personagem.animarGolpe();
+    this.telaAlfaiate.abrir({
+      inventario: this.inventario,
+      equipamento: this.equipamento,
+      aparenciaBase: this.obterAparenciaBase ? this.obterAparenciaBase() : null,
+      particulas: this.particulas,
+      som: this.som,
+      posMesa: { x, y, z },
+      aoFechar: () => {},
+    });
   }
 
   /** Pede o conteúdo do baú e abre a tela dele */
@@ -1160,7 +1410,7 @@ export class Jogador {
     if (this.morto && this.obterPosRenascer) {
       const r = this.obterPosRenascer();
       if (Array.isArray(r) && r.length === 3 && r.every(Number.isFinite)) {
-        return { pos: [r[0], r[1], r[2]], yaw: this.yaw, pitch: this.pitch, vida: CONFIG.VIDA_MAX, xpTotal: this.xpTotal };
+        return { pos: [r[0], r[1], r[2]], yaw: this.yaw, pitch: this.pitch, vida: this.vidaMax, xpTotal: this.xpTotal };
       }
     }
     return {
@@ -1181,13 +1431,14 @@ export class Jogador {
     if (Number.isFinite(dados.pitch)) {
       this.pitch = Math.max(-LIMITE_PITCH, Math.min(LIMITE_PITCH, dados.pitch));
     }
-    this.xpTotal = Number.isFinite(dados.xpTotal) && dados.xpTotal > 0 ? Math.floor(dados.xpTotal) : 0;
+    // XP salvo (sem festa de nível: é só carregar)
+    this._definirXp(dados.xpTotal);
     // Vida salva (saves antigos não têm: ficam com a vida cheia). Nunca carrega "morto".
     if (Number.isFinite(dados.vida) && dados.vida > 0) {
-      this.vida = Math.min(CONFIG.VIDA_MAX, dados.vida);
+      this.vida = Math.min(this.vidaMax, dados.vida);
     } else {
-      this.vida = CONFIG.VIDA_MAX;
+      this.vida = this.vidaMax;
     }
-    if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, CONFIG.VIDA_MAX);
+    this.atualizarHud();
   }
 }

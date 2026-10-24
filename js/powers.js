@@ -152,7 +152,8 @@ export class Poderes {
     if (indice < 0) return false;
     this.inventario.remover(indice, 1);
 
-    const duracao = item.duracao ?? 30;
+    // Bônus da roupa (mago: +30%): o Poderes lê direto de `jogador.bonus.duracaoPoderes`
+    const duracao = (item.duracao ?? 30) * (1 + (this.jogador.bonus?.duracaoPoderes || 0));
     const eraAtivo = this.ativos.has(item.poder);
     this.ativos.set(item.poder, Math.min(TEMPO_MAXIMO, atual + duracao));
     this._ordem.set(item.poder, ++this._contadorOrdem);

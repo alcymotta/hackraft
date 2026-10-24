@@ -800,6 +800,21 @@ function materialAura(cor) {
   return m;
 }
 
+// Materiais claros (prata, diamante, ferro) já são quase brancos: o brilho da
+// melhoria os estourava. Este fator reduz a intensidade conforme a luminância
+// da cor (1 = cor escura, sem mudança; até 0.4 para o branco).
+const cacheFatorBrilho = new Map();
+function fatorBrilho(cor) {
+  let f = cacheFatorBrilho.get(cor);
+  if (f === undefined) {
+    const c = new THREE.Color(cor).getHex();
+    const lum = (0.299 * ((c >> 16) & 255) + 0.587 * ((c >> 8) & 255) + 0.114 * (c & 255)) / 255;
+    f = 1 - 0.6 * lum;
+    cacheFatorBrilho.set(cor, f);
+  }
+  return f;
+}
+
 // Materiais Three.js por material de armadura (compartilhados entre os bonecos).
 // O nome pode ter sufixo: 'ferro+2' = ferro com melhoria 2 (brilho 0.15 x N).
 const materiaisArmadura = new Map();
@@ -817,9 +832,10 @@ function materialDaArmadura(nome) {
       m = new THREE.MeshLambertMaterial({ map: tex, alphaTest: 0.5 });
     } else {
       m = materialDaArmadura(base).clone(); // mesma textura, com brilho próprio
+      const intensidade = 0.15 * n * fatorBrilho(def.cor); // menos brilho em metais claros
       m.emissive = new THREE.Color(def.brilho ?? def.cor);
-      m.emissiveIntensity = 0.15 * n;
-      registrarPulso(m, 'emissiveIntensity', 0.15 * n);
+      m.emissiveIntensity = intensidade;
+      registrarPulso(m, 'emissiveIntensity', intensidade);
     }
     materiaisArmadura.set(nome, m);
   }
@@ -942,7 +958,7 @@ export const VISUAIS_ARMA = {
 // espada tem brilho próprio (dragão) e/ou melhoria (0.15 x N). Em cache.
 const cacheLamina = new Map();
 function materialLamina(cor, v, n) {
-  const baseBrilho = (v.emissive ? v.emissive.int : 0) + 0.15 * n;
+  const baseBrilho = (v.emissive ? v.emissive.int : 0) + 0.15 * n * fatorBrilho(cor);
   if (baseBrilho <= 0) return materialCor(cor);
   const corBrilho = v.emissive?.cor ?? cor;
   const chave = cor + '|' + corBrilho + '|' + baseBrilho;

@@ -64,6 +64,13 @@ const NOITE = {
   acordes: [[33, 40, 45], [38, 45, 50], [40, 47, 52], [36, 43, 48]],
 };
 
+// Clima do chefão: mais rápido, baixo em Lá menor e acordes dissonantes
+const CHEFAO = {
+  BPM: 120,
+  baixo: 33, // Lá bem grave
+  acordes: [[45, 51, 57], [44, 50, 56], [45, 52, 58], [43, 49, 55]], // clusters tensos
+};
+
 class Musica {
   constructor(som) {
     this.som = som;
@@ -77,6 +84,7 @@ class Musica {
     this._passo = 0;
     this._fadeAte = 0;         // enquanto agora < isso, os dois climas tocam
     this._drone = null;
+    this._anterior = 'dia';    // clima de antes (toca junto durante o crossfade)
   }
 
   // Chamado pelo Som ao ler as preferências salvas
@@ -123,6 +131,10 @@ class Musica {
     // Um barramento por clima (som direto) e um "envio" por clima (para o reverb)
     this._barDia = ctx.createGain();
     this._barNoite = ctx.createGain();
+    this._barChefao = ctx.createGain();
+    this._envioChefao = ctx.createGain();
+    this._barChefao.connect(this._saida);
+    this._envioChefao.connect(this._reverb);
     this._envioDia = ctx.createGain();
     this._envioNoite = ctx.createGain();
     this._barDia.connect(this._saida);
@@ -136,9 +148,12 @@ class Musica {
   // Põe os ganhos dos climas no valor certo (com ou sem crossfade)
   _ajustarClima(suave) {
     const t = this.som.ctx.currentTime;
-    const dia = this.clima === 'dia' ? 1 : 0;
-    const alvos = [[this._barDia, dia], [this._barNoite, 1 - dia],
-                   [this._envioDia, dia], [this._envioNoite, 1 - dia]];
+    const c = this.clima;
+    const dia = c === 'dia' ? 1 : 0;
+    const noite = c === 'noite' ? 1 : 0;
+    const chefao = c === 'chefao' ? 1 : 0;
+    const alvos = [[this._barDia, dia], [this._barNoite, noite], [this._barChefao, chefao],
+                   [this._envioDia, dia], [this._envioNoite, noite], [this._envioChefao, chefao]];
     for (const [no, v] of alvos) {
       no.gain.cancelScheduledValues(t);
       no.gain.setValueAtTime(no.gain.value, t);
@@ -219,11 +234,16 @@ class Musica {
     }
     const agora = ctx.currentTime;
     if (this._proximo < agora) this._proximo = agora + 0.05;
-    const passoDur = 60 / MUSICA.BPM / 2; // colcheia
+    // colcheia (o chefão é bem mais rápido)
+    const passoDur = 60 / (this.clima === 'chefao' ? CHEFAO.BPM : MUSICA.BPM) / 2;
     while (this._proximo < agora + MUSICA.ANTECEDENCIA) {
+      // durante o crossfade toca o clima novo e o anterior
       const fading = agora < this._fadeAte;
-      if (this.clima === 'dia' || fading) this._passoDia(this._proximo, passoDur);
-      if (this.clima === 'noite' || fading) this._passoNoite(this._proximo, passoDur);
+      const a = this._anterior;
+      const c = this.clima;
+      if (c === 'dia' || (fading && a === 'dia')) this._passoDia(this._proximo, passoDur);
+      if (c === 'noite' || (fading && a === 'noite')) this._passoNoite(this._proximo, passoDur);
+      if (c === 'chefao' || (fading && a === 'chefao')) this._passoChefao(this._proximo, passoDur);
       this._proximo += passoDur;
       this._passo++;
     }
@@ -278,6 +298,62 @@ class Musica {
     if (this._passo % 8 === 0 && Math.random() < 0.5) this._pulso(t);
   }
 
+  // ---------- CHEFÃO ----------
+  // Tenso: tambor grave marcado, baixo em ostinato (Lá menor) e pads dissonantes
+  _passoChefao(t, passoDur) {
+    const p = this._passo % 8; // um compasso = 8 colcheias
+    // tambor: bumbo nos tempos fortes, mais seco nos contratempos
+    if (p === 0 || p === 3 || p === 4 || p === 6) this._tambor(t, p === 0 ? 0.42 : 0.3, p === 0 ? 62 : 75);
+    if (p === 2 || p === 6) this._caixa(t);
+    // baixo em ostinato: Lá, Lá, Dó, Lá, Ré, Lá, Mi bemol, Mi
+    const baixo = [0, 0, 3, 0, 5, 0, 6, 7];
+    this._nota('sawtooth', midiParaHz(CHEFAO.baixo + baixo[p]), t, passoDur * 0.9, 0.07, this._barChefao, this._envioChefao, 0.15, 380);
+    // pads dissonantes a cada 2 compassos
+    if (this._passo % 16 === 0) {
+      const i = (this._passo / 16) % CHEFAO.acordes.length;
+      this._pad(CHEFAO.acordes[i], t, this._barChefao, 0.045, 6, 900);
+    }
+    // sirene curta e aguda de vez em quando
+    if (this._passo % 16 === 8 && Math.random() < 0.4) {
+      this._nota('triangle', midiParaHz(CHEFAO.baixo + 36 + sortear([0, 1, 6])), t, 1.2, 0.05, this._barChefao, this._envioChefao, 0.8);
+    }
+  }
+
+  // Bumbo grave que cai de tom
+  _tambor(t, volume, hz) {
+    if (this._vozes >= MUSICA.MAX_VOZES + 4) return;
+    const o = this.som.ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(hz * 2, t);
+    o.frequency.exponentialRampToValueAtTime(hz * 0.55, t + 0.2);
+    const g = this.som.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(volume, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    o.connect(g).connect(this._barChefao);
+    this._iniciarVoz(o, t, t + 0.4, g);
+  }
+
+  // Estalo seco de ruído (caixa)
+  _caixa(t) {
+    const ctx = this.som.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this.som.ruido;
+    src.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = 1800;
+    f.Q.value = 0.8;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.1, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    src.connect(f).connect(g).connect(this._barChefao);
+    src.onended = () => { src.disconnect(); f.disconnect(); g.disconnect(); };
+    src.start(t, Math.random() * 0.5);
+    src.stop(t + 0.14);
+  }
+
   // Batida grave e macia
   _pulso(t) {
     if (this._vozes >= MUSICA.MAX_VOZES) return;
@@ -309,15 +385,15 @@ class Musica {
   }
 
   // Acorde longo e suave: sine/triangle desafinados, passa-baixas, ataque e release lentos
-  _pad(notas, t, barramento, volume) {
+  _pad(notas, t, barramento, volume, duracao, corte = 700) {
     const ctx = this.som.ctx;
-    const dur = 60 / MUSICA.BPM * MUSICA.BATIDAS_ACORDE + 2.5;
+    const dur = duracao || (60 / MUSICA.BPM * MUSICA.BATIDAS_ACORDE + 2.5);
     const filtro = ctx.createBiquadFilter();
     filtro.type = 'lowpass';
-    filtro.frequency.value = 700;
+    filtro.frequency.value = corte;
     filtro.Q.value = 0.5;
     const g = ctx.createGain();
-    const ataque = 2.5, release = 3.5;
+    const ataque = Math.min(2.5, dur * 0.3), release = Math.min(3.5, dur * 0.4);
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(volume, t + ataque);
     g.gain.setValueAtTime(volume, t + dur - release);
@@ -335,7 +411,7 @@ class Musica {
   }
 
   // Nota simples com envelope; `parteReverb` manda um tanto para o reverb
-  _nota(tipo, hz, t, dur, volume, barramento, envio, parteReverb) {
+  _nota(tipo, hz, t, dur, volume, barramento, envio, parteReverb, corte) {
     if (this._vozes >= MUSICA.MAX_VOZES) return;
     const ctx = this.som.ctx;
     const o = ctx.createOscillator();
@@ -343,23 +419,35 @@ class Musica {
     o.frequency.value = hz;
     o.detune.value = (Math.random() - 0.5) * 10;
     const g = ctx.createGain();
+    // `corte` (opcional): passa-baixas para suavizar ondas ásperas (baixo do chefão)
+    let ult = o;
+    let lp = null;
+    if (corte) {
+      lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = corte;
+      o.connect(lp);
+      ult = lp;
+    }
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(volume, t + 0.03);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g);
+    ult.connect(g);
     g.connect(barramento);
     const e = ctx.createGain();
     e.gain.value = parteReverb;
     g.connect(e).connect(envio);
-    this._iniciarVoz(o, t, t + dur + 0.05, g, e);
+    if (lp) this._iniciarVoz(o, t, t + dur + 0.05, lp, g, e);
+    else this._iniciarVoz(o, t, t + dur + 0.05, g, e);
   }
 
   // ---------- API pública ----------
 
-  /** Troca entre 'dia' e 'noite' com crossfade. Mesmo clima: nada. */
+  /** Troca entre 'dia', 'noite' e 'chefao' com crossfade. Mesmo clima: nada. */
   definirClima(clima) {
-    if (clima !== 'dia' && clima !== 'noite') return;
+    if (clima !== 'dia' && clima !== 'noite' && clima !== 'chefao') return;
     if (clima === this.clima) return;
+    this._anterior = this.clima;
     this.clima = clima;
     if (this._pronta) this._ajustarClima(true);
   }
@@ -694,6 +782,7 @@ class Som {
 
   /** "Brilho" ascendente ao ativar um cristal (o `id` do poder muda um pouco o tom) */
   poder(id) {
+    if (id === 'nivel') { this.nivel(); return; }
     if (!this._podeTocar()) return;
     try {
       const t0 = this.ctx.currentTime;
@@ -815,10 +904,12 @@ class Som {
     try {
       const t0 = this.ctx.currentTime;
       const r = 0.92 + Math.random() * 0.16; // variação de tom a cada vez
-      // dano: mais agudo e curto; morte: mais longo e caindo
+      // tipos novos (Fases 8 e 11) têm vozes próprias
+      if (this._mobNovo(tipo, evento, v, t0, r)) return;
+      // dano: mais agudo e curto; morte: mais longo e caindo; ataque: o idle mais agudo
       const dano = evento === 'dano';
       const morte = evento === 'morte';
-      const tomM = dano ? 1.3 : 1;
+      const tomM = dano ? 1.3 : evento === 'ataque' ? 1.4 : 1;
       const durM = dano ? 0.65 : morte ? 1.8 : 1;
       const quedaM = morte ? 0.5 : 1;
 
@@ -873,6 +964,266 @@ class Som {
         const t = t0 + k * 0.16;
         this._ruidoVarrido(t, 'bandpass', 1800 + Math.random() * 600, 900, 0.07, 0.3, 1.5);
         this._tomOnda(t, 'triangle', 220 + Math.random() * 40, 120, 0.06, 0.12);
+      }
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  // ----- Sons das Fases 8 e 11 (chefões, montarias, forja...), todos sintetizados -----
+
+  /** Vários cliques secos e rápidos (ossos, estalos). `queda` multiplica a frequência a cada clique. */
+  _cliques(t0, n, espaco, freq, forca, queda = 1) {
+    for (let k = 0; k < n; k++) {
+      const t = t0 + k * espaco * (0.7 + Math.random() * 0.6);
+      const f = freq * Math.pow(queda, k) * (0.8 + Math.random() * 0.4);
+      this._ruidoVarrido(t, 'bandpass', f, f * 0.6, 0.04, forca, 4);
+    }
+  }
+
+  /** Sopro de fogo: ruído grave que sobe devagar e depois some ("fuuu") */
+  _sopro(t0, dur, forca) {
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this.ruido;
+    src.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.Q.value = 0.7;
+    f.frequency.setValueAtTime(250, t0);
+    f.frequency.exponentialRampToValueAtTime(1100, t0 + dur * 0.4);
+    f.frequency.exponentialRampToValueAtTime(300, t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(forca, t0 + dur * 0.3);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f).connect(g).connect(this.mestre);
+    src.start(t0, Math.random() * 0.5);
+    src.stop(t0 + dur + 0.02);
+  }
+
+  /** Voz dos tipos de mob novos (Fases 8 e 11). Devolve true se tratou o tipo. */
+  _mobNovo(tipo, evento, v, t0, r) {
+    const dano = evento === 'dano';
+    const morte = evento === 'morte';
+    const ataque = evento === 'ataque';
+    const tomM = dano ? 1.3 : ataque ? 1.4 : 1;
+    const durM = dano ? 0.65 : morte ? 1.8 : 1;
+    const queda = morte ? 0.5 : 1;
+
+    switch (tipo) {
+      case 'esqueleto': {
+        // chocalhar de ossos: cliques secos e rápidos
+        const n = morte ? 12 : dano ? 6 : ataque ? 4 : 5;
+        this._cliques(t0, n, morte ? 0.055 : 0.045, 3000 * r * tomM, 0.65 * v, morte ? 0.93 : 1);
+        if (ataque) this._tomOnda(t0, 'triangle', 900 * r, 500, 0.08, 0.06 * v);
+        return true;
+      }
+      case 'aranha_gigante':
+      case 'aranha_montaria': {
+        // chiado grave e longo (a montaria é mais suave e curta)
+        const suave = tipo === 'aranha_montaria' ? 0.6 : 1;
+        const d = (0.9 * durM * (suave < 1 ? 0.7 : 1));
+        this._chiado(t0, (dano ? 2600 : 1700) * r * (ataque ? 1.3 : 1), d, 0.38 * v * suave, dano ? 30 : 16);
+        this._ruidoVarrido(t0, 'lowpass', 700, 220, d * 0.8, 0.15 * v * suave, 0.7);
+        return true;
+      }
+      case 'orc_guerreiro': {
+        // grunhido grave e áspero: dente-de-serra com filtro fechado e vibrato rápido
+        const d = 0.55 * durM;
+        this._vozMob(t0, { onda: 'sawtooth', de: 100 * r * tomM, ate: 62 * r * tomM * queda, dur: d, forca: 0.22, filtro: 380, q: 4, ataque: 0.04, vib: [26, 10], v });
+        this._vozMob(t0, { onda: 'square', de: 50 * r * tomM, ate: 35 * queda, dur: d, forca: 0.1, filtro: 200, v });
+        this._ruidoVarrido(t0, 'lowpass', 900, 250, d * 0.7, 0.07 * v, 1);
+        return true;
+      }
+      case 'orc_xama': {
+        // canto curto e misterioso: 3 notas com vibrato e ecos (imitando reverb)
+        const base = 330 * r * (dano ? 1.2 : 1);
+        const razoes = morte ? [1, 0.84, 0.66] : ataque ? [1, 1.26, 1.5] : [1, 1.2, 0.9];
+        razoes.forEach((m, k) => {
+          const t = t0 + k * 0.2;
+          const f = base * m;
+          [[0, 1], [0.14, 0.35], [0.3, 0.15]].forEach(([atraso, vol]) => {
+            this._vozMob(t + atraso, { onda: 'triangle', de: f, ate: f * 0.99, dur: 0.38 * (morte ? 1.6 : 1), forca: 0.14 * vol, filtro: 2200, ataque: 0.06, vib: [6, f * 0.015], v });
+          });
+        });
+        return true;
+      }
+      case 'dragao': {
+        if (ataque) {
+          // sopro de fogo
+          this._sopro(t0, 1.1, 0.6 * v);
+          this._tomOnda(t0, 'sine', 90, 55, 0.6, 0.12 * v);
+          return true;
+        }
+        // rugido: ruído filtrado + oscilador grave descendo
+        const d = 1.2 * (dano ? 0.7 : morte ? 1.7 : 1);
+        this._vozMob(t0, { onda: 'sawtooth', de: 130 * r * (dano ? 1.25 : 1), ate: 45 * r * queda, dur: d, forca: 0.24, filtro: 520, q: 3, ataque: 0.08, vib: [18, 8], v });
+        this._tomOnda(t0, 'sine', 70 * r, 32, d, 0.2 * v);
+        this._ruidoVarrido(t0, 'bandpass', 900, 200, d, 0.2 * v, 0.8);
+        return true;
+      }
+      case 'hidra': {
+        // sibilo triplo: 3 chiados em alturas diferentes
+        const alturas = morte ? [2400, 1800, 1200] : [2200, 3300, 2700];
+        alturas.forEach((f, k) => {
+          this._chiado(t0 + k * 0.2 * (morte ? 1.5 : 1), f * r * (dano ? 1.2 : 1), 0.3 * (morte ? 1.5 : 1), 0.32 * v, 28);
+        });
+        return true;
+      }
+      case 'cavalo': {
+        // relincho: vibrato rápido, sobe e depois desce
+        const f = 520 * r * (ataque ? 1.2 : 1);
+        const sobe = dano ? 0.15 : 0.28;
+        this._vozMob(t0, { onda: 'sawtooth', de: f, ate: f * 1.8, dur: sobe, forca: 0.14, filtro: 2400, q: 2, ataque: 0.03, vib: [13, 35], v });
+        this._vozMob(t0 + sobe, { onda: 'sawtooth', de: f * 1.8, ate: f * 0.7 * queda, dur: (dano ? 0.25 : 0.55) * (morte ? 1.8 : 1), forca: 0.14, filtro: 2200, q: 2, ataque: 0.01, vib: [14, 40], v });
+        this._ruidoVarrido(t0, 'bandpass', 2500, 1500, 0.3, 0.04 * v, 1);
+        return true;
+      }
+      case 'lobo_gigante': {
+        if (ataque) {
+          // rosnado: grave, com vibrato muito rápido
+          this._vozMob(t0, { onda: 'sawtooth', de: 85 * r, ate: 70 * r, dur: 0.6, forca: 0.22, filtro: 320, q: 3, ataque: 0.05, vib: [32, 14], v });
+          this._ruidoVarrido(t0, 'lowpass', 800, 300, 0.5, 0.08 * v, 1);
+        } else if (dano) {
+          this._vozMob(t0, { onda: 'triangle', de: 800 * r, ate: 450, dur: 0.25, forca: 0.16, filtro: 2500, vib: [12, 25], v });
+        } else {
+          // uivo: glide longo, sobe e desce
+          const k = morte ? 0.7 : 1;
+          this._vozMob(t0, { onda: 'triangle', de: 280 * r * k, ate: 620 * r * k, dur: 0.8, forca: 0.17, filtro: 1800, ataque: 0.15, vib: [5, 7], v });
+          this._vozMob(t0 + 0.8, { onda: 'triangle', de: 620 * r * k, ate: 400 * r * k * queda, dur: 0.9, forca: 0.15, filtro: 1600, ataque: 0.02, vib: [5, 8], v });
+        }
+        return true;
+      }
+      case 'filhote_dragao': {
+        // guincho agudo e fofo
+        const f = 1300 * r * (dano ? 1.2 : 1);
+        this._vozMob(t0, { onda: 'triangle', de: f, ate: f * 1.7, dur: 0.16, forca: 0.12, filtro: 5000, ataque: 0.015, vib: [22, 70], v });
+        this._vozMob(t0 + 0.14, { onda: 'triangle', de: f * 1.7, ate: f * (morte ? 0.6 : 1.1), dur: morte ? 0.5 : 0.18, forca: 0.1, filtro: 5000, ataque: 0.01, vib: [20, 60], v });
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  /** Zunido rápido de flecha */
+  flecha() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      this._ruidoVarrido(t0, 'bandpass', 6500, 1500, 0.2, 0.3, 3);
+      this._tomOnda(t0, 'sine', 1800, 600, 0.12, 0.05);
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Orbe mágico: "uóóm" com brilho */
+  magia() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      this._vozMob(t0, { onda: 'sine', de: 180, ate: 430, dur: 0.6, forca: 0.22, filtro: 2000, ataque: 0.12, vib: [8, 14], v: 1 });
+      this._tomOnda(t0 + 0.05, 'triangle', 2000, 3200, 0.4, 0.05);
+      this._tomOnda(t0 + 0.15, 'triangle', 2600, 4000, 0.35, 0.04);
+      this._ruidoVarrido(t0, 'highpass', 4000, 9000, 0.4, 0.03);
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Três marteladas metálicas com eco curto */
+  forja() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      for (let k = 0; k < 3; k++) {
+        const t = t0 + k * 0.3;
+        // a martelada e depois o eco (mais baixo)
+        [[0, 1], [0.1, 0.3]].forEach(([atraso, vol]) => {
+          const ta = t + atraso;
+          this._ruidoVarrido(ta, 'bandpass', 3200, 1500, 0.07, 0.22 * vol, 2);
+          this._tomOnda(ta, 'sine', 1400 + k * 80, 1380 + k * 80, 0.3, 0.12 * vol);
+          this._tomOnda(ta, 'sine', 2150 + k * 100, 2100 + k * 100, 0.22, 0.07 * vol);
+          this._tomOnda(ta, 'sine', 180, 100, 0.08, 0.2 * vol);
+        });
+      }
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Uma batida grave de asas */
+  asas() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      this._ruidoVarrido(t0, 'lowpass', 800, 180, 0.45, 0.28, 0.7);
+      this._tomOnda(t0, 'sine', 80, 38, 0.35, 0.25);
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Assobio agudo de 2 notas */
+  apito() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      this._vozMob(t0, { onda: 'sine', de: 1900, ate: 2100, dur: 0.2, forca: 0.14, filtro: 5000, ataque: 0.03, vib: [30, 30], v: 1 });
+      this._vozMob(t0 + 0.2, { onda: 'sine', de: 2500, ate: 2350, dur: 0.3, forca: 0.14, filtro: 5000, ataque: 0.03, vib: [30, 40], v: 1 });
+      this._ruidoVarrido(t0, 'highpass', 5000, 7000, 0.45, 0.02);
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Ao concluir a doma (progresso 1) toca um "plim" feliz; abaixo disso, nada */
+  domar(progresso) {
+    if (!(progresso >= 1)) return;
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      [660, 880, 1320, 1760].forEach((f, k) => {
+        this._tomOnda(t0 + k * 0.08, 'triangle', f, f * 1.01, k === 3 ? 0.5 : 0.2, 0.12);
+      });
+      this._ruidoVarrido(t0 + 0.2, 'highpass', 6000, 9000, 0.3, 0.025);
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Ovo rachando: estalos irregulares */
+  chocar() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      const tempos = [0, 0.09, 0.2, 0.28, 0.45, 0.6];
+      tempos.forEach((dt) => {
+        this._ruidoVarrido(t0 + dt, 'bandpass', 1500 + Math.random() * 2500, 900, 0.05, 0.5, 3);
+      });
+      this._tomOnda(t0 + 0.6, 'sine', 300, 140, 0.15, 0.1);
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Fanfarra curta de subir de nível: 3 notas ascendentes */
+  nivel() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      [[523, 0, 0.16], [659, 0.15, 0.16], [784, 0.3, 0.2], [1047, 0.45, 0.6]].forEach(([f, dt, d]) => {
+        this._tomOnda(t0 + dt, 'triangle', f, f * 1.005, d, 0.14);
+        this._tomOnda(t0 + dt, 'square', f * 2, f * 2, d * 0.7, 0.025);
+      });
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Som de receber um efeito: 'veneno', 'lento' ou 'fogo' */
+  efeito(tipo) {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      if (tipo === 'veneno') {
+        // bolhas borbulhando para baixo
+        this._vozMob(t0, { onda: 'sine', de: 500, ate: 220, dur: 0.45, forca: 0.14, filtro: 1500, vib: [14, 60], v: 1 });
+        this._tomOnda(t0 + 0.1, 'sine', 300, 700, 0.1, 0.08);
+        this._tomOnda(t0 + 0.25, 'sine', 250, 600, 0.1, 0.07);
+        this._chiado(t0, 3500, 0.4, 0.06, 22);
+      } else if (tipo === 'lento') {
+        // tom que arrasta para baixo, como câmera lenta
+        this._tomOnda(t0, 'sawtooth', 420, 100, 0.6, 0.07);
+        this._tomOnda(t0, 'sine', 300, 70, 0.6, 0.14);
+      } else if (tipo === 'fogo') {
+        // labareda crepitante
+        this._ruidoVarrido(t0, 'lowpass', 1800, 400, 0.45, 0.2, 0.8);
+        this._cliques(t0 + 0.05, 5, 0.06, 2500, 0.12);
       }
     } catch (e) { /* som é enfeite */ }
   }

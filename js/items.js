@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------
 // Um item é qualquer coisa que pode ficar no inventário. Ele é
 // identificado por um nome em texto (ex.: 'grama').
-// Tipos: 'bloco' | 'material' | 'comida' (cura, enjoo) | 'roupa' | 'armadura' | 'arma' | 'acessorio' | 'poder'
+// Tipos: 'bloco' | 'material' | 'comida' (cura, enjoo) | 'montaria' | 'ferramenta' | 'roupa' | 'armadura' | 'arma' | 'acessorio' | 'poder'
 // Este arquivo não usa three nem o DOM (dá para testar no Node).
 // =====================================================================
 
@@ -44,6 +44,7 @@ export function registrarItem(def) {
     cor: def.cor ?? null,
     ataque: def.ataque ?? false,
     cura: def.cura ?? 0,
+    defesaMontaria: def.defesaMontaria ?? 0, // Fase 11: defesa da armadura de montaria
     enjoo: def.enjoo ?? 0,
     // Fase 9: efeito ao acertar ('fogo' | 'veneno'), resistência da armadura e melhoria
     efeitoArma: def.efeitoArma ?? null,
@@ -61,6 +62,9 @@ const DESCRICOES_BLOCOS = {
   porta: 'Ocupa 2 blocos de altura. Botão direito para abrir e fechar.',
   tocha: 'Ilumina o escuro. Pode ficar no chão ou na parede.',
   bau: 'Guarde até 27 pilhas de itens. Botão direito para abrir.',
+  mesa_alfaiate: 'Costure roupas e capas, ou compre com moedas. Botão direito para usar.',
+  fogueira: 'Aquece e ilumina. Um ovo de dragão choca perto dela.',
+  ovo_dragao: 'Coloque perto de uma fogueira e espere um dia: nasce um filhote de dragão!',
   forja: 'Funde metais, forja espadas e armaduras e melhora equipamentos. Botão direito para usar.',
 };
 
@@ -172,9 +176,9 @@ export const MATERIAIS_EQUIP = {
 const ROUPAS = [
   ['ninja', 'Roupa de ninja', 'Silêncio total. Ninguém ouve seus passos!', { velocidade: 0.1, silencioso: true }],
   ['cavaleiro', 'Roupa de cavaleiro', 'Para quem defende o reino com honra.', { defesa: 2 }],
-  ['mago', 'Roupa de mago', 'Estrelas, mistério e um toque de magia.', {}],
-  ['astronauta', 'Roupa de astronauta', 'Pronta para passear na Lua.', {}],
-  ['pirata', 'Roupa de pirata', 'Yo-ho-ho! Cadê o tesouro?', {}],
+  ['mago', 'Roupa de mago', 'Estrelas, mistério e um toque de magia. Poderes duram 30% a mais.', { duracaoPoderes: 0.3 }],
+  ['astronauta', 'Roupa de astronauta', 'Pronta para passear na Lua. Pula mais alto e aguenta quedas maiores.', { pulo: 0.3, quedaSegura: 5 }],
+  ['pirata', 'Roupa de pirata', 'Yo-ho-ho! Cadê o tesouro? Nada mais rápido.', { nado: 0.5 }],
   ['hacker', 'Roupa de hacker', 'Verde neon e muito código.', {}],
 ];
 for (const [visual, rotulo, descricao, bonus] of ROUPAS) {
@@ -286,6 +290,48 @@ for (const [sufixo, rotulo, poder, cor, ataque, texto] of PODERES) {
     poder, duracao: 30, cor, ataque,
   });
 }
+
+// ---------------------------------------------------------------------
+// Fases 8, 10 e 11: materiais dos monstros, tecido, itens de montaria
+// ---------------------------------------------------------------------
+const LISTA_NOVOS_MATERIAIS = [
+  // [nome, rótulo, pilha, descrição]
+  ['osso', 'Osso', 64, 'Solto pelo esqueleto. Vira osso encantado com um cristal verde.'],
+  ['flecha', 'Flecha', 64, 'Ponta afiada e penas. Os esqueletos adoram atirar.'],
+  ['seda_rara', 'Seda rara', 64, 'Novelo perolado das aranhas gigantes. Vira fio de seda mágico.'],
+  ['moeda', 'Moeda', 99, 'Moeda dourada. Compre roupas na mesa do alfaiate.'],
+  ['couro_orc', 'Couro de orc', 64, 'Couro grosso e verde. Serve para armaduras e selas.'],
+  ['tecido', 'Tecido', 64, 'Rolo de pano. Costure roupas na mesa do alfaiate.'],
+  ['osso_encantado', 'Osso encantado', 16, 'Brilha em verde. Com ele na mão, doma um lobo gigante (botão direito).'],
+  ['fio_seda_magico', 'Fio de seda mágico', 16, 'Cintila em roxo. Com ele na mão, doma uma aranha gigante enfraquecida.'],
+];
+for (const [nome, rotulo, pilha, descricao] of LISTA_NOVOS_MATERIAIS) {
+  registrarItem({ nome, rotulo, tipo: 'material', pilha, descricao });
+}
+// O ovo de dragão já virou item de bloco (bloco 35): só a pilha muda
+ITENS.get('ovo_dragao').pilha = 1;
+
+registrarItem({
+  nome: 'maca_dourada', rotulo: 'Maçã dourada', tipo: 'comida', pilha: 16, cura: 10,
+  descricao: 'Dourada e brilhante. Cavalos adoram!',
+});
+registrarItem({
+  nome: 'sela', rotulo: 'Sela', tipo: 'montaria', pilha: 1,
+  descricao: 'Botão direito numa montaria sua para colocar a sela. Sem ela não dá para montar.',
+});
+for (const [sufixo, defesaMontaria] of [['ferro', 4], ['ouro', 7], ['diamante', 10]]) {
+  registrarItem({
+    nome: 'armadura_montaria_' + sufixo, rotulo: 'Armadura de montaria de ' + sufixo, tipo: 'montaria', pilha: 1,
+    descricao: `Proteção de ${sufixo} para sua montaria (defesa ${defesaMontaria}). Botão direito nela.`, defesaMontaria,
+  });
+}
+registrarItem({
+  nome: 'apito', rotulo: 'Apito', tipo: 'ferramenta', pilha: 1,
+  descricao: 'Botão direito: chama suas montarias.',
+});
+
+/** Item usado para domar cada montaria (null = não precisa: nasce domada) */
+export const ITENS_DOMAR = { cavalo: 'maca_dourada', lobo_gigante: 'osso_encantado', aranha_montaria: 'fio_seda_magico', filhote_dragao: null };
 
 // ---------------------------------------------------------------------
 // Slots de equipamento

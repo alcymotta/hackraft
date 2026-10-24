@@ -30,6 +30,11 @@
 //   (Poderes) e as Particulas desenham pedacinhos, brilhos e efeitos.
 //   Este arquivo liga as peças e roda: poderes.atualizar, particulas.atualizar,
 //   os brilhinhos dos minérios.
+//
+// FORJA, XP E EFEITOS (Fases 8 a 10)
+//   A TelaForja abre com o botão direito num bloco FORJA (o Jogador cuida do
+//   clique). O XP dos mobs vira nível (jogador.ganharXp), o dano dos mobs pode
+//   trazer um efeito (veneno, lento, fogo) e as forjas perto de você soltam fogo.
 // =====================================================================
 
 import * as THREE from 'three';
@@ -51,6 +56,8 @@ import { ModoHacker } from './hacker.js';
 import { Particulas } from './particulas.js';
 import { Poderes } from './powers.js';
 import { Baus } from './baus.js';
+import { TelaForja } from './forja.js';
+import { TelaAlfaiate } from './alfaiate.js';
 import { som } from './audio.js';
 import { B, BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { salvarJogo, carregarJogo, apagarJogo } from './save.js';
@@ -171,6 +178,8 @@ async function iniciar() {
   const equipamento = new Equipamento();
   ui = new InterfaceJogo({ inventario, equipamento, texturas, canvas });
   const chat = new Chat({ ui });
+  const telaForja = new TelaForja({ ui, texturas }); // Fase 9: a tela da forja (já conta como menu aberto)
+  const telaAlfaiate = new TelaAlfaiate({ ui, texturas }); // Fase 10: a mesa do alfaiate
 
   // ----- Estado da partida (preenchido quando o jogo é montado) -----
   let rede = null;          // Rede (modo 'sozinho', 'anfitriao' ou 'cliente')
@@ -287,7 +296,7 @@ async function iniciar() {
     let ultimaLeitura = -Infinity;
     const obter = (id) => {
       let o = cache.get(id);
-      if (!o) { o = { id, posicao: null, local: false, defesa: 0 }; cache.set(id, o); }
+      if (!o) { o = { id, posicao: null, local: false, defesa: 0, morto: false }; cache.set(id, o); }
       return o;
     };
     return () => {
@@ -302,7 +311,8 @@ async function iniciar() {
       eu.posicao = jogador.posicao;
       eu.local = true;
       eu.defesa = jogador.bonus ? jogador.bonus.defesa : 0;
-      if (!jogador.morto) lista.push(eu);
+      eu.morto = jogador.morto; // o local fica SEMPRE na lista (os mobs usam a posição para som e distância)
+      lista.push(eu);
       for (const id of ids) {
         if (id === meuId) continue;
         const pos = remotos.posicaoDe(id);
@@ -310,6 +320,7 @@ async function iniciar() {
         const o = obter(id);
         o.posicao = pos;
         o.local = false;
+        o.morto = false;
         // A defesa dos outros jogadores: se a rede souber, usa; senão 0
         o.defesa = (rede && typeof rede.defesaDe === 'function' ? rede.defesaDe(id) : 0) || 0;
         lista.push(o);
@@ -337,10 +348,11 @@ async function iniciar() {
     // Baús (Fase 6): o conteúdo mora no anfitrião; a rede (já criada) transporta
     const baus = new Baus({ mundo, rede, itensChao });
     const jogador = new Jogador({
-      camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento, particulas, baus,
+      camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento, particulas, baus, telaForja, telaAlfaiate,
       // No multiplayer, quem cria o item no chão é o anfitrião: passa pela rede
       soltarItem: (item, qtd, x, y, z, vx, vy, vz) => rede.soltarItem(item, qtd, x, y, z, vx, vy, vz),
     });
+    jogador.obterAparenciaBase = () => ({ ...aparenciaBase });
     const remotos = new JogadoresRemotos(scene);
 
     // Poderes dos cristais (precisam do jogador, dos bonecos remotos e da rede)
@@ -376,13 +388,18 @@ async function iniciar() {
     if (mobs) {
       poderes.registrarAlvos(() => mobs.alvosParaPoderes());
       // O dano chega do anfitrião; a armadura reduz (cada ponto de defesa tira 4%)
-      mobs.aoDanoJogador(({ qtd, de }) => {
+      mobs.aoDanoJogador(({ qtd, de, efeito }) => {
         const reducao = Math.min(CONFIG.DEFESA_MAX_REDUCAO, (jogador.bonus.defesa || 0) * CONFIG.DEFESA_POR_PONTO);
         jogador.machucar(qtd * (1 - reducao), { direcao: direcaoDoGolpe(jogador, de) });
+        // O golpe pode trazer um efeito: 'veneno' | 'lento' | 'fogo' (texto) ou { tipo, segundos }
+        if (efeito) {
+          if (typeof efeito === 'string') jogador.aplicarEfeito(efeito);
+          else jogador.aplicarEfeito(efeito.tipo, efeito.segundos);
+        }
       });
-      // XP por matar mobs (a Fase 8 usa o total)
+      // XP por matar mobs: soma no total e pode subir de nível
       mobs.aoXp((qtd) => {
-        jogador.xpTotal += qtd;
+        jogador.ganharXp(qtd);
         ui.mostrarXp(qtd);
       });
     }
@@ -467,7 +484,7 @@ async function iniciar() {
     jogador.obterPosRenascer = obterCasa;
 
     // ----- Vida: ao morrer, mostra a tela e volta para casa com a vida cheia -----
-    ui.atualizarVida(jogador.vida, CONFIG.VIDA_MAX);
+    jogador.atualizarHud(); // corações e barra de XP
     jogador.aoMorrer(() => {
       ui.mostrarMorte({
         aoRenascer: () => {
@@ -495,7 +512,7 @@ async function iniciar() {
 
     window.jogo = {
       mundo, ceu, jogador, inventario, equipamento, itensChao, ui, som, salvar, rede, remotos,
-      renderer, scene, camera, texturas, chat, hacker, particulas, poderes, baus, mobs,
+      renderer, scene, camera, texturas, chat, hacker, particulas, poderes, baus, mobs, telaForja, telaAlfaiate,
     };
 
     // Música e boas-vindas
@@ -571,6 +588,61 @@ async function iniciar() {
       }
     }
 
+    // ----- Forjas (Fase 9): fogo saindo do topo das forjas perto de você -----
+    let tempoForjas = 0;
+    const ehForja = (id) => id === B.FORJA;
+    function fogoDasForjas(dt) {
+      tempoForjas += dt;
+      if (tempoForjas < CONFIG.FORJA_INTERVALO_S) return;
+      tempoForjas = 0;
+      const lista = mundo.blocosProximos(jogador.posicao, CONFIG.FORJA_RAIO, ehForja, 16, listaForjas);
+      if (!lista || lista.length === 0) return;
+      const n = Math.min(CONFIG.FORJA_POR_VEZ, lista.length);
+      for (let k = 0; k < n; k++) {
+        const b = lista[Math.floor(Math.random() * lista.length)]; // [x, y, z, id]
+        const x = b[0] + 0.5 + (Math.random() - 0.5) * 0.5;
+        const z = b[2] + 0.5 + (Math.random() - 0.5) * 0.5;
+        particulas.emitir({
+          x, y: b[1] + 1.05, z, qtd: 1, cores: ['#ff7a1a', '#ffd23a', '#ff4a1a'],
+          velocidade: 0.5, espalhar: 0.05, gravidade: -2, vida: 0.6, tamanho: 0.08, aditivo: true,
+        });
+        if (Math.random() < 0.3) {
+          particulas.emitir({
+            x, y: b[1] + 1.15, z, qtd: 1, cor: '#555555',
+            velocidade: 0.3, espalhar: 0.05, gravidade: -1, vida: 1.2, tamanho: 0.12, aditivo: false,
+          });
+        }
+      }
+    }
+    // ----- Fogueiras (Fase 10): fogo e fumaça -----
+    let tempoFogueiras = 0;
+    const ehFogueira = (id) => id === B.FOGUEIRA;
+    const listaFogueiras = [];
+    function fogoDasFogueiras(dt) {
+      tempoFogueiras += dt;
+      if (tempoFogueiras < CONFIG.FORJA_INTERVALO_S) return;
+      tempoFogueiras = 0;
+      const lista = mundo.blocosProximos(jogador.posicao, CONFIG.FORJA_RAIO, ehFogueira, 16, listaFogueiras);
+      if (!lista || lista.length === 0) return;
+      const n = Math.min(CONFIG.FORJA_POR_VEZ, lista.length);
+      for (let k = 0; k < n; k++) {
+        const b = lista[Math.floor(Math.random() * lista.length)];
+        const x = b[0] + 0.5 + (Math.random() - 0.5) * 0.4;
+        const z = b[2] + 0.5 + (Math.random() - 0.5) * 0.4;
+        particulas.emitir({
+          x, y: b[1] + 0.35, z, qtd: 1, cores: ['#ffb02a', '#ffe066', '#ff7a1a'],
+          velocidade: 0.5, espalhar: 0.05, gravidade: -2, vida: 0.7, tamanho: 0.09, aditivo: true,
+        });
+        if (Math.random() < 0.5) {
+          particulas.emitir({
+            x, y: b[1] + 0.6, z, qtd: 1, cor: '#555555',
+            velocidade: 0.4, espalhar: 0.06, gravidade: -1, vida: 1.4, tamanho: 0.14, aditivo: false,
+          });
+        }
+      }
+    }
+    const listaForjas = []; // reaproveitada a cada chamada (evita lixo no loop)
+
     const pad = (n) => String(n).padStart(2, '0');
 
     function textoDebug() {
@@ -590,7 +662,7 @@ async function iniciar() {
         'Chunks: ' + est.chunks + '  Fila: ' + est.fila + '  Faces: ' + est.faces,
         'Semente: ' + jogo.semente,
         'Itens no chão: ' + itensChao.quantidade,
-        'Mobs: ' + (mobs ? (mobs.quantidade ?? '?') : 'desligado') + '  XP: ' + jogador.xpTotal,
+        'Mobs: ' + (mobs ? (mobs.quantidade ?? '?') : 'desligado') + '  XP: ' + jogador.xpTotal + '  Nível: ' + jogador.nivel,
         'Câmera: ' + jogador.modoCamera,
         'Rede: ' + NOMES_MODO[rede.modo] + (rede.codigo ? '  Sala: ' + rede.codigo : '') +
           '  Jogadores: ' + rede.quantidadeJogadores,
@@ -605,7 +677,7 @@ async function iniciar() {
       if (mobs) mobs.atualizar(dt);
       particulas.atualizar(dt);
       brilharCristais(dt);
-      if (typeof mundo.blocosProximos === 'function') fogoDasTochas(dt);
+      if (typeof mundo.blocosProximos === 'function') { fogoDasTochas(dt); fogoDasForjas(dt); fogoDasFogueiras(dt); }
       itensChao.atualizar(dt);
       rede.atualizar(dt);
       remotos.atualizar(dt);

@@ -704,6 +704,157 @@ Object.assign(RECEITAS, {
 });
 
 // ---------------------------------------------------------------------
+// Fases 10 e 11: mesa do alfaiate, fogueira e ovo de dragão
+// ---------------------------------------------------------------------
+/** Madeira clara com veios (base da mesa do alfaiate) */
+function madeiraClara(ctx) {
+  const base = [168, 124, 72];
+  ruidoBase(ctx, base, 10);
+  for (let i = 0; i < 6; i++) {
+    const y = inteiro(T);
+    const x = inteiro(T - 5);
+    for (let k = 0; k < 5; k++) pixel(ctx, x + k, y, tom(base, -20));
+  }
+}
+
+/** Um carretel de linha: tampas bege em cima e embaixo, linha colorida no meio */
+function carretel(ctx, x, y, cor) {
+  const tampa = [226, 206, 160];
+  for (let i = 0; i < 3; i++) {
+    pixel(ctx, x + i, y, tampa); pixel(ctx, x + i, y + 4, tom(tampa, -30));
+    for (let j = 1; j <= 3; j++) pixel(ctx, x + i, y + j, tom(cor, i === 0 ? 24 : i === 2 ? -26 : 0));
+  }
+}
+
+/** Brasas brilhantes (fogueira): ruído vermelho-alaranjado */
+function brasasBase(ctx, escuro) {
+  const base = escuro ? [74, 30, 18] : [196, 70, 20];
+  ruidoBase(ctx, base, escuro ? 14 : 26);
+  for (let i = 0; i < 12; i++) pixel(ctx, inteiro(T), inteiro(T), escuro ? [236, 108, 30] : [255, 190, 60]);
+}
+
+Object.assign(RECEITAS, {
+  // Topo da mesa: tecido azul, tesoura prateada e fita métrica amarela
+  alfaiate_topo(ctx) {
+    madeiraClara(ctx);
+    // moldura de madeira escura de 1 px e tecido por cima (2..13)
+    for (let y = 2; y <= 13; y++) for (let x = 2; x <= 13; x++) {
+      const trama = (x + y) % 2 === 0 ? 5 : -5; // trama do pano
+      pixel(ctx, x, y, tom([84, 120, 176], trama + (rnd() - 0.5) * 8));
+    }
+    // fita métrica amarela com marcas pretas
+    for (let x = 2; x <= 13; x++) {
+      pixel(ctx, x, 11, [244, 214, 84]);
+      pixel(ctx, x, 12, [214, 180, 56]);
+      if (x % 2 === 0) pixel(ctx, x, 11, [70, 50, 20]);
+    }
+    pixel(ctx, 13, 11, [190, 60, 50]); // ponta da fita
+    // tesoura: duas lâminas cruzadas e argolas vermelhas
+    const aco = [214, 220, 232];
+    for (let i = 0; i < 6; i++) {
+      pixel(ctx, 3 + i, 2 + i, tom(aco, i * -4));
+      pixel(ctx, 3 + i, 7 - i, tom(aco, i * -4 + 6));
+    }
+    pixel(ctx, 6, 4, [90, 96, 110]); // parafuso no cruzamento
+    pixel(ctx, 6, 5, [90, 96, 110]);
+    for (const [x, y] of [[9, 3], [10, 3], [9, 4], [10, 4]]) pixel(ctx, x, y, [196, 50, 60]);
+    for (const [x, y] of [[9, 7], [10, 7], [9, 8], [10, 8]]) pixel(ctx, x, y, [150, 36, 46]);
+    // retalho de pano vermelho dobrado no canto
+    for (let y = 8; y <= 9; y++) for (let x = 11; x <= 13; x++) pixel(ctx, x, y, [190, 66, 76]);
+    pixel(ctx, 11, 8, [226, 110, 120]);
+  },
+
+  // Lado da mesa: madeira com 3 carretéis de linha pendurados
+  alfaiate_lado(ctx) {
+    madeiraClara(ctx);
+    for (let i = 0; i < T; i++) { pixel(ctx, i, 0, [112, 78, 40]); pixel(ctx, i, T - 1, [112, 78, 40]); }
+    carretel(ctx, 2, 4, [210, 50, 56]);
+    carretel(ctx, 6, 5, [56, 110, 214]);
+    carretel(ctx, 10, 4, [60, 176, 88]);
+    carretel(ctx, 12, 9, [236, 196, 60]);
+    pixel(ctx, 7, 10, [240, 240, 244]); pixel(ctx, 7, 11, [240, 240, 244]); // agulha espetada
+    pixel(ctx, 7, 12, [170, 176, 188]);
+  },
+
+  // Frente da mesa: gaveta com puxador, carretel e fita pendurada
+  alfaiate_frente(ctx) {
+    madeiraClara(ctx);
+    for (let i = 0; i < T; i++) { pixel(ctx, i, 0, [112, 78, 40]); pixel(ctx, i, T - 1, [112, 78, 40]); }
+    // gaveta
+    for (let x = 2; x <= 13; x++) { pixel(ctx, x, 3, [96, 64, 30]); pixel(ctx, x, 9, [96, 64, 30]); }
+    for (let y = 3; y <= 9; y++) { pixel(ctx, 2, y, [96, 64, 30]); pixel(ctx, 13, y, [96, 64, 30]); }
+    for (let y = 4; y <= 8; y++) for (let x = 3; x <= 12; x++) pixel(ctx, x, y, tom([176, 130, 76], (y === 4 ? 14 : 0) + (rnd() - 0.5) * 8));
+    pixel(ctx, 7, 6, [206, 210, 220]); pixel(ctx, 8, 6, [150, 154, 166]); // puxador
+    // fita métrica pendurada
+    for (let y = 10; y <= 14; y++) {
+      pixel(ctx, 4, y, y % 2 === 0 ? [70, 50, 20] : [244, 214, 84]);
+      pixel(ctx, 5, y, [214, 180, 56]);
+    }
+    carretel(ctx, 10, 10, [180, 80, 200]);
+  },
+
+  // Topo da fogueira: chama amarela no meio sobre as brasas, pontas das toras nas bordas
+  fogueira_topo(ctx) {
+    brasasBase(ctx, true);
+    for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) {
+      const d = Math.hypot(x - 7.5, y - 7.5) + (rnd() - 0.5) * 1.6;
+      if (d < 2.4) pixel(ctx, x, y, [255, 244, 160]);
+      else if (d < 4.2) pixel(ctx, x, y, [255, 190, 50]);
+      else if (d < 5.8) pixel(ctx, x, y, [244, 112, 28]);
+      else if (d < 7 && rnd() < 0.4) pixel(ctx, x, y, [196, 60, 20]);
+    }
+    // toras escuras em X por baixo, só nas pontas
+    const tora = [92, 58, 30];
+    for (let i = 0; i < 3; i++) {
+      for (const [x, y] of [[i, i], [15 - i, i], [i, 15 - i], [15 - i, 15 - i]]) pixel(ctx, x, y, tom(tora, (rnd() - 0.5) * 16));
+      for (const [x, y] of [[i + 1, i], [14 - i, i], [i + 1, 15 - i], [14 - i, 15 - i]]) pixel(ctx, x, y, tom(tora, -14));
+    }
+  },
+
+  // Lado da fogueira: toras empilhadas e cruzadas, com brasas brilhando nas frestas
+  fogueira_lado(ctx) {
+    brasasBase(ctx, false);
+    const madeira = [104, 68, 36];
+    for (let fila = 0; fila < 4; fila++) {
+      const y0 = fila * 4;
+      const x0 = fila % 2 === 0 ? 0 : 2;
+      const x1 = fila % 2 === 0 ? 13 : 15;
+      for (let y = y0; y < y0 + 3; y++) for (let x = x0; x <= x1; x++) {
+        const casca = y === y0 ? 16 : y === y0 + 2 ? -18 : 0;
+        const veio = (x + fila * 3) % 5 === 0 ? -14 : 0;
+        pixel(ctx, x, y, tom(madeira, casca + veio + (rnd() - 0.5) * 12));
+      }
+      // ponta cortada da tora, mais clara com anel
+      const xp = fila % 2 === 0 ? x1 - 1 : x0;
+      for (let y = y0; y < y0 + 3; y++) { pixel(ctx, xp, y, [186, 142, 84]); pixel(ctx, xp + 1, y, [160, 118, 66]); }
+      pixel(ctx, xp, y0 + 1, [120, 82, 44]);
+      // carvão queimado na ponta de baixo
+      pixel(ctx, x0 + 3, y0, [40, 28, 24]); pixel(ctx, x0 + 4, y0 + 1, [40, 28, 24]);
+    }
+  },
+
+  // Ovo de dragão: roxo-escuro com manchas vermelhas e pontos de brilho
+  ovo_dragao(ctx) {
+    ruidoBase(ctx, [62, 28, 92], 10);
+    // faixas de escama em arco, bem sutis
+    for (let y = 1; y < T; y += 4) for (let x = 0; x < T; x++) {
+      if ((x + (y >> 2) * 2) % 4 === 0) pixel(ctx, x, y, [46, 18, 72]);
+    }
+    // manchas vermelhas com borda escura
+    for (let n = 0; n < 6; n++) {
+      const cx = 2 + inteiro(T - 4);
+      const cy = 2 + inteiro(T - 4);
+      mancha(ctx, cx - 1, cy - 1, 3, 3, [120, 16, 40]);
+      mancha(ctx, cx, cy - 1, 2, 2, [214, 44, 62]);
+      pixel(ctx, cx, cy - 1, [255, 120, 110]);
+    }
+    // brilho (pontos claros, o shader faz o resto)
+    for (const [x, y] of [[3, 2], [4, 2], [3, 3], [11, 12], [12, 4], [8, 8]]) pixel(ctx, x, y, [170, 120, 226]);
+    for (const [x, y] of [[3, 2], [12, 4]]) pixel(ctx, x, y, [236, 214, 255]);
+  },
+});
+
+// ---------------------------------------------------------------------
 // Geração de uma textura (canvas 16x16)
 // ---------------------------------------------------------------------
 function novoCanvas(tam = T) {
@@ -1558,7 +1709,252 @@ function escamaIcone(g, cor) {
   ponto(g, 12, 2, [255, 255, 255]); ponto(g, 13, 1, tom(cor, 100)); ponto(g, 12, 1, tom(cor, 90)); // cintilar
 }
 
+// --- Fases 8, 10 e 11: monstros, tecido e montarias ---
+/** Osso na diagonal com as duas pontas "dobradas" (cor configurável: branco ou encantado) */
+function ossoIcone(g, cor, brilho) {
+  for (let i = 0; i < 8; i++) {
+    ponto(g, 4 + i, 11 - i, tom(cor, 10));
+    ponto(g, 5 + i, 11 - i, tom(cor, -26));
+  }
+  // as duas cabeças do osso (2 bolinhas em cada ponta)
+  for (const [x, y] of [[2, 11], [3, 12], [3, 10], [4, 13], [4, 12], [10, 3], [11, 2], [12, 3], [12, 4], [11, 4]]) {
+    ponto(g, x, y, tom(cor, y < 8 ? -4 : 8));
+  }
+  ponto(g, 3, 11, tom(cor, 30)); ponto(g, 11, 3, tom(cor, 30));
+  ponto(g, 6, 9, tom(cor, 40)); ponto(g, 8, 7, tom(cor, 40));
+  if (brilho) {
+    for (const [x, y] of [[2, 4], [13, 12], [8, 13], [6, 2], [14, 7]]) ponto(g, x, y, [236, 255, 240]);
+    ponto(g, 2, 3, tom(cor, 60)); ponto(g, 2, 5, tom(cor, 60)); ponto(g, 1, 4, tom(cor, 60)); ponto(g, 3, 4, tom(cor, 60));
+  }
+}
+
+function flechaIcone(g) {
+  const haste = [150, 108, 60];
+  for (let i = 0; i < 10; i++) {
+    ponto(g, 3 + i, 12 - i, tom(haste, 14));
+    ponto(g, 4 + i, 12 - i, tom(haste, -20));
+  }
+  // ponta de pedra/metal no topo direito
+  formaTexto(g, ['.XX', 'XXX', 'XX.'], 11, 1, [190, 196, 210]);
+  ponto(g, 13, 1, [250, 252, 255]);
+  // penas vermelhas e brancas atrás
+  const penas = [[2, 11], [1, 12], [3, 13], [2, 12], [4, 14], [5, 13], [1, 14], [4, 11]];
+  penas.forEach(([x, y], k) => ponto(g, x + 1, y - 1, k % 2 === 0 ? [214, 56, 60] : [244, 240, 236]));
+  ponto(g, 1, 13, [170, 36, 44]); ponto(g, 3, 14, [200, 196, 190]);
+}
+
+function sedaRaraIcone(g) {
+  const perola = [238, 230, 246];
+  preencher(g, (x, y) => (x - 7.5) * (x - 7.5) + (y - 8) * (y - 8) <= 23, perola);
+  // voltas do fio: tons de rosa e azul-água (perolado)
+  for (let i = 0; i < 9; i++) {
+    ponto(g, 4 + i, 5 + ((i * 3) % 6), [255, 206, 230]);
+    ponto(g, 11 - ((i * 2) % 7), 4 + i, [190, 236, 252]);
+    ponto(g, 5 + ((i * 5) % 7), 11 - (i % 5), [236, 214, 255]);
+  }
+  ponto(g, 5, 5, [255, 255, 255]); ponto(g, 6, 5, [255, 255, 255]); ponto(g, 5, 6, [255, 255, 255]);
+  // fio solto
+  ponto(g, 11, 12, perola); ponto(g, 12, 13, [255, 206, 230]); ponto(g, 13, 13, perola); ponto(g, 13, 14, [190, 236, 252]);
+  // estrelinhas de brilho
+  for (const [x, y] of [[13, 2], [2, 12]]) {
+    ponto(g, x, y, [255, 255, 255]); ponto(g, x - 1, y, [236, 224, 255]); ponto(g, x + 1, y, [236, 224, 255]);
+    ponto(g, x, y - 1, [236, 224, 255]); ponto(g, x, y + 1, [236, 224, 255]);
+  }
+}
+
+function moedaIcone(g) {
+  const ouro = [250, 204, 56];
+  preencher(g, (x, y) => (x - 7.5) * (x - 7.5) + (y - 7.5) * (y - 7.5) <= 30, tom(ouro, -30)); // borda
+  preencher(g, (x, y) => (x - 7.5) * (x - 7.5) + (y - 7.5) * (y - 7.5) <= 21, ouro);
+  // marca em relevo (losango no centro)
+  for (const [x, y] of [[7, 5], [8, 5], [6, 6], [9, 6], [5, 7], [10, 7], [5, 8], [10, 8], [6, 9], [9, 9], [7, 10], [8, 10]]) ponto(g, x, y, [196, 142, 28]);
+  for (const [x, y] of [[7, 7], [8, 7], [7, 8], [8, 8]]) ponto(g, x, y, [255, 232, 130]);
+  // brilho
+  ponto(g, 4, 5, [255, 250, 200]); ponto(g, 5, 4, [255, 250, 200]); ponto(g, 4, 6, [255, 240, 160]);
+  ponto(g, 12, 11, [180, 126, 24]); ponto(g, 11, 12, [180, 126, 24]);
+  ponto(g, 13, 2, [255, 255, 255]); ponto(g, 12, 2, [255, 236, 150]); ponto(g, 14, 2, [255, 236, 150]);
+  ponto(g, 13, 1, [255, 236, 150]); ponto(g, 13, 3, [255, 236, 150]);
+}
+
+function couroOrcIcone(g) {
+  const couro = [106, 116, 52];
+  formaTexto(g, [
+    'XX..XXXXXX..XX',
+    'XXXXXXXXXXXXXX',
+    '.XXXXXXXXXXXX.',
+    '.XXXXXXXXXXXXX',
+    'XXXXXXXXXXXXX.',
+    '.XXXXXXXXXXXX.',
+    '.XXXXXXXXXXXX.',
+    'XXXXXXXXXXXXXX',
+    'XXX.XXXXXX.XXX',
+    'XX...XXXX...XX',
+  ], 1, 3, couro);
+  // pregas escuras e pontos de costura claros
+  for (const [x, y] of [[4, 6], [5, 7], [6, 8], [9, 5], [10, 6], [11, 7], [7, 10]]) ponto(g, x, y, [72, 82, 34]);
+  for (const [x, y] of [[3, 5], [5, 5], [7, 5], [9, 11], [11, 11]]) ponto(g, x, y, [190, 196, 120]);
+  ponto(g, 4, 4, [150, 160, 84]); ponto(g, 5, 4, [150, 160, 84]);
+}
+
+function tecidoIcone(g) {
+  const pano = [72, 112, 196];
+  // rolo deitado: corpo e a ponta (espiral) à esquerda
+  for (let y = 4; y <= 12; y++) for (let x = 4; x <= 13; x++) {
+    ponto(g, x, y, tom(pano, (y < 6 ? 30 : y > 10 ? -34 : 0) + (x % 3 === 0 ? -8 : 0)));
+  }
+  // listras do tecido
+  for (let x = 5; x <= 13; x += 4) for (let y = 4; y <= 12; y++) ponto(g, x, y, tom(pano, y < 6 ? 62 : 32));
+  // lado do rolo (círculo claro com espiral)
+  preencher(g, (x, y) => (x - 4) * (x - 4) + (y - 8) * (y - 8) <= 18, [226, 232, 246]);
+  for (const [x, y] of [[4, 8], [5, 8], [5, 7], [4, 6], [3, 7], [3, 9], [4, 10], [6, 9], [6, 6]]) ponto(g, x, y, [140, 156, 200]);
+  // ponta de pano solta caindo
+  retangulo(g, 10, 13, 13, 14, tom(pano, 10)); ponto(g, 13, 14, tom(pano, -20));
+}
+
+function macaDouradaIcone(g) {
+  const ouro = [252, 206, 50];
+  formaTexto(g, [
+    '..XXX..XXX..',
+    '.XXXXXXXXXX.',
+    'XXXXXXXXXXXX',
+    'XXXXXXXXXXXX',
+    'XXXXXXXXXXXX',
+    '.XXXXXXXXXX.',
+    '..XXXXXXXX..',
+    '...XX..XX...',
+  ], 2, 4, ouro);
+  // brilho forte
+  ponto(g, 4, 6, [255, 255, 230]); ponto(g, 4, 7, [255, 250, 190]); ponto(g, 5, 6, [255, 250, 190]); ponto(g, 5, 7, [255, 236, 140]);
+  ponto(g, 11, 9, [220, 150, 24]); ponto(g, 10, 10, [220, 150, 24]); ponto(g, 9, 11, [214, 140, 20]);
+  // cabinho e folha
+  ponto(g, 8, 3, [110, 76, 30]); ponto(g, 8, 2, [110, 76, 30]);
+  retangulo(g, 9, 1, 11, 1, [90, 190, 60]); retangulo(g, 9, 2, 10, 2, [60, 150, 44]);
+  // cintilar
+  for (const [x, y] of [[13, 4], [1, 10]]) {
+    ponto(g, x, y, [255, 255, 255]); ponto(g, x - 1, y, [255, 236, 150]); ponto(g, x + 1, y, [255, 236, 150]);
+    ponto(g, x, y - 1, [255, 236, 150]); ponto(g, x, y + 1, [255, 236, 150]);
+  }
+}
+
+function fioSedaMagicoIcone(g) {
+  const roxo = [168, 98, 238];
+  preencher(g, (x, y) => (x - 7) * (x - 7) + (y - 7.5) * (y - 7.5) <= 22, roxo);
+  for (let i = 0; i < 8; i++) {
+    ponto(g, 4 + i, 4 + ((i * 3) % 5) + 1, [120, 60, 190]);
+    ponto(g, 10 - ((i * 2) % 6), 5 + i, [214, 160, 255]);
+  }
+  ponto(g, 5, 5, [244, 226, 255]); ponto(g, 6, 5, [244, 226, 255]); ponto(g, 5, 6, [226, 190, 255]);
+  // fio solto
+  ponto(g, 10, 11, roxo); ponto(g, 11, 12, [214, 160, 255]); ponto(g, 12, 12, roxo); ponto(g, 13, 13, [214, 160, 255]); ponto(g, 12, 14, roxo);
+  // faíscas mágicas
+  for (const [x, y] of [[13, 3], [2, 11], [12, 7]]) {
+    ponto(g, x, y, [255, 255, 255]); ponto(g, x - 1, y, [222, 180, 255]); ponto(g, x + 1, y, [222, 180, 255]);
+    ponto(g, x, y - 1, [222, 180, 255]); ponto(g, x, y + 1, [222, 180, 255]);
+  }
+}
+
+function selaIcone(g) {
+  const couro = [150, 88, 42];
+  // assento (curva) com o "chifre" na frente
+  formaTexto(g, [
+    '...........XX',
+    '..XXXXXXXXXXX',
+    '.XXXXXXXXXXXX',
+    'XXXXXXXXXXXXX',
+    'XXXXXXXXXXXXX',
+    '.XXXXXXXXXXX.',
+  ], 1, 4, couro);
+  // aba lateral mais escura
+  formaTexto(g, [
+    '.XXXXXXXXXXX.',
+    '..XXXXXXXXX..',
+    '...XXXXXXX...',
+  ], 1, 10, tom(couro, -32));
+  // costura clara e fivela
+  for (let x = 3; x <= 11; x += 2) ponto(g, x, 12, [226, 190, 130]);
+  for (let x = 3; x <= 11; x += 2) ponto(g, x, 7, tom(couro, 50));
+  ponto(g, 4, 5, tom(couro, 54)); ponto(g, 5, 5, tom(couro, 40));
+  // correia e estribo de metal pendurado
+  ponto(g, 6, 13, tom(couro, -50)); ponto(g, 6, 14, tom(couro, -50));
+  retangulo(g, 5, 14, 7, 14, [214, 220, 232]);
+  ponto(g, 5, 15, [170, 176, 190]); ponto(g, 7, 15, [170, 176, 190]);
+  ponto(g, 6, 15, [60, 40, 20]);
+}
+
+/** Manta de armadura de montaria na cor do metal: borda, rebites e friso central */
+function armaduraMontariaIcone(g, cor) {
+  const manta = (x, y) => {
+    if (y < 3 || y > 13) return false;
+    if (y <= 4) return x >= 2 && x <= 13;
+    if (y <= 10) return x >= 1 && x <= 14;
+    // barra de baixo com pontas (franja recortada)
+    return x >= 2 && x <= 13 && ((x + y) % 4 !== 0 || y < 12);
+  };
+  preencher(g, manta, cor);
+  // borda mais escura e linha de brilho em cima
+  for (let x = 2; x <= 13; x++) ponto(g, x, 3, tom(cor, 46));
+  for (let y = 5; y <= 10; y++) { ponto(g, 1, y, tom(cor, -40)); ponto(g, 14, y, tom(cor, -50)); }
+  for (let y = 4; y <= 12; y++) { ponto(g, 7, y, tom(cor, -36)); ponto(g, 8, y, tom(cor, 22)); }
+  // placas: linha horizontal
+  for (let x = 2; x <= 13; x++) if (x !== 7 && x !== 8) ponto(g, x, 8, tom(cor, -30));
+  // rebites
+  for (const [x, y] of [[3, 5], [12, 5], [3, 10], [12, 10]]) { ponto(g, x, y, tom(cor, 80)); }
+  // gema/emblema no centro
+  ponto(g, 7, 6, tom(cor, 90)); ponto(g, 8, 6, tom(cor, 60)); ponto(g, 7, 5, [255, 255, 255]);
+}
+
+function apitoIcone(g) {
+  const prata = [214, 222, 236];
+  // câmara redonda à direita e boquilha à esquerda
+  preencher(g, (x, y) => (x - 10) * (x - 10) + (y - 8) * (y - 8) <= 12, prata);
+  retangulo(g, 2, 7, 7, 9, prata);
+  for (let x = 2; x <= 7; x++) { ponto(g, x, 7, tom(prata, 30)); ponto(g, x, 9, tom(prata, -40)); }
+  ponto(g, 2, 8, tom(prata, -30)); // boca do apito
+  // buraco de sopro (escuro) e brilho
+  retangulo(g, 8, 6, 9, 6, [72, 80, 96]);
+  ponto(g, 9, 5, tom(prata, 50)); ponto(g, 10, 7, [255, 255, 255]); ponto(g, 9, 7, [250, 252, 255]);
+  // argola e correntinha douradas no topo
+  for (const [x, y] of [[11, 3], [12, 3], [13, 4], [13, 5], [12, 6], [11, 5]]) ponto(g, x, y, [236, 196, 70]);
+  ponto(g, 10, 4, [200, 160, 50]);
+  // cordão
+  ponto(g, 5, 10, [150, 100, 52]); ponto(g, 4, 11, [150, 100, 52]); ponto(g, 3, 12, [130, 86, 44]);
+}
+
+/** Ovo de dragão (versão 2D para o inventário) */
+function ovoDragaoIcone(g) {
+  const roxo = [74, 30, 112];
+  const dentro = (x, y) => {
+    const dy = (y - 8) / 7;
+    const dx = (x - 7.5) / (4.6 + (y - 8) * 0.14);
+    return dx * dx + dy * dy <= 1;
+  };
+  preencher(g, dentro, roxo);
+  // manchas vermelhas
+  for (const [x, y] of [[6, 5], [7, 5], [10, 7], [11, 7], [5, 9], [6, 9], [8, 11], [9, 11], [9, 3]]) if (dentro(x, y)) ponto(g, x, y, [210, 40, 62]);
+  for (const [x, y] of [[6, 6], [10, 8], [5, 10], [8, 12]]) if (dentro(x, y)) ponto(g, x, y, [120, 16, 40]);
+  // brilho
+  ponto(g, 5, 4, [226, 190, 255]); ponto(g, 5, 5, [190, 140, 240]); ponto(g, 6, 3, [190, 140, 240]);
+  ponto(g, 11, 12, [56, 20, 86]); ponto(g, 10, 13, [56, 20, 86]);
+  ponto(g, 13, 3, [255, 255, 255]); ponto(g, 12, 3, [236, 190, 255]); ponto(g, 14, 3, [236, 190, 255]);
+  ponto(g, 13, 2, [236, 190, 255]); ponto(g, 13, 4, [236, 190, 255]);
+}
+
 const ICONES_MOBS = {
+  osso: (g) => ossoIcone(g, [240, 236, 222], false),
+  osso_encantado: (g) => ossoIcone(g, [110, 250, 150], true),
+  flecha: flechaIcone,
+  seda_rara: sedaRaraIcone,
+  moeda: moedaIcone,
+  couro_orc: couroOrcIcone,
+  tecido: tecidoIcone,
+  maca_dourada: macaDouradaIcone,
+  fio_seda_magico: fioSedaMagicoIcone,
+  sela: selaIcone,
+  armadura_montaria_ferro: (g) => armaduraMontariaIcone(g, [188, 194, 208]),
+  armadura_montaria_ouro: (g) => armaduraMontariaIcone(g, [250, 204, 56]),
+  armadura_montaria_diamante: (g) => armaduraMontariaIcone(g, [84, 222, 234]),
+  apito: apitoIcone,
+  ovo_dragao: ovoDragaoIcone,
   costeleta: costeletaIcone,
   coxinha: coxinhaIcone,
   maca: macaIcone,
@@ -1568,7 +1964,7 @@ const ICONES_MOBS = {
 };
 
 // Itens de bloco que usam um ícone próprio em vez do cubinho
-const ICONES_ESPECIAIS = new Set(['porta', 'tocha']);
+const ICONES_ESPECIAIS = new Set(['porta', 'tocha', 'ovo_dragao']);
 
 /** Desenha o ícone de um item que não é bloco (item pode ser undefined) */
 function desenharIconeItem(item) {

@@ -124,6 +124,21 @@ export const CONFIG = {
   TOCHA_RAIO: 14,                // distância máxima (blocos) para as fagulhas das tochas
   TOCHA_POR_VEZ: 3,              // quantas tochas soltam fagulhas a cada vez
   BAU_DIST_MAX: 12,              // o anfitrião só atende `bauAbrir` de quem está até essa distância (blocos)
+
+  // ----- XP, níveis, efeitos, forja e roupas (Fases 8, 9 e 10) -----
+  XP_BASE: 40,                   // XP para subir do nível n = floor(XP_BASE × n^XP_EXPOENTE)
+  XP_EXPOENTE: 1.4,
+  VIDA_POR_NIVEL: 2,             // +2 de vida (1 coração) a cada nível
+  VIDA_MAX_NIVEIS: 40,           // teto da vida máxima (20 corações)
+  CURA_AO_SUBIR_NIVEL: 4,        // vida devolvida ao subir de nível
+  EFEITO_DANO_INTERVALO_S: 1,    // veneno e fogo tiram 1 de vida a cada tanto tempo
+  EFEITO_LENTO_FATOR: 0.5,       // lento: velocidade × 0.5
+  EFEITO_FOGO_PADRAO_S: 3,       // duração do fogo quando ninguém diz
+  EFEITO_VENENO_PADRAO_S: 4,     // duração do veneno quando ninguém diz
+  EFEITO_LENTO_PADRAO_S: 4,      // duração do lento quando ninguém diz
+  FORJA_RAIO: 12,                // distância máxima (blocos) para sair fogo das forjas
+  FORJA_INTERVALO_S: 0.2,        // de quanto em quanto tempo saem fagulhas das forjas
+  FORJA_POR_VEZ: 2,              // quantas forjas soltam fogo a cada vez
 };
 
 // Duração total de um dia completo (dia + noite), em segundos

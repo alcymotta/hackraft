@@ -16,6 +16,7 @@
 //
 //   5 (Fase 5): `jogador.vida` (a vida do anfitrião vem do jogador.serializar)
 //   7 (Fase 7): `jogador.xpTotal` (dentro de `jogador`; a versão continua 6, mobs não são salvos)
+//   8 (Fases 8 a 10): nada novo no save (XP já vai em `jogador.xpTotal`); a versão 8 é aceita por segurança
 //   6 (Fase 6): + `baus` ("x,y,z" → 27 espaços) e as `modificacoes` passam a ter
 //               o estado do bloco: [x, y, z, id, estado]
 //
@@ -28,7 +29,7 @@
 
 import { CONFIG } from './config.js';
 
-const VERSOES_ACEITAS = [1, 2, 3, 4, 5, 6];
+const VERSOES_ACEITAS = [1, 2, 3, 4, 5, 6, 7, 8];
 
 /** Guarda o estado. Devolve true se deu certo, false se falhou (ex.: sem espaço). */
 export function salvarJogo(estado) {
@@ -43,7 +44,7 @@ export function salvarJogo(estado) {
 
 /**
  * Lê o jogo salvo. Devolve o estado, ou null se não existir ou for inválido.
- * Aceita as versões 1 a 6. O que faltar das versões antigas é preenchido:
+ * Aceita as versões 1 a 8. O que faltar das versões antigas é preenchido:
  * `jogadores` = {}, `equipamento` = null, `itensChao` = [], `casa` = null, `baus` = {}.
  */
 export function carregarJogo() {
