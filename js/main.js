@@ -329,7 +329,8 @@ async function iniciar() {
         const o = obter(id);
         o.posicao = pos;
         o.local = false;
-        o.morto = false;
+        // Morto na tela de morte? (a rede manda junto com a posição, Fase 8)
+        o.morto = !!(rede && typeof rede.estaMorto === 'function' && rede.estaMorto(id));
         // A defesa dos outros jogadores: se a rede souber, usa; senão 0
         o.defesa = (rede && typeof rede.defesaDe === 'function' ? rede.defesaDe(id) : 0) || 0;
         lista.push(o);
@@ -706,7 +707,8 @@ async function iniciar() {
       if (typeof mundo.definirTempo === 'function') mundo.definirTempo(tempoShader);
       if (typeof mundo.luzEm !== 'function') itensChao.definirLuz(ceu.luzDoDia); // com luzEm, quem define é fogoDasTochas
       hacker.atualizar(dt, jogador.posicao);
-      const clima = ceu.ehNoite ? 'noite' : 'dia';
+      // Música: 'chefao' enquanto houver um chefão vivo perto (até 64 blocos); senão dia/noite
+      const clima = mobs && mobs.chefaoPerto ? 'chefao' : (ceu.ehNoite ? 'noite' : 'dia');
       if (clima !== climaAtual) {
         climaAtual = clima;
         if (som.musica && typeof som.musica.definirClima === 'function') som.musica.definirClima(clima);

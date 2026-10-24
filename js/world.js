@@ -22,6 +22,19 @@
 //   - Colisão e mira: caixaColisao / caixaSelecao (porta fina, tocha
 //     pequena), e o raycast acerta essas caixas de verdade.
 //
+// Fase 8 (monstros RPG e chefões):
+//   - Áreas especiais, 1 de cada a cada região de 12×12 chunks, sempre no
+//     mesmo lugar para a mesma semente (o multiplayer depende disso):
+//       Ninho do Dragão: no pico mais alto da região, uma plataforma de pedra
+//         escura com costelas de osso, um ninho de troncos com brasas, um baú
+//         de tesouro no meio e dracônio na plataforma e na rocha em volta.
+//       Covil da Hidra: um lago escuro (fundo de pedra escura) com uma ilhota
+//         de pedra musgosa no meio, um baú de tesouro e pedras saindo da água.
+//     areasEspeciais(perto, raio) lista as áreas perto de um ponto e
+//     bauDeTesouro(x, y, z) diz se o baú dessa posição é o de uma área.
+//   - topoColuna(x, z): onde começa o céu aberto numa coluna (os mobs usam).
+//   - biomaEm(x, z): planície, floresta ou deserto (os mobs usam).
+//
 // FORMATOS (o que a rede e o save usam):
 //   modificação:   [x, y, z, id, estado]  (listas antigas com 4 números valem estado 0)
 //   lote:          definirBlocos([[x, y, z, id, estado?], ...], origem)
@@ -37,7 +50,7 @@
 
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
-import { B, BLOCOS, OPACO, SOLIDO, LIQUIDO } from './blocks.js';
+import { B, BLOCOS, OPACO, SOLIDO, LIQUIDO, blocoPorNome } from './blocks.js';
 import { criarRuido, hash2D, hash3D, sementeParaNumero } from './noise.js';
 import {
   Chunk, MontadorMalha, Iluminacao, TAM, ALTURA, AREA,
@@ -135,6 +148,54 @@ export const TABELA_MINERIOS = TABELA_MINERIOS_BASE
   .filter((m) => Number.isInteger(m.bloco) && m.bloco > 0)
   .map((m) => ({ ...m, dentro: m.dentro ?? B.PEDRA }));
 
+// --- Áreas especiais (Fase 8): Ninho do Dragão e Covil da Hidra ---
+// O mundo é dividido em "regiões" de 12×12 chunks (192×192 blocos). Cada região
+// tem exatamente 1 ninho e 1 covil. O lugar de cada um é decidido só pela
+// semente e pela região (sem depender da ordem em que os chunks são gerados):
+// todo computador calcula o mesmo.
+// (Mudar estes números muda o lugar das áreas em TODOS os mundos.)
+const REGIAO_CHUNKS = 12;
+const REGIAO = REGIAO_CHUNKS * TAM;      // em blocos (192)
+const MARGEM_REGIAO = 40;                // o centro fica a pelo menos 40 blocos da borda da região
+const ALCANCE_AREA = 18;                 // nada de uma área passa desta distância do centro
+const LONGE_DO_INICIO = 96;              // nenhuma área a menos disso de (0, 0), onde o jogador nasce
+const DIST_NINHO_COVIL = 72;             // o covil fica pelo menos isso longe do ninho
+const NINHO_RAIO = 7;                    // raio da plataforma do ninho
+const LAGO_RAIO = 10;                    // raio médio do lago do covil
+const ILHA_RAIO = 4.2;                   // raio médio da ilhota
+// Blocos usados. Se um dia existirem blocos próprios com estes nomes em
+// blocks.js, eles passam a ser usados (só nas partes do mundo ainda não
+// visitadas mudaria a aparência). Por enquanto:
+//   pedra escura   → rocha-matriz (preta e inquebrável: a "arena" não é desmontada)
+//   osso           → areia (clara como osso)
+//   brasa          → fogueira (luz e fogo; o ovo de dragão choca perto dela)
+//   pedra musgosa  → pedra (com grama e tufos de folhas por cima)
+const BL_PEDRA_ESCURA = blocoPorNome('pedra_escura') ?? B.ROCHA_MATRIZ;
+const BL_OSSO = blocoPorNome('bloco_osso') ?? B.AREIA;
+const BL_BRASA = blocoPorNome('brasa') ?? B.FOGUEIRA ?? B.MINERIO_FOGO;
+const BL_MUSGO = blocoPorNome('pedra_musgosa') ?? B.PEDRA;
+const BL_DRACONIO = B.MINERIO_DRACONIO ?? B.PEDRA;
+// Direções da frente do baú (0 = -Z, 1 = +X, 2 = +Z, 3 = -X)
+const DIR_BAU_X = [0, 1, 0, -1];
+const DIR_BAU_Z = [-1, 0, 1, 0];
+const VIZINHOS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+
+/** Sorteador de números em [0, 1) (mulberry32) que começa em `estado`. Mesma semente = mesma sequência. */
+function sorteador(estado) {
+  let a = estado | 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), a | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Bloco "vazio" que a construção pode ocupar (ar, água, árvore) */
+function ehVazioOuArvore(id) {
+  return id === B.AR || id === B.AGUA || id === B.FOLHAS || id === B.TRONCO;
+}
+
 // As 6 direções em que um veio pode crescer (+X, -X, +Y, -Y, +Z, -Z)
 const DIR_X = new Int8Array([1, -1, 0, 0, 0, 0]);
 const DIR_Y = new Int8Array([0, 0, 1, -1, 0, 0]);
@@ -177,7 +238,9 @@ export class GeradorMundo {
     this.sementeTerra = s ^ 0x3956c25b;
     this.sementeTesouro = s ^ 0x59f111f1;
     this.sementeMinerio = s ^ 0x923f82a4;
+    this.sementeAreas = s ^ 0x2545f491;
     this._estadoSorteio = 0; // estado do sorteador dos minérios (ver _sortear)
+    this._cacheAreas = new Map(); // "rx,rz" → [ninho, covil] (Fase 8)
 
     // Rascunhos reaproveitados a cada chunk (nada de criar arrays no meio)
     this.altM = new Int16Array(LM * LM);   // altura do chão (com margem)
@@ -249,6 +312,7 @@ export class GeradorMundo {
     this.colocarMinerios(chunk);
     this.plantarArvores(chunk, x0, z0);
     this.colocarTesouros(chunk); // depois das árvores, para não cair dentro de uma
+    this.colocarAreasEspeciais(chunk, x0, z0); // por último: passa por cima de árvores e presentes
     chunk.calcularAlturas();
   }
 
@@ -635,6 +699,319 @@ export class GeradorMundo {
       if (!livre) continue;
       d[col + (h + 1) * AREA] = B.PRESENTE;
       return;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Etapa 7 (Fase 8): áreas especiais (Ninho do Dragão e Covil da Hidra)
+  // ------------------------------------------------------------------
+  // Como funciona sem depender da ordem dos chunks:
+  //   1. "Planejar": para cada região, decide ONDE ficam o ninho e o covil e
+  //      monta a lista dos enfeites (costelas, troncos, baú, dracônio...).
+  //      Isso usa só a semente e a altura do terreno (alturaEm, que é uma
+  //      função "pura"), então dá sempre o mesmo resultado. Fica guardado.
+  //   2. "Esculpir": cada chunk que encosta na área escreve SÓ os blocos que
+  //      caem dentro dele, coluna por coluna, com contas que dependem só da
+  //      posição. Os chunks vizinhos fazem a parte deles e tudo se encaixa.
+
+  /** [ninho, covil] da região (rx, rz), calculados uma vez e guardados */
+  areasDaRegiao(rx, rz) {
+    const chave = rx + ',' + rz;
+    let areas = this._cacheAreas.get(chave);
+    if (areas) return areas;
+    const ninho = this._planejarNinho(rx, rz);
+    const covil = this._planejarCovil(rx, rz, ninho);
+    areas = [ninho, covil];
+    if (this._cacheAreas.size >= 256) this._cacheAreas.clear(); // não cresce para sempre
+    this._cacheAreas.set(chave, areas);
+    return areas;
+  }
+
+  /** Ninho do Dragão: no ponto mais alto da região (um pico) */
+  _planejarNinho(rx, rz) {
+    const x0 = rx * REGIAO, z0 = rz * REGIAO;
+    const s = this.sementeAreas ^ 0x0a1b2c3d;
+    const vao = REGIAO - 2 * MARGEM_REGIAO;
+    const N = 6;
+    const dentro = (x, z) => x >= x0 + MARGEM_REGIAO && x < x0 + REGIAO - MARGEM_REGIAO &&
+      z >= z0 + MARGEM_REGIAO && z < z0 + REGIAO - MARGEM_REGIAO && x * x + z * z >= LONGE_DO_INICIO * LONGE_DO_INICIO;
+    // 1) 36 pontos sorteados numa grade: fica com o mais alto
+    let bx = x0 + (REGIAO >> 1), bz = z0 + (REGIAO >> 1), melhor = -1;
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        const x = x0 + MARGEM_REGIAO + Math.floor((i + hash2D(s, rx * N + i, rz * N + j)) * vao / N);
+        const z = z0 + MARGEM_REGIAO + Math.floor((j + hash2D(s ^ 0x55555555, rx * N + i, rz * N + j)) * vao / N);
+        if (!dentro(x, z)) continue;
+        const h = this.alturaEm(x, z);
+        if (h > melhor) { melhor = h; bx = x; bz = z; }
+      }
+    }
+    if (melhor < 0) melhor = this.alturaEm(bx, bz);
+    // 2) "Sobe o morro": anda para o vizinho mais alto, com passos cada vez menores, até o topo
+    for (const passo of [6, 3, 1]) {
+      for (let k = 0; k < 10; k++) {
+        let mx = bx, mz = bz, mh = melhor;
+        for (const [dx, dz] of VIZINHOS8) {
+          const x = bx + dx * passo, z = bz + dz * passo;
+          if (!dentro(x, z)) continue;
+          const h = this.alturaEm(x, z);
+          if (h > mh) { mh = h; mx = x; mz = z; }
+        }
+        if (mx === bx && mz === bz) break;
+        bx = mx; bz = mz; melhor = mh;
+      }
+    }
+    // A plataforma fica 1 acima do pico (e nunca baixa demais: vira um rochedo)
+    const yPlat = Math.min(ALTURA - 10, Math.max(melhor + 1, NIVEL_MAR + 14));
+    const r = sorteador(Math.floor(hash2D(s ^ 0x777, rx, rz) * 4294967296));
+    const fases = [r() * 6.283, r() * 6.283, r() * 6.283];
+    const decor = []; // [x, y, z, id, estado, soNaPedra]
+
+    // Ninho de troncos: um anel em volta do centro, com alguns buracos
+    for (let dz = -4; dz <= 4; dz++) {
+      for (let dx = -4; dx <= 4; dx++) {
+        const d = Math.sqrt(dx * dx + dz * dz);
+        if (d >= 2.3 && d <= 3.3 && r() > 0.15) decor.push([bx + dx, yPlat + 1, bz + dz, B.TRONCO, 0, 0]);
+      }
+    }
+    // Brasas no chão, dentro do ninho (o centro fica para o baú)
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const d = Math.sqrt(dx * dx + dz * dz);
+        if (d >= 1 && d < 2.2 && r() < 0.5) decor.push([bx + dx, yPlat, bz + dz, BL_BRASA, 0, 0]);
+      }
+    }
+    // Costelas gigantes de osso saindo da borda (5 de 6: o vão que falta é a "entrada")
+    const COSTELA = [[6.2, 1], [6.2, 2], [5.8, 3], [5.2, 4], [4.4, 5], [3.6, 5]];
+    for (let k = 0; k < 5; k++) {
+      const a = fases[2] + k * (Math.PI / 3);
+      const ca = Math.cos(a), sa = Math.sin(a);
+      for (const [rr, hh] of COSTELA) {
+        decor.push([bx + Math.round(ca * rr), yPlat + hh, bz + Math.round(sa * rr), BL_OSSO, 0, 0]);
+      }
+    }
+    // Ossos soltos deitados na plataforma (3 blocos em linha)
+    for (let k = 0; k < 3; k++) {
+      const a = r() * 6.283, d = 3.8 + r() * 1.5;
+      const ox = bx + Math.round(Math.cos(a) * d), oz = bz + Math.round(Math.sin(a) * d);
+      const emX = r() < 0.5;
+      for (let i = -1; i <= 1; i++) decor.push([ox + (emX ? i : 0), yPlat + 1, oz + (emX ? 0 : i), BL_OSSO, 0, 0]);
+    }
+    // Dracônio: alguns blocos no chão da plataforma e vários na rocha em volta
+    for (let k = 0; k < 4; k++) {
+      const a = r() * 6.283, d = 3.6 + r() * 2.4;
+      decor.push([bx + Math.round(Math.cos(a) * d), yPlat, bz + Math.round(Math.sin(a) * d), BL_DRACONIO, 0, 0]);
+    }
+    for (let k = 0; k < 14; k++) {
+      const a = r() * 6.283, d = 2 + r() * (NINHO_RAIO + 4);
+      const y = yPlat - 1 - Math.floor(r() * 9);
+      decor.push([bx + Math.round(Math.cos(a) * d), y, bz + Math.round(Math.sin(a) * d), BL_DRACONIO, 0, 1]);
+    }
+    // Baú de tesouro bem no meio do ninho
+    const bau = [bx, yPlat + 1, bz];
+    decor.push([bx, yPlat + 1, bz, B.BAU, Math.floor(r() * 4), 0]);
+
+    return {
+      tipo: 'ninho', bx, bz, yPlat, fases, decor, alcance: ALCANCE_AREA,
+      // O que os outros módulos veem (não altere: é compartilhado)
+      info: { tipo: 'ninho', x: bx + 0.5, y: yPlat + 1, z: bz + 0.5, raio: NINHO_RAIO, bau },
+    };
+  }
+
+  /** Covil da Hidra: num lugar baixo e plano da região, longe do ninho */
+  _planejarCovil(rx, rz, ninho) {
+    const x0 = rx * REGIAO, z0 = rz * REGIAO;
+    const s = this.sementeAreas ^ 0x6d2b79f5;
+    const vao = REGIAO - 2 * MARGEM_REGIAO;
+    const N = 5;
+    let bx = 0, bz = 0, melhorNota = Infinity, reservaD = -1, rbx = 0, rbz = 0;
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        const x = x0 + MARGEM_REGIAO + Math.floor((i + hash2D(s, rx * N + i, rz * N + j)) * vao / N);
+        const z = z0 + MARGEM_REGIAO + Math.floor((j + hash2D(s ^ 0x33333333, rx * N + i, rz * N + j)) * vao / N);
+        const dn = Math.hypot(x - ninho.bx, z - ninho.bz);
+        const longeDoInicio = x * x + z * z >= LONGE_DO_INICIO * LONGE_DO_INICIO;
+        // Se nada servir: o mais longe do ninho (sempre longe do início, se der)
+        const pesoReserva = dn + (longeDoInicio ? 10000 : 0);
+        if (pesoReserva > reservaD) { reservaD = pesoReserva; rbx = x; rbz = z; }
+        if (dn < DIST_NINHO_COVIL || !longeDoInicio) continue;
+        // Nota: quanto o chão sobe e desce em volta + quanto foge de "um pouco acima do mar"
+        const h = this.alturaEm(x, z);
+        let hMin = h, hMax = h;
+        for (let k = 0; k < 6; k++) {
+          const a = k * Math.PI / 3;
+          const hh = this.alturaEm(Math.round(x + Math.cos(a) * 13), Math.round(z + Math.sin(a) * 13));
+          if (hh < hMin) hMin = hh;
+          if (hh > hMax) hMax = hh;
+        }
+        const nota = (hMax - hMin) + Math.abs(hMin - (NIVEL_MAR + 3)) * 0.6;
+        if (nota < melhorNota) { melhorNota = nota; bx = x; bz = z; }
+      }
+    }
+    if (melhorNota === Infinity) { bx = rbx; bz = rbz; }
+    // Nível da água: o ponto mais baixo da margem (assim a água não "vaza" por cima)
+    let yAgua = Infinity;
+    for (let k = 0; k < 16; k++) {
+      const a = k * Math.PI / 8;
+      const hh = this.alturaEm(Math.round(bx + Math.cos(a) * (LAGO_RAIO + 2)), Math.round(bz + Math.sin(a) * (LAGO_RAIO + 2)));
+      if (hh < yAgua) yAgua = hh;
+    }
+    yAgua = Math.max(NIVEL_MAR, Math.min(ALTURA - 24, yAgua));
+    const r = sorteador(Math.floor(hash2D(s ^ 0x999, rx, rz) * 4294967296));
+    const fases = [r() * 6.283, r() * 6.283, r() * 6.283, r() * 6.283];
+    const decor = [];
+    const yTopo = yAgua + 2; // em pé na ilhota
+
+    // Baú na beira da ilhota, com a frente virada para o centro
+    const k = Math.floor(r() * 4);
+    const bau = [bx + DIR_BAU_X[k] * 2, yTopo, bz + DIR_BAU_Z[k] * 2];
+    // Tufos de musgo (folhas) e ossos de quem não voltou, na beira da ilhota
+    for (let n = 0; n < 6; n++) {
+      const a = r() * 6.283, d = 2.3 + r() * 1.0; // dentro da ilhota (raio mínimo ~3,5)
+      const x = bx + Math.round(Math.cos(a) * d), z = bz + Math.round(Math.sin(a) * d);
+      if (x === bau[0] && z === bau[2]) continue;
+      decor.push([x, yTopo, z, n < 4 ? B.FOLHAS : BL_OSSO, 0, 0]);
+    }
+    // Pedras musgosas saindo da água (como ruínas)
+    for (let n = 0; n < 4; n++) {
+      const a = r() * 6.283, d = 6.5 + r() * 2.2;
+      const x = bx + Math.round(Math.cos(a) * d), z = bz + Math.round(Math.sin(a) * d);
+      const alt = 1 + Math.floor(r() * 3);
+      for (let y = yAgua - 5; y <= yAgua + alt; y++) decor.push([x, y, z, BL_MUSGO, 0, 0]);
+      decor.push([x, yAgua + alt + 1, z, B.FOLHAS, 0, 0]);
+    }
+    decor.push([bau[0], bau[1], bau[2], B.BAU, (k + 2) % 4, 0]);
+
+    return {
+      tipo: 'covil', bx, bz, yAgua, fases, decor, alcance: ALCANCE_AREA,
+      info: { tipo: 'covil', x: bx + 0.5, y: yTopo, z: bz + 0.5, raio: LAGO_RAIO, bau },
+    };
+  }
+
+  /** Escreve, neste chunk, a parte das áreas especiais que cai dentro dele */
+  colocarAreasEspeciais(chunk, x0, z0) {
+    const rx = Math.floor(chunk.cx / REGIAO_CHUNKS);
+    const rz = Math.floor(chunk.cz / REGIAO_CHUNKS);
+    const areas = this.areasDaRegiao(rx, rz);
+    for (let k = 0; k < areas.length; k++) {
+      const a = areas[k];
+      // O chunk encosta no quadrado da área?
+      if (a.bx + a.alcance < x0 || a.bx - a.alcance >= x0 + TAM ||
+          a.bz + a.alcance < z0 || a.bz - a.alcance >= z0 + TAM) continue;
+      if (a.tipo === 'ninho') this._esculpirNinho(chunk, x0, z0, a);
+      else this._esculpirCovil(chunk, x0, z0, a);
+      this._decorar(chunk, x0, z0, a);
+    }
+  }
+
+  /** Plataforma do ninho, o rochedo embaixo dela e o "corte" do pico em cima */
+  _esculpirNinho(chunk, x0, z0, a) {
+    const d = chunk.dados;
+    const yP = a.yPlat;
+    const f = a.fases;
+    for (let lz = 0; lz < TAM; lz++) {
+      const dz = z0 + lz - a.bz;
+      if (dz > a.alcance || dz < -a.alcance) continue;
+      for (let lx = 0; lx < TAM; lx++) {
+        const wx = x0 + lx;
+        const dx = wx - a.bx;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > a.alcance) continue;
+        const ang = Math.atan2(dz, dx);
+        // Borda um pouco irregular (duas ondas em volta do círculo)
+        const rp = NINHO_RAIO + 0.7 * Math.sin(3 * ang + f[0]) + 0.4 * Math.sin(5 * ang + f[1]);
+        const col = lx + lz * TAM;
+        const h = this.altM[(lx + MARGEM) + (lz + MARGEM) * LM]; // chão original da coluna
+        if (dist <= rp + 2.5) {
+          // Tira tudo acima do nível da plataforma (o topo do pico e as árvores)
+          for (let y = yP + 1; y < ALTURA; y++) d[col + y * AREA] = B.AR;
+        }
+        if (dist <= rp) {
+          d[col + yP * AREA] = BL_PEDRA_ESCURA;
+          d[col + (yP - 1) * AREA] = BL_PEDRA_ESCURA;
+          // Pedra embaixo até o chão (se a plataforma ficou acima do terreno)
+          for (let y = yP - 2; y >= 2 && y >= h - 2; y--) {
+            const i = col + y * AREA;
+            if (ehVazioOuArvore(d[i])) d[i] = B.PEDRA;
+          }
+        } else {
+          // Em volta: encosta íngreme de pedra (desce ~3,5 blocos por bloco de distância)
+          const queda = (dist - rp) * 3.5 + hash2D(this.sementeAreas, wx, z0 + lz) * 2;
+          const topo = Math.floor(yP - 1 - queda);
+          if (topo <= h) continue;
+          for (let y = Math.min(topo, ALTURA - 1); y >= 2 && y >= h - 2; y--) {
+            const i = col + y * AREA;
+            if (ehVazioOuArvore(d[i])) d[i] = B.PEDRA;
+          }
+        }
+      }
+    }
+  }
+
+  /** Lago escuro com a ilhota no meio e a margem que segura a água */
+  _esculpirCovil(chunk, x0, z0, a) {
+    const d = chunk.dados;
+    const yA = a.yAgua;
+    const f = a.fases;
+    for (let lz = 0; lz < TAM; lz++) {
+      const wz = z0 + lz;
+      const dz = wz - a.bz;
+      if (dz > a.alcance || dz < -a.alcance) continue;
+      for (let lx = 0; lx < TAM; lx++) {
+        const wx = x0 + lx;
+        const dx = wx - a.bx;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > a.alcance) continue;
+        const ang = Math.atan2(dz, dx);
+        const rl = LAGO_RAIO + 1.6 * Math.sin(2 * ang + f[0]) + 1.0 * Math.sin(3 * ang + f[1]) + 0.6 * Math.sin(5 * ang + f[2]);
+        const ri = ILHA_RAIO + 0.7 * Math.sin(3 * ang + f[3]);
+        const col = lx + lz * TAM;
+        const h = this.altM[(lx + MARGEM) + (lz + MARGEM) * LM];
+        if (dist <= ri) {
+          // Ilhota: pedra musgosa do fundo até 1 bloco acima da água
+          for (let y = yA + 2; y < ALTURA; y++) d[col + y * AREA] = B.AR;
+          for (let y = Math.max(2, yA - 7); y <= yA; y++) d[col + y * AREA] = BL_MUSGO;
+          d[col + (yA + 1) * AREA] = hash2D(this.sementeAreas ^ 0x4d, wx, wz) < 0.62 ? B.GRAMA : BL_MUSGO;
+        } else if (dist <= rl) {
+          // Água: funda perto da ilhota (5 blocos) e rasa perto da margem (1 bloco)
+          const u = Math.min(1, Math.max(0, (dist - ri) / Math.max(1, rl - ri)));
+          const fundo = yA - 1 - Math.round(4 * (1 - u));
+          for (let y = yA + 1; y < ALTURA; y++) d[col + y * AREA] = B.AR;
+          for (let y = fundo + 1; y <= yA; y++) d[col + y * AREA] = B.AGUA;
+          d[col + fundo * AREA] = BL_PEDRA_ESCURA;
+          if (fundo - 1 >= 1) d[col + (fundo - 1) * AREA] = BL_PEDRA_ESCURA;
+          // Fecha cavernas logo embaixo do fundo (a água não fica "pendurada")
+          for (let y = fundo - 2; y >= 2 && y >= fundo - 4; y--) {
+            const i = col + y * AREA;
+            if (ehVazioOuArvore(d[i])) d[i] = B.PEDRA;
+          }
+        } else if (dist <= rl + 2.5) {
+          // Margem: onde o chão é mais baixo que a água, sobe terra e grama
+          // (no mar não precisa: a água de fora está na mesma altura)
+          if (yA <= NIVEL_MAR && h < NIVEL_MAR) continue;
+          for (let y = Math.max(2, yA - 3); y <= yA; y++) {
+            const i = col + y * AREA;
+            if (ehVazioOuArvore(d[i])) d[i] = y === yA ? B.GRAMA : B.TERRA;
+          }
+        }
+      }
+    }
+  }
+
+  /** Enfeites da área (só os que caem neste chunk) */
+  _decorar(chunk, x0, z0, a) {
+    const d = chunk.dados;
+    const est = chunk.estados;
+    const lista = a.decor;
+    for (let k = 0; k < lista.length; k++) {
+      const e = lista[k];
+      const lx = e[0] - x0, lz = e[2] - z0, y = e[1];
+      if (lx < 0 || lx >= TAM || lz < 0 || lz >= TAM || y < 1 || y >= ALTURA) continue;
+      const i = lx + lz * TAM + y * AREA;
+      // Dracônio "na rocha": só troca pedra (não fica flutuando no ar)
+      if (e[5] === 1 && d[i] !== B.PEDRA && d[i] !== BL_PEDRA_ESCURA) continue;
+      d[i] = e[3];
+      est[i] = e[4];
     }
   }
 }
@@ -1276,6 +1653,75 @@ export class Mundo {
   estaPronto(x, z) {
     const ch = this._chunkEm(Math.floor(x) >> BITS, Math.floor(z) >> BITS);
     return !!(ch && ch.temMalha);
+  }
+
+  // ----------------------------------------------------------------
+  // Fase 8: topo da coluna, bioma e áreas especiais
+  // ----------------------------------------------------------------
+
+  /**
+   * y onde começa o céu aberto na coluna (x, z): 1 acima do bloco mais alto
+   * que "tapa" o céu (cubo opaco; folhas, vidro e água não tapam). Quem está
+   * com a cabeça nesse y ou acima pega sol e chuva. Com o chunk carregado é
+   * exato; sem ele, é uma estimativa pelo terreno gerado (sem árvores nem
+   * construções).
+   */
+  topoColuna(x, z) {
+    x = Math.floor(x);
+    z = Math.floor(z);
+    const ch = this._chunkEm(x >> BITS, z >> BITS);
+    if (ch) return ch.alturas[(x & MASCARA) + (z & MASCARA) * TAM];
+    return this.gerador.alturaEm(x, z) + 1;
+  }
+
+  /** Bioma da coluna (x, z): BIOMA.PLANICIE, BIOMA.FLORESTA ou BIOMA.DESERTO */
+  biomaEm(x, z) {
+    return this.gerador.biomaEm(Math.floor(x), Math.floor(z));
+  }
+
+  /**
+   * Áreas especiais com o centro a até `raio` blocos (na horizontal) de
+   * `perto` ({ x, z }): [{ tipo: 'ninho' | 'covil', x, y, z, raio, bau: [x, y, z] }].
+   *   x, z = centro da área; y = onde os pés ficam (em cima da plataforma do
+   *   ninho ou da ilhota do covil); raio = tamanho aproximado; bau = posição
+   *   do baú de tesouro.
+   * Os objetos são compartilhados (não altere). `saida` (opcional) é uma
+   * lista para reaproveitar. Funciona até para lugares ainda não carregados.
+   */
+  areasEspeciais(perto, raio = 64, saida = []) {
+    saida.length = 0;
+    if (!perto || !Number.isFinite(perto.x) || !Number.isFinite(perto.z) || !(raio > 0)) return saida;
+    if (raio > 4096) raio = 4096;
+    const px = perto.x, pz = perto.z;
+    const rx0 = Math.floor((px - raio) / REGIAO), rx1 = Math.floor((px + raio) / REGIAO);
+    const rz0 = Math.floor((pz - raio) / REGIAO), rz1 = Math.floor((pz + raio) / REGIAO);
+    const r2 = raio * raio;
+    for (let rz = rz0; rz <= rz1; rz++) {
+      for (let rx = rx0; rx <= rx1; rx++) {
+        const areas = this.gerador.areasDaRegiao(rx, rz);
+        for (let k = 0; k < areas.length; k++) {
+          const info = areas[k].info;
+          const dx = info.x - px, dz = info.z - pz;
+          if (dx * dx + dz * dz <= r2) saida.push(info);
+        }
+      }
+    }
+    return saida;
+  }
+
+  /**
+   * O baú em (x, y, z) é o baú de tesouro de uma área especial? Devolve a
+   * área (o mesmo objeto de areasEspeciais) ou null. Só olha a posição:
+   * quem chama confere se o bloco ainda é o baú original.
+   */
+  bauDeTesouro(x, y, z) {
+    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+    const areas = this.gerador.areasDaRegiao(Math.floor(x / REGIAO), Math.floor(z / REGIAO));
+    for (let k = 0; k < areas.length; k++) {
+      const b = areas[k].info.bau;
+      if (b[0] === x && b[1] === y && b[2] === z) return areas[k].info;
+    }
+    return null;
   }
 
   // ----------------------------------------------------------------

@@ -4,6 +4,12 @@
 // A hora é contada em segundos desde o nascer do sol:
 //   0 ........ DIA_SEGUNDOS ........ CICLO_SEGUNDOS
 //   (dia)                  (noite)
+//
+// Lua Vermelha (Fase 8): definirLuaVermelha(true) deixa a lua vermelha e
+// maior, o céu da noite e a névoa avermelhados e a luz da lua alaranjada.
+// A troca é suave (alguns segundos). Quem decide quando ela nasce é o
+// anfitrião (network.js); aqui é só a aparência. O campo `luaVermelha` diz
+// se ela está ligada (os mobs usam para gerar mais monstros).
 // =====================================================================
 import * as THREE from 'three';
 import { CONFIG, CICLO_SEGUNDOS } from './config.js';
@@ -195,6 +201,24 @@ export class Ceu {
     this._solLuzCrep = new THREE.Color('#ff9a55');
     this._vetor = new THREE.Vector3();
 
+    // Lua Vermelha (Fase 8): cores da noite vermelha e o quanto ela já
+    // apareceu (0 = noite normal, 1 = toda vermelha; muda devagar)
+    this.luaVermelha = false;
+    this._fatorVermelho = 0;
+    this._alvoVermelho = 0;
+    this._vermTopo = new THREE.Color('#1c0306');
+    this._vermHor = new THREE.Color('#4a0d0e');
+    this._vermAmb = new THREE.Color('#7a3030');
+    this._vermLuaLuz = new THREE.Color('#ff6a50');
+    this._vermNuvem = new THREE.Color('#3a1214');
+    this._luaLuzNormal = new THREE.Color('#8fa8ff');
+    this._corLuaNormal = new THREE.Color('#ffffff');
+    this._corLuaVermelha = new THREE.Color('#ff5a42');
+    this._nTopo = new THREE.Color();   // cores da noite deste quadro (normal misturada com a vermelha)
+    this._nHor = new THREE.Color();
+    this._nAmb = new THREE.Color();
+    this._nNuvem = new THREE.Color();
+
     // vento acumulado das nuvens
     this._ventoX = 0;
     this._ventoZ = 0;
@@ -321,8 +345,26 @@ export class Ceu {
     this._posicionar(this._posCamera, 0);
   }
 
+  /**
+   * Liga ou desliga a Lua Vermelha. A mudança é suave (uns 3 s); com
+   * imediato = true, troca na hora (útil ao entrar numa sala).
+   */
+  definirLuaVermelha(ativa, imediato = false) {
+    this.luaVermelha = !!ativa;
+    this._alvoVermelho = this.luaVermelha ? 1 : 0;
+    if (imediato) this._fatorVermelho = this._alvoVermelho;
+    this._calcular();
+    this._posicionar(this._posCamera, 0);
+  }
+
   atualizar(dt, posCamera) {
     this.hora = (this.hora + dt) % CICLO_SEGUNDOS;
+    // Lua Vermelha aparecendo/sumindo aos poucos
+    const fv = this._fatorVermelho, alvo = this._alvoVermelho;
+    if (fv !== alvo) {
+      const passo = dt * 0.35;
+      this._fatorVermelho = Math.abs(alvo - fv) <= passo ? alvo : fv + (alvo > fv ? passo : -passo);
+    }
     this._posCamera.copy(posCamera);
     this._calcular();
     this._posicionar(posCamera, dt);
@@ -350,9 +392,16 @@ export class Ceu {
     const crep = 1 - suavizar(0, T, dist);
     this._crep = crep;
 
+    // Cores da noite: a normal misturada com a da Lua Vermelha (fv = 0 a 1)
+    const fv = this._fatorVermelho;
+    this._nTopo.copy(this._noiteTopo).lerp(this._vermTopo, fv);
+    this._nHor.copy(this._noiteHor).lerp(this._vermHor, fv);
+    this._nAmb.copy(this._ambNoite).lerp(this._vermAmb, fv);
+    this._nNuvem.copy(this._nuvemNoite).lerp(this._vermNuvem, fv);
+
     // Cores do céu: noite -> dia, depois mistura com as cores do crepúsculo
-    this.corTopo.copy(this._noiteTopo).lerp(this._diaTopo, fatorDia).lerp(this._solTopo, crep * 0.8);
-    this.corHorizonte.copy(this._noiteHor).lerp(this._diaHor, fatorDia).lerp(this._solHor, crep);
+    this.corTopo.copy(this._nTopo).lerp(this._diaTopo, fatorDia).lerp(this._solTopo, crep * 0.8);
+    this.corHorizonte.copy(this._nHor).lerp(this._diaHor, fatorDia).lerp(this._solHor, crep);
 
     // Direções dos astros (ângulo por trechos)
     if (!this.ehNoite) {
@@ -381,11 +430,15 @@ export class Ceu {
     this.lua.position.copy(cam).addScaledVector(this.direcaoLua, DISTANCIA_ASTRO);
     this.lua.lookAt(cam);
     this.lua.visible = this.direcaoLua.y > -0.15;
+    // Lua Vermelha: mais vermelha e um pouco maior
+    const fv = this._fatorVermelho;
+    this.lua.material.color.copy(this._corLuaNormal).lerp(this._corLuaVermelha, fv);
+    this.lua.scale.setScalar(55 + 20 * fv);
 
     // estrelas: aparecem só à noite e giram devagar
     this.estrelas.position.copy(cam);
     this.estrelas.rotation.y += dt * 0.01;
-    this.estrelas.material.opacity = (1 - fatorDia) * (1 - fatorDia);
+    this.estrelas.material.opacity = (1 - fatorDia) * (1 - fatorDia) * (1 - 0.45 * fv);
     this.estrelas.visible = this.estrelas.material.opacity > 0.01;
 
     // nuvens: o deslocamento compensa a câmera, então parecem presas ao mundo
@@ -403,11 +456,11 @@ export class Ceu {
     const rep = this._uNuvem.uRepete.value;
     desl.x -= rep.x * 0.5;
     desl.y -= rep.y * 0.5;
-    this._uNuvem.uCor.value.copy(this._nuvemNoite).lerp(this._nuvemDia, fatorDia).lerp(this._nuvemSol, crep * 0.35);
+    this._uNuvem.uCor.value.copy(this._nNuvem).lerp(this._nuvemDia, fatorDia).lerp(this._nuvemSol, crep * 0.35);
     this._uNuvem.uOpacidade.value = 0.3 + 0.55 * fatorDia;
 
     // luzes
-    this.luzAmbiente.color.copy(this._ambNoite).lerp(this._ambDia, fatorDia);
+    this.luzAmbiente.color.copy(this._nAmb).lerp(this._ambDia, fatorDia);
     this.luzAmbiente.intensity = 0.22 + 0.45 * fatorDia;
 
     this.luzSol.color.copy(this._solLuzDia).lerp(this._solLuzCrep, crep * 0.8);
@@ -415,7 +468,8 @@ export class Ceu {
     this.luzSol.position.copy(cam).addScaledVector(this.direcaoSol, 100);
     this.luzSol.target.position.copy(cam);
 
-    this.luzLua.intensity = 0.28 * (1 - fatorDia);
+    this.luzLua.color.copy(this._luaLuzNormal).lerp(this._vermLuaLuz, fv);
+    this.luzLua.intensity = (0.28 + 0.12 * fv) * (1 - fatorDia);
     this.luzLua.position.copy(cam).addScaledVector(this.direcaoLua, 100);
     this.luzLua.target.position.copy(cam);
 

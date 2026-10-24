@@ -29,9 +29,11 @@
 //   Cliente → anfitrião
 //     ola        { versao, apelido, cores }
 //                1ª mensagem: "quero entrar". `cores` = cores da roupa.
-//     pos        { x, y, z, yaw, pitch, noAr, quebrando }
+//     pos        { x, y, z, yaw, pitch, noAr, quebrando, morto }
 //                Posição, ~15 vezes por segundo (só se mudou; no mínimo
 //                1 vez por segundo, que serve de "ainda estou aqui").
+//                `morto` (Fase 8): o jogador está na tela de morte (os
+//                monstros não o escolhem como alvo).
 //     bloco      { x, y, z, id, e }
 //                O cliente mudou um bloco (ele já mudou na tela dele).
 //                `e` = estado do bloco, 0 a 255 (porta aberta, tocha na
@@ -50,10 +52,11 @@
 //                o cliente via no espaço ANTES da mudança ("comparar e trocar").
 //                O anfitrião só aplica se o espaço dele for igual a `antes`;
 //                senão responde `bauRecusado` e não repassa.
-//     meuEstado { pos: [x, y, z], yaw, pitch, inventario, equipamento }
+//     meuEstado { pos: [x, y, z], yaw, pitch, inventario, equipamento, casa, xp }
 //                A cada 10 s (ou ~1 s depois de pegar/soltar um item) e
 //                ao fechar a página. O anfitrião guarda pelo apelido em
-//                `dadosJogadores`, que vai no save dele.
+//                `dadosJogadores`, que vai no save dele. `xp` (Fase 8) é o
+//                XP total do jogador (jogador.xpTotal); o nível sai dele.
 //     soltar     { item, qtd, x, y, z, vx, vy, vz }
 //                "Soltei um item aqui" (o item já saiu do meu inventário).
 //                O anfitrião cria o item no chão e avisa todos (itemNovo).
@@ -86,11 +89,14 @@
 //                Mandado quando a lista muda. Serve para a aura dos outros.
 //     atacarMob  { id, dano, dir: [x, y, z], ataque, efeito? }   (Fase 7)
 //                "Bati no mob `id`". `ataque` = 'golpe' (mão/espada) ou o poder
-//                'fogo' | 'raio' | 'gelo'; `efeito` = { queimar: s } ou
-//                { lento: s } (poderes). O anfitrião confere: o mob existe e
-//                está vivo, dano entre 0 e 50, distância do jogador até o mob
-//                de no máximo 6 blocos no golpe (32 nos poderes, que voam
-//                longe) e no máximo 12 ataques por segundo. Aí aplica.
+//                'fogo' | 'raio' | 'gelo'; `efeito` = { queimar: s }, { lento: s }
+//                ou { veneno: s } (Fase 8: as espadas de chefão no golpe). O
+//                anfitrião confere: o mob existe e está vivo, a distância do
+//                jogador até o mob é de no máximo 6 blocos no golpe (32 nos
+//                poderes, que voam longe) mais o raio do mob, no máximo 3
+//                golpes e 12 acertos de poder por segundo. O dano é limitado
+//                (Fase 8): golpe até 20 + nível do jogador (40 se o nível não
+//                for conhecido); poderes até fogo 9, raio 12, gelo 5. Aí aplica.
 //     tchau      { }   "estou fechando a página" (vale nos dois sentidos)
 //
 //   Por que existe o `tchau`? Quando uma aba é fechada, o navegador do
@@ -166,18 +172,47 @@
 //     mobRemovido { id, morreu }   (Fase 7)
 //                O mob saiu do jogo. `morreu` = true: toca a animação de morte
 //                (tomba e fica vermelho); false: some na hora (ficou longe).
-//     dano       { qtd, de: [x, y, z], efeito? }   (Fase 7)
+//     dano       { qtd, de: [x, y, z], efeito?, segundos? }   (Fase 7; efeito na Fase 8)
 //                Só para o jogador atingido: um mob em `de` bateu em você.
 //                `qtd` vem SEM o desconto da armadura (quem recebe aplica).
-//     xp         { qtd }   (Fase 7) só para quem matou o mob
+//                `efeito` = 'veneno' | 'lento' | 'fogo' (texto) e `segundos` a
+//                duração (sem ela, vale o padrão do config). O Mobs entrega ao
+//                jogo como efeito: 'veneno' ou { tipo: 'veneno', segundos: 2 }.
+//     xp         { qtd }   (Fase 7) só para quem matou o mob (chefão: todos perto)
+//     projetilMob { id, proj, origem: [x, y, z], dir: [x, y, z], alvo?, alvoMob? }   (Fase 8)
+//                Um mob atirou. `proj` é o tipo do projétil ('flecha', 'orbe',
+//                'bola_fogo', 'gelo', 'veneno', 'cura' ou 'sopro'; o `tipo`
+//                de fora é o nome da mensagem). `dir` é a velocidade em blocos/s
+//                (no 'sopro', a direção do cone de fogo). `alvo` = id do jogador
+//                que o orbe persegue; `alvoMob` = id do orc que a cura procura.
+//                Os clientes só DESENHAM: quem acerta e quanto dói é o anfitrião.
+//     projetilFim { id, ponto: [x, y, z] }   (Fase 8)
+//                O projétil acabou em `ponto` (bateu, acertou ou o tempo
+//                acabou). Na nuvem de veneno, `ponto` é o chão onde a nuvem
+//                fica por 4 s. O sopro de fogo termina com esta mensagem.
+//     luaVermelha { ativa }   (Fase 8)
+//                A Lua Vermelha nasceu (true) ou se pôs (false). O anfitrião
+//                sorteia 1 em 8 a cada anoitecer; termina ao amanhecer.
 //   O `bemvindo` (Fase 7) leva também `mobs: [[id, mob, x, y, z, yaw, vida], ...]`
-//   com os mobs que já estão no mundo.
+//   com os mobs que já estão no mundo, e (Fase 8) `luaVermelha` (true/false).
+//   O `meuEstado` dentro do bemvindo traz o `xp` guardado (e `xpTotal`, igual,
+//   para o jogador.carregar).
 //
 // PROTOCOLO VERSÃO 4 (Fase 5): acrescentou `efeito` e `poderes`.
 // PROTOCOLO VERSÃO 5 (Fase 6): `bloco` com `e`, `blocos` (lote), `bauAbrir`,
 //   `bauConteudo`, `bauEspaco`, e o `mods` com 5 números por bloco.
 // PROTOCOLO VERSÃO 6 (Fase 7): `mobs`, `mobNovo`, `mobRemovido`, `atacarMob`,
 //   `dano`, `xp` e a lista `mobs` no `bemvindo`.
+// PROTOCOLO VERSÃO 7 (Fase 8): `projetilMob`, `projetilFim`, `luaVermelha`,
+//   `luaVermelha` no `bemvindo`, `xp` no `meuEstado`, `morto` no `pos`,
+//   `efeito`/`segundos` (texto) no `dano`, `veneno` no efeito do `atacarMob`
+//   e os itens com melhoria (+1 a +5, ex.: 'espada_ferro+2') aceitos em tudo:
+//   quem confere os itens agora é o obterItem (items.js), e não o ITENS.has.
+//
+// LUA VERMELHA (Fase 8): o anfitrião (ou quem joga sozinho) sorteia ao
+//   anoitecer (1 em 8, CHANCE_LUA_VERMELHA) e manda `luaVermelha`. Todos
+//   chamam ceu.definirLuaVermelha e mostram o aviso no chat. Para forçar
+//   (testes, comandos): rede.definirLuaVermelha(true) no anfitrião.
 //
 // MOBS (Fase 7): quem simula é o Mobs (mobs.js) do anfitrião. A Rede só
 //   transporta. O Mobs se registra com `rede.registrarMobs(mobs)` (no
@@ -186,6 +221,10 @@
 //   enviarAtacarMob (cliente). A Rede chama no Mobs: exportarParaRede,
 //   posicaoMob, aplicarAtaqueRemoto (anfitrião) e receberNovo, receberEstado,
 //   receberRemovido, receberDanoDaRede, receberXp (cliente).
+//   Fase 8: enviarProjetilMob / enviarProjetilFim (anfitrião) → no cliente,
+//   mobs.receberProjetil / receberProjetilFim. avisoLocal(texto) mostra um
+//   aviso só neste computador (tela + chat). estaMorto(id) diz se o jogador
+//   remoto está na tela de morte.
 //
 // BAÚS (Fase 6): o conteúdo mora no anfitrião (classe Baus, baus.js). A Rede só
 //   transporta: `rede.aoBau(fn)` registra o ouvinte do Baus, que recebe
@@ -224,12 +263,12 @@
 
 import { CONFIG, CICLO_SEGUNDOS } from './config.js';
 import { BLOCOS } from './blocks.js';
-import { ITENS } from './items.js';
+import { ITENS, obterItem } from './items.js';
 import { Equipamento } from './equipamento.js';
 import { quantoCabe } from './itens_chao.js';
 
 const PREFIXO_ID = 'hackraft-';
-const VERSAO_PROTOCOLO = 6;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5, 5 = Fase 6, 6 = Fase 7)
+const VERSAO_PROTOCOLO = 7;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5, 5 = Fase 6, 6 = Fase 7, 7 = Fase 8)
 const MAX_QTD_ITEM = 64;             // maior pilha aceita numa mensagem de item
 const VEL_MAX_ITEM = 20;             // maior velocidade aceita para um item solto
 const DIST_SOLTAR = 8;               // o cliente só solta itens até 8 blocos de onde está
@@ -307,7 +346,7 @@ function posBauValida(x, y, z) {
 function lerValorEspaco(item, qtd) {
   if ((item === undefined || item === null) && (qtd === undefined || qtd === null || qtd === 0)) return null;
   if (!itemValido(item) || !qtdValida(qtd)) return undefined;
-  if (qtd > ITENS.get(item).pilha) return undefined;   // maior que a pilha do item
+  if (qtd > obterItem(item).pilha) return undefined;   // maior que a pilha do item
   return { item, qtd };
 }
 
@@ -365,7 +404,7 @@ function limparInventario(inv) {
   const n = Math.min(inv.espacos.length, CONFIG.ESPACOS_INVENTARIO);
   for (let i = 0; i < n; i++) {
     const s = inv.espacos[i];
-    if (s && typeof s === 'object' && typeof s.item === 'string' && s.item.length <= 40 &&
+    if (s && typeof s === 'object' && itemValido(s.item) &&
         Number.isInteger(s.qtd) && s.qtd > 0 && s.qtd <= 9999) {
       espacos.push({ item: s.item, qtd: s.qtd });
     } else {
@@ -396,11 +435,37 @@ function limparEquipamento(d) {
   }
 }
 
-/** { pos, yaw, pitch, inventario, equipamento, casa } conferido, ou null */
+const XP_TOTAL_MAX = 1e9;            // XP total aceito no meuEstado / save
+
+/** XP total conferido: inteiro de 0 a XP_TOTAL_MAX (aceita `xp` ou o `xpTotal` do jogador.serializar) */
+function lerXpTotal(e) {
+  const v = ehNumero(e.xp) ? e.xp : (ehNumero(e.xpTotal) ? e.xpTotal : 0);
+  return v > 0 ? Math.min(XP_TOTAL_MAX, Math.floor(v)) : 0;
+}
+
+/**
+ * Nível a partir do XP total (mesma conta do player.js: para sair do nível
+ * n são precisos floor(XP_BASE × n^XP_EXPOENTE) pontos). Usado só para o
+ * teto do dano dos golpes.
+ */
+function nivelPorXp(xp) {
+  const base = CONFIG.XP_BASE ?? 40, exp = CONFIG.XP_EXPOENTE ?? 1.4;
+  let n = 1, resto = xp;
+  while (n < 999) {
+    const precisa = Math.floor(base * Math.pow(n, exp));
+    if (!(precisa > 0) || resto < precisa) break;
+    resto -= precisa;
+    n++;
+  }
+  return n;
+}
+
+/** { pos, yaw, pitch, inventario, equipamento, casa, xp, xpTotal } conferido, ou null */
 function limparEstadoJogador(e) {
   if (!e || typeof e !== 'object') return null;
   const p = e.pos;
   if (!Array.isArray(p) || p.length !== 3 || !posicaoValida(p[0], p[1], p[2])) return null;
+  const xp = lerXpTotal(e);
   return {
     pos: [p[0], p[1], p[2]],
     yaw: ehNumero(e.yaw) ? e.yaw : 0,
@@ -408,14 +473,20 @@ function limparEstadoJogador(e) {
     inventario: limparInventario(e.inventario),
     equipamento: limparEquipamento(e.equipamento),
     casa: limparCasa(e.casa),
+    // Fase 8: o XP vai junto. `xpTotal` (igual) é o nome que o jogador.carregar lê.
+    xp,
+    xpTotal: xp,
   };
 }
 
 // ----- Itens (Fase 3) -----
 
-/** O nome é de um item que existe? */
+/**
+ * O nome é de um item que existe? Usa o obterItem, que também entende os
+ * itens melhorados da Fase 9 ('espada_ferro+2'), que não estão na lista ITENS.
+ */
 function itemValido(nome) {
-  return typeof nome === 'string' && nome.length <= 40 && ITENS.has(nome);
+  return typeof nome === 'string' && nome.length <= 40 && !!obterItem(nome);
 }
 
 /** Quantidade inteira de 1 a 64 */
@@ -476,17 +547,26 @@ function limparAparencia(ap) {
   if (!ap || typeof ap !== 'object') return null;
   const v = visuaisConhecidos();
   const nome = (x, conjunto) => (typeof x === 'string' && x.length <= 40 && conjunto.has(x) ? x : null);
+  // Armadura melhorada (Fase 9) vem como 'ferro+2': confere o material sem o sufixo
+  const material = (x) => (typeof x === 'string' && x.length <= 40 &&
+    v.material.has(x.replace(/\+[1-5]$/, '')) ? x : null);
+  // Na mão vem o NOME do item (com sufixo, ex.: 'espada_ferro+2'): vale se o item tiver visual
+  const mao = (x) => {
+    if (nome(x, v.mao)) return x;
+    const def = typeof x === 'string' && x.length <= 40 ? obterItem(x) : null;
+    return def && typeof def.visual === 'string' ? x : null;
+  };
   const a = ap.armadura && typeof ap.armadura === 'object' ? ap.armadura : {};
   return {
     cores: limparCores(ap.cores),
     roupa: nome(ap.roupa, v.roupa),
     armadura: {
-      capacete: nome(a.capacete, v.material),
-      peitoral: nome(a.peitoral, v.material),
-      calca: nome(a.calca, v.material),
-      botas: nome(a.botas, v.material),
+      capacete: material(a.capacete),
+      peitoral: material(a.peitoral),
+      calca: material(a.calca),
+      botas: material(a.botas),
     },
-    mao: nome(ap.mao, v.mao),
+    mao: mao(ap.mao),
     acessorio: nome(ap.acessorio, v.acessorio),
   };
 }
@@ -586,13 +666,27 @@ function limparListaPoderes(lista) {
 const CAMPOS_MOB = 8;                // números por mob na mensagem `mobs`
 const MAX_MOBS_REDE = 64;            // máximo de mobs aceitos numa mensagem `mobs` / no bemvindo
 const ID_MOB_MAX = 16777216;         // 2^24: o maior inteiro que o Float32 guarda sem erro
-const DANO_MAX_ATAQUE = 50;          // dano máximo aceito num `atacarMob`
 const DIST_GOLPE_MOB = 6;            // golpe (mão/espada): o alcance é 4; 6 dá folga para o atraso da rede
 const DIST_PODER_MOB = 32;           // poderes voam até 30 blocos
-const ATAQUES_MOB_POR_SEGUNDO = 12;  // o raio acerta até 3 mobs de uma vez
+const GOLPES_MOB_POR_SEGUNDO = 3;    // a espada bate a cada 0,5 s (2 por segundo): 3 dá folga
+const PODERES_MOB_POR_SEGUNDO = 12;  // o raio acerta até 3 mobs de uma vez
 const TIPOS_ATAQUE_MOB = new Set(['golpe', 'fogo', 'raio', 'gelo']);
+// Teto do dano (Fase 8). Golpe: a maior espada (+5) dá 14 + 5 = 19, mais a
+// força do nível (nível − 1). Por isso 20 + nível; sem saber o nível, 40.
+// Poderes: o dano de cada um no powers.js (fogo 6, raio 8, gelo 3) com folga.
+const TETO_GOLPE_BASE = 20;
+const TETO_GOLPE_SEM_NIVEL = 40;
+const TETO_PODER = { fogo: 9, raio: 12, gelo: 5 };
 const DANO_MAX_JOGADOR = 100;        // `dano` aceito pelo cliente
 const XP_MAX = 10000;
+const EFEITOS_JOGADOR = new Set(['veneno', 'lento', 'fogo']); // efeitos do `dano` (Fase 8)
+const SEGUNDOS_MAX_EFEITO = 30;
+
+// ----- Projéteis de mob e Lua Vermelha (Fase 8) -----
+const VEL_MAX_PROJETIL = 100;        // componentes de `dir` aceitos (blocos/s)
+const CHANCE_LUA_VERMELHA = CONFIG.CHANCE_LUA_VERMELHA ?? 1 / 8; // a cada anoitecer
+const TEXTO_LUA_VERMELHA = '🌕 A Lua Vermelha nasceu... cuidado!';
+const TEXTO_LUA_SE_POS = 'A Lua Vermelha se pôs. Ufa!';
 
 /** Id de mob: inteiro de 1 a 2^24 */
 function idMobValido(id) {
@@ -604,14 +698,31 @@ function nomeMobValido(n) {
   return typeof n === 'string' && n.length >= 1 && n.length <= 32 && /^[a-z_0-9]+$/.test(n);
 }
 
-/** Efeito de ataque/dano: { queimar?, lento? } com segundos de 0 a 10, ou null */
+/**
+ * Efeito de ataque num mob: { queimar?, lento?, veneno? } com segundos de 0 a
+ * 10, ou null. Aceita também o texto da arma ('fogo' = queimar 3 s, 'veneno' = 3 s).
+ */
 function lerEfeitoMob(e) {
+  if (e === 'fogo') return { queimar: 3 };
+  if (e === 'veneno') return { veneno: 3 };
   if (!e || typeof e !== 'object') return null;
   const r = {};
   let tem = false;
   if (ehNumero(e.queimar) && e.queimar > 0) { r.queimar = Math.min(10, e.queimar); tem = true; }
   if (ehNumero(e.lento) && e.lento > 0) { r.lento = Math.min(10, e.lento); tem = true; }
+  if (ehNumero(e.veneno) && e.veneno > 0) { r.veneno = Math.min(10, e.veneno); tem = true; }
   return tem ? r : null;
+}
+
+/** Efeito no jogador ('veneno' | 'lento' | 'fogo') ou null. Aceita o texto ou { tipo }. */
+function lerEfeitoJogador(e) {
+  const t = e && typeof e === 'object' ? e.tipo : e;
+  return typeof t === 'string' && EFEITOS_JOGADOR.has(t) ? t : null;
+}
+
+/** Duração de um efeito: número de 0 a 30 s, ou 0 (= "use o padrão") */
+function lerSegundosEfeito(s) {
+  return ehNumero(s) && s > 0 ? Math.min(SEGUNDOS_MAX_EFEITO, s) : 0;
 }
 
 /** Float32Array vindo da rede (ArrayBuffer ou view) com múltiplo de 8 números, ou null */
@@ -645,7 +756,7 @@ function lerMobNovo(id, mob, x, y, z, yaw, vida) {
 
 /** Objeto de estado (posição) reaproveitado para cada jogador */
 function novoEstado() {
-  return { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false };
+  return { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false, morto: false };
 }
 
 /**
@@ -660,6 +771,7 @@ function lerEstado(m, destino) {
   destino.yaw = yaw; destino.pitch = pitch;
   destino.noAr = m.noAr === true;
   destino.quebrando = m.quebrando === true;
+  destino.morto = m.morto === true;
   return true;
 }
 
@@ -819,7 +931,7 @@ export class Rede {
     this._tempoEstado = 0;
     this._ultimoEnvioPos = -Infinity;
     // Mensagens reaproveitadas (o loop do jogo não cria objetos novos)
-    this._msgPos = { tipo: 'pos', id: '', x: NaN, y: NaN, z: NaN, yaw: NaN, pitch: NaN, noAr: false, quebrando: false };
+    this._msgPos = { tipo: 'pos', id: '', x: NaN, y: NaN, z: NaN, yaw: NaN, pitch: NaN, noAr: false, quebrando: false, morto: false };
     this._msgHora = { tipo: 'hora', hora: 0 };
     this._relogio = null;
 
@@ -827,6 +939,11 @@ export class Rede {
     this.mobs = null;                 // Mobs (mobs.js): se registra com registrarMobs()
     this._mobsPendentes = new Map();  // (cliente) mobs que chegaram antes de o Mobs existir: id → dados
     this._msgMobs = { tipo: 'mobs', t: 0, dados: null }; // mensagem reaproveitada (anfitrião)
+
+    // --- Lua Vermelha (Fase 8) ---
+    this.luaVermelha = false;         // está acontecendo agora?
+    this._eraNoite = null;            // (anfitrião/sozinho) noite no quadro anterior: para perceber o anoitecer
+    this._luaPendente = null;         // (cliente) chegou antes de o céu existir
 
     this._cancelarOuvinteBloco = null;
     this._aoFecharPagina = null;
@@ -1044,7 +1161,7 @@ export class Rede {
       estado: novoEstado(),   // última posição recebida
       temEstado: false,
       // mensagem de repasse da posição (reaproveitada)
-      msgPos: { tipo: 'pos', id: conn.peer, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false },
+      msgPos: { tipo: 'pos', id: conn.peer, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false, morto: false },
       criadoEm: agora,
       ultimaMsg: agora,
       poderes: [],            // poderes ativos dele (Fase 5)
@@ -1052,8 +1169,10 @@ export class Rede {
       pdIni: 0,               // limite de mensagens "poderes": início da janela de 1 s
       pdN: 0,
       efN: 0,                 // e quantos já passaram nela
-      amIni: 0,               // limite de `atacarMob` (Fase 7): início da janela de 1 s
+      amIni: 0,               // limite de golpes `atacarMob` (Fase 7): início da janela de 1 s
       amN: 0,
+      apIni: 0,               // limite de acertos de poder `atacarMob` (Fase 8)
+      apN: 0,
     };
     this.clientes.set(cli.id, cli);
     conn.on('data', (msg) => this._dadosDoCliente(cli, msg));
@@ -1272,20 +1391,37 @@ export class Rede {
    */
   _atacarMobDoCliente(cli, m) {
     const mobs = this.mobs;
-    if (!mobs || !idMobValido(m.id) || !ehNumero(m.dano) || m.dano <= 0 || m.dano > DANO_MAX_ATAQUE) return;
+    if (!mobs || !idMobValido(m.id) || !ehNumero(m.dano) || m.dano <= 0) return;
     const ataque = TIPOS_ATAQUE_MOB.has(m.ataque) ? m.ataque : 'golpe';
     if (!cli.temEstado) return; // ainda não sabemos onde ele está
-    if (!this._efeitoPermitido(cli, 'amIni', 'amN', ATAQUES_MOB_POR_SEGUNDO)) return;
+    // Quantos por segundo: golpes e poderes têm limites separados
+    if (ataque === 'golpe') {
+      if (!this._efeitoPermitido(cli, 'amIni', 'amN', GOLPES_MOB_POR_SEGUNDO)) return;
+    } else if (!this._efeitoPermitido(cli, 'apIni', 'apN', PODERES_MOB_POR_SEGUNDO)) {
+      return;
+    }
+    // Dano acima do teto é cortado (e não recusado): o XP que guardamos do
+    // jogador pode estar uns segundos atrasado depois de subir de nível
+    const dano = Math.min(m.dano, this._tetoDanoMob(cli, ataque));
     const p = typeof mobs.posicaoMob === 'function' ? mobs.posicaoMob(m.id) : null; // centro do corpo
     if (!p) return; // não existe (ou já está morrendo)
-    // Distância dos olhos do jogador até o centro do mob
+    // Distância dos olhos do jogador até o centro do mob (mobs grandes, como o
+    // dragão, ganham a folga do próprio raio: dá para bater na asa)
     const e = cli.estado;
     const dx = p.x - e.x, dy = p.y - (e.y + CONFIG.ALTURA_OLHOS), dz = p.z - e.z;
-    const max = ataque === 'golpe' ? DIST_GOLPE_MOB : DIST_PODER_MOB;
+    const max = (ataque === 'golpe' ? DIST_GOLPE_MOB : DIST_PODER_MOB) + (ehNumero(p.raio) ? Math.min(4, p.raio) : 0);
     if (dx * dx + dy * dy + dz * dz > max * max) return;
     const dir = limparVetor(m.dir, LIMITE_VETOR); // { x, y, z } ou [x, y, z] (ou null)
     const d = Array.isArray(dir) ? { x: dir[0], y: dir[1], z: dir[2] } : dir;
-    mobs.aplicarAtaqueRemoto(cli.id, m.id, m.dano, d, ataque, lerEfeitoMob(m.efeito));
+    mobs.aplicarAtaqueRemoto(cli.id, m.id, dano, d, ataque, lerEfeitoMob(m.efeito));
+  }
+
+  /** Maior dano aceito de um ataque do cliente (veja TETO_GOLPE_BASE e TETO_PODER) */
+  _tetoDanoMob(cli, ataque) {
+    if (ataque !== 'golpe') return TETO_PODER[ataque] ?? 8;
+    const d = this.dadosJogadores.get(cli.apelido);
+    if (d && ehNumero(d.xp)) return TETO_GOLPE_BASE + nivelPorXp(d.xp);
+    return TETO_GOLPE_SEM_NIVEL;
   }
 
   /** Desenha o efeito de outro jogador (se o módulo de poderes existir) */
@@ -1369,6 +1505,7 @@ export class Rede {
       jogadores: this._listaParaBemvindo(),
       itensChao: this.itensChao ? this.itensChao.exportar() : [],
       mobs: this.mobs && typeof this.mobs.exportarParaRede === 'function' ? this.mobs.exportarParaRede() : [],
+      luaVermelha: this.luaVermelha,
       totalMods: total,
       lotes,
     });
@@ -1436,7 +1573,7 @@ export class Rede {
     const m = cli.msgPos;
     const e = cli.estado;
     m.x = e.x; m.y = e.y; m.z = e.z; m.yaw = e.yaw; m.pitch = e.pitch;
-    m.noAr = e.noAr; m.quebrando = e.quebrando;
+    m.noAr = e.noAr; m.quebrando = e.quebrando; m.morto = e.morto;
     for (const outro of this.clientes.values()) {
       if (outro !== cli && outro.pronto) this._enviar(outro.conn, m);
     }
@@ -1515,7 +1652,7 @@ export class Rede {
       d.pitch = e.pitch;
     } else {
       this.dadosJogadores.set(cli.apelido, {
-        pos: [e.x, e.y, e.z], yaw: e.yaw, pitch: e.pitch, inventario: null, equipamento: null, casa: null,
+        pos: [e.x, e.y, e.z], yaw: e.yaw, pitch: e.pitch, inventario: null, equipamento: null, casa: null, xp: 0, xpTotal: 0,
       });
     }
   }
@@ -1556,6 +1693,7 @@ export class Rede {
       obj[apelido] = {
         pos: d.pos.slice(), yaw: d.yaw, pitch: d.pitch,
         inventario: d.inventario, equipamento: d.equipamento ?? null, casa: d.casa ?? null,
+        xp: ehNumero(d.xp) ? d.xp : 0, // Fase 8
       };
     }
     return obj;
@@ -1702,6 +1840,9 @@ export class Rede {
         case 'mobNovo': this._mobNovoDoAnfitriao(msg); return;
         case 'mobRemovido': this._mobRemovidoDoAnfitriao(msg); return;
         case 'dano': this._danoDoAnfitriao(msg); return;
+        case 'projetilMob': this._projetilDoAnfitriao(msg); return;
+        case 'projetilFim': this._projetilFimDoAnfitriao(msg); return;
+        case 'luaVermelha': this._luaDoAnfitriao(msg); return;
         case 'xp':
           if (this.ligado && this.mobs && Number.isInteger(msg.qtd) && msg.qtd > 0 && msg.qtd <= XP_MAX) {
             this.mobs.receberXp(msg.qtd);
@@ -1772,6 +1913,10 @@ export class Rede {
         if (mob) this._mobsPendentes.set(mob.id, mob);
       }
     }
+
+    // Lua Vermelha (Fase 8): aplicada no céu em ligar(), quando ele existir
+    this.luaVermelha = msg.luaVermelha === true;
+    this._luaPendente = this.luaVermelha;
 
     this._recebendo = {
       semente,
@@ -2129,6 +2274,7 @@ export class Rede {
   _enviarMeuEstado() {
     if (this.modo !== 'cliente' || !this.jogador || !this.inventario || this._disseTchau) return;
     const s = this.jogador.serializar();
+    const xp = ehNumero(s.xpTotal) ? s.xpTotal : (ehNumero(this.jogador.xpTotal) ? this.jogador.xpTotal : 0);
     this._enviar(this.conexaoAnfitriao, {
       tipo: 'meuEstado',
       pos: s.pos,
@@ -2137,6 +2283,7 @@ export class Rede {
       inventario: this.inventario.serializar(),
       equipamento: this.equipamento ? this.equipamento.serializar() : null,
       casa: this.casa,
+      xp, // Fase 8: o anfitrião guarda junto com o inventário
     });
   }
 
@@ -2209,6 +2356,12 @@ export class Rede {
       if (this._horaPendente !== null) {
         this._sincronizarHora(this._horaPendente);
         this._horaPendente = null;
+      }
+      // Lua Vermelha que já estava acontecendo quando entrei (Fase 8)
+      if (this._luaPendente !== null) {
+        if (typeof ceu.definirLuaVermelha === 'function') ceu.definirLuaVermelha(this._luaPendente, true);
+        if (this._luaPendente) this._aviso(TEXTO_LUA_VERMELHA);
+        this._luaPendente = null;
       }
       // A minha aparência vai para os outros no primeiro atualizar()
       if (this.aparencia) this._aparenciaPendente = true;
@@ -2453,17 +2606,106 @@ export class Rede {
   /**
    * (Anfitrião) Um mob bateu no jogador `idJogador` (um cliente). `de` =
    * [x, y, z] do mob (o empurrão é para longe dele). A armadura é descontada
-   * por quem recebe. Devolve true se mandou.
+   * por quem recebe. `efeito` (Fase 8) = 'veneno' | 'lento' | 'fogo' (ou null)
+   * e `segundos` a duração (0 = o padrão). Devolve true se mandou.
    */
-  enviarDanoJogador(idJogador, qtd, de, efeito = null) {
+  enviarDanoJogador(idJogador, qtd, de, efeito = null, segundos = 0) {
     if (this.modo !== 'anfitriao' || this.encerrado) return false;
     const c = this.clientes.get(idJogador);
     if (!c || !c.pronto) return false;
     const msg = { tipo: 'dano', qtd, de };
-    const ef = lerEfeitoMob(efeito);
-    if (ef) msg.efeito = ef;
+    const ef = lerEfeitoJogador(efeito);
+    if (ef) {
+      msg.efeito = ef;
+      const s = lerSegundosEfeito(segundos || (efeito && efeito.segundos));
+      if (s > 0) msg.segundos = s;
+    }
     this._enviar(c.conn, msg);
     return true;
+  }
+
+  /**
+   * (Anfitrião) Um mob atirou um projétil (veja `projetilMob` no cabeçalho).
+   * origem e dir são [x, y, z]. `extra` (opcional) = { alvo, alvoMob }.
+   */
+  enviarProjetilMob(id, proj, origem, dir, extra = null) {
+    if (this.modo !== 'anfitriao' || this.encerrado || !this.temClientes) return;
+    const msg = { tipo: 'projetilMob', id, proj, origem, dir };
+    if (extra && typeof extra.alvo === 'string') msg.alvo = extra.alvo;
+    if (extra && Number.isInteger(extra.alvoMob)) msg.alvoMob = extra.alvoMob;
+    this._avisarTodos(msg);
+  }
+
+  /** (Anfitrião) O projétil `id` acabou em `ponto` ([x, y, z]) */
+  enviarProjetilFim(id, ponto) {
+    if (this.modo !== 'anfitriao' || this.encerrado || !this.temClientes) return;
+    this._avisarTodos({ tipo: 'projetilFim', id, ponto });
+  }
+
+  /** Aviso só neste computador: na tela e no chat (ex.: "O Dragão Ancestral apareceu!") */
+  avisoLocal(texto) {
+    if (typeof texto === 'string' && texto) this._aviso(texto);
+  }
+
+  /** O jogador `id` (outro jogador da sala) está na tela de morte? */
+  estaMorto(id) {
+    if (this.modo === 'anfitriao') {
+      const c = this.clientes.get(id);
+      return !!(c && c.estado.morto);
+    }
+    const j = this.jogadores.get(id);
+    return !!(j && j.estado && j.estado.morto);
+  }
+
+  // ------------------------------------------------------------------
+  // Lua Vermelha (Fase 8)
+  // ------------------------------------------------------------------
+
+  /**
+   * (Anfitrião/sozinho, a cada quadro) Percebe o anoitecer e o amanhecer:
+   * ao anoitecer sorteia a Lua Vermelha (1 em 8); ao amanhecer ela acaba.
+   */
+  _atualizarLua() {
+    const ceu = this.ceu;
+    if (!ceu) return;
+    const noite = !!ceu.ehNoite;
+    if (this._eraNoite === null) { this._eraNoite = noite; return; } // 1º quadro: só anota
+    if (noite === this._eraNoite) return;
+    this._eraNoite = noite;
+    if (noite) {
+      if (Math.random() < CHANCE_LUA_VERMELHA) this.definirLuaVermelha(true);
+    } else if (this.luaVermelha) {
+      this.definirLuaVermelha(false);
+    }
+  }
+
+  /**
+   * (Anfitrião/sozinho) Liga ou desliga a Lua Vermelha agora: muda o céu,
+   * avisa no chat e manda `luaVermelha` para todos. No cliente não faz nada
+   * (quem decide é o anfitrião). Devolve true se aplicou.
+   */
+  definirLuaVermelha(ativa) {
+    if (this.modo === 'cliente' || this.encerrado) return false;
+    ativa = !!ativa;
+    const mudou = ativa !== this.luaVermelha;
+    this.luaVermelha = ativa;
+    if (this.ceu && typeof this.ceu.definirLuaVermelha === 'function') this.ceu.definirLuaVermelha(ativa);
+    if (mudou) this._aviso(ativa ? TEXTO_LUA_VERMELHA : TEXTO_LUA_SE_POS);
+    this._avisarTodos({ tipo: 'luaVermelha', ativa });
+    return true;
+  }
+
+  /** (Cliente) O anfitrião avisou que a Lua Vermelha nasceu ou se pôs */
+  _luaDoAnfitriao(msg) {
+    if (typeof msg.ativa !== 'boolean') return;
+    const mudou = msg.ativa !== this.luaVermelha;
+    this.luaVermelha = msg.ativa;
+    if (!this.ligado || !this.ceu) {
+      this._luaPendente = msg.ativa;
+      return;
+    }
+    if (typeof this.ceu.definirLuaVermelha === 'function') this.ceu.definirLuaVermelha(msg.ativa);
+    if (mudou) this._aviso(msg.ativa ? TEXTO_LUA_VERMELHA : TEXTO_LUA_SE_POS);
   }
 
   /** (Anfitrião) O cliente `idJogador` matou um mob e ganhou XP */
@@ -2544,7 +2786,42 @@ export class Rede {
     if (!ehNumero(msg.qtd) || msg.qtd <= 0 || msg.qtd > DANO_MAX_JOGADOR) return;
     const de = limparPontoMundo(msg.de);
     if (!de) return;
-    this.mobs.receberDanoDaRede({ qtd: msg.qtd, de, efeito: lerEfeitoMob(msg.efeito) });
+    // Efeito: 'veneno' (duração padrão) ou { tipo: 'veneno', segundos: 2 }
+    const tipoEf = lerEfeitoJogador(msg.efeito);
+    const seg = lerSegundosEfeito(msg.segundos);
+    const efeito = tipoEf ? (seg > 0 ? { tipo: tipoEf, segundos: seg } : tipoEf) : null;
+    this.mobs.receberDanoDaRede({ qtd: msg.qtd, de, efeito });
+  }
+
+  /** Um mob atirou (o cliente só desenha) */
+  _projetilDoAnfitriao(msg) {
+    if (!this.ligado || !this.mobs || typeof this.mobs.receberProjetil !== 'function') return;
+    if (!idMobValido(msg.id) || !nomeMobValido(msg.proj)) return;
+    const origem = limparPontoMundo(msg.origem);
+    const dir = limparVetor(msg.dir, VEL_MAX_PROJETIL);
+    if (!origem || !dir) return;
+    const o = Array.isArray(origem) ? origem : [origem.x, origem.y, origem.z];
+    const d = Array.isArray(dir) ? dir : [dir.x, dir.y, dir.z];
+    const alvo = typeof msg.alvo === 'string' && msg.alvo.length <= 100 ? msg.alvo : null;
+    const alvoMob = idMobValido(msg.alvoMob) ? msg.alvoMob : 0;
+    try {
+      this.mobs.receberProjetil(msg.id, msg.proj, o, d, alvo, alvoMob);
+    } catch (e) {
+      console.warn('Hackraft: projétil ignorado', e);
+    }
+  }
+
+  /** O projétil acabou (bateu, acertou ou o tempo acabou) */
+  _projetilFimDoAnfitriao(msg) {
+    if (!this.ligado || !this.mobs || typeof this.mobs.receberProjetilFim !== 'function') return;
+    if (!idMobValido(msg.id)) return;
+    const p = limparPontoMundo(msg.ponto);
+    const ponto = p ? (Array.isArray(p) ? p : [p.x, p.y, p.z]) : null;
+    try {
+      this.mobs.receberProjetilFim(msg.id, ponto);
+    } catch (e) {
+      console.warn('Hackraft: fim de projétil ignorado', e);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -2735,7 +3012,10 @@ export class Rede {
    * lento o tempo do jogo anda mais devagar que o relógio.
    */
   atualizar(dt) { // eslint-disable-line no-unused-vars
-    if (!this.ligado || this.modo === 'sozinho' || this.encerrado || this._caiu) return;
+    if (!this.ligado || this.encerrado) return;
+    // Lua Vermelha: quem decide é o anfitrião (ou quem joga sozinho)
+    if (this.modo !== 'cliente') this._atualizarLua();
+    if (this.modo === 'sozinho' || this._caiu) return;
     const agora = performance.now();
 
     if (agora - this._tempoPos >= 1000 / CONFIG.ENVIOS_POSICAO_POR_SEGUNDO) {
@@ -2777,15 +3057,16 @@ export class Rede {
     const m = this._msgPos;
     const noAr = !j.noChao && !j.naAgua;
     const quebrando = !!j.quebrando;
+    const morto = !!j.morto;
     const agora = performance.now();
     const mudou = Math.abs(p.x - m.x) > 0.001 || Math.abs(p.y - m.y) > 0.001 || Math.abs(p.z - m.z) > 0.001 ||
       Math.abs(j.yaw - m.yaw) > 0.001 || Math.abs(j.pitch - m.pitch) > 0.001 ||
-      noAr !== m.noAr || quebrando !== m.quebrando;
+      noAr !== m.noAr || quebrando !== m.quebrando || morto !== m.morto;
     if (!mudou && !forcar && agora - this._ultimoEnvioPos < 1000) return;
     if (!posicaoValida(p.x, p.y, p.z) || !ehNumero(j.yaw) || !ehNumero(j.pitch)) return;
     m.x = p.x; m.y = p.y; m.z = p.z;
     m.yaw = j.yaw; m.pitch = j.pitch;
-    m.noAr = noAr; m.quebrando = quebrando;
+    m.noAr = noAr; m.quebrando = quebrando; m.morto = morto;
     this._ultimoEnvioPos = agora;
     if (this.modo === 'anfitriao') {
       for (const c of this.clientes.values()) {
