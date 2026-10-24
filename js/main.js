@@ -55,6 +55,7 @@ import { registrarComandos } from './comandos.js';
 import { ModoHacker } from './hacker.js';
 import { Particulas } from './particulas.js';
 import { Poderes } from './powers.js';
+import { Meteoro } from './meteoro.js';
 import { Baus } from './baus.js';
 import { TelaForja } from './forja.js';
 import { TelaAlfaiate } from './alfaiate.js';
@@ -496,10 +497,18 @@ async function iniciar() {
       });
     });
 
+    // ----- Meteoro (/armageddon) -----
+    const meteoro = new Meteoro({
+      scene, mundo, particulas, jogador, rede, som, ui,
+      obterAlvos: () => (mobs ? mobs.alvosParaPoderes() : []),
+    });
+    // Meteoro lançado por outro jogador: só desenha e sente o impacto
+    poderes.aoMeteoroRemoto = (x, y, z, hx, hz) => meteoro.cair(x, y, z, false, null, hx, hz);
+
     /** Aceita [x, y, z] ou { x, y, z } (os comandos mandam uma lista) */
     const lerPos = (p) => (Array.isArray(p) ? { x: p[0], y: p[1], z: p[2] } : p);
     registrarComandos(chat, {
-      jogador, ceu, rede, remotos, inventario, equipamento, hacker, mundo,
+      jogador, ceu, rede, remotos, inventario, equipamento, hacker, mundo, meteoro,
       // Muda a hora: a rede aplica (anfitrião/sozinho) ou pede ao anfitrião (cliente)
       mudarHora: (segundos) => rede.pedirHora(segundos),
       obterCasa,
@@ -674,6 +683,7 @@ async function iniciar() {
 
       jogador.atualizar(dt);
       poderes.atualizar(dt);
+      meteoro.atualizar(dt);
       if (mobs) mobs.atualizar(dt);
       particulas.atualizar(dt);
       brilharCristais(dt);

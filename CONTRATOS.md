@@ -635,3 +635,6 @@ Nomes: `espada_<material>`, `capacete_<material>` etc. Itens existentes continua
   - `xp { qtd }`.
   - O `bemvindo` leva `mobs`.
 - Os mobs só existem onde o anfitrião tem o mundo carregado.
+## Meteoro (/armageddon)
+- `js/meteoro.js`: `new Meteoro({ scene, mundo, particulas, jogador, rede, som, ui, obterAlvos })`; `invocar()` (comando), `cair(x, y, z, dono, yaw, hx, hz)`, `atualizar(dt)`.
+- Rede: efeito `{ tipo: 'meteoro', origem: [x, y, z do impacto], direcao: [dx, 0, dz] }`. Os outros jogadores só veem o cometa e sentem o impacto; quem usou o comando abre a cratera (blocos vão pela rede como qualquer `definirBlocos`) e machuca os mobs.

@@ -782,6 +782,9 @@ export class Poderes {
       }
       if (n === 0) pts[n++].set(o[0] + dir.x * RAIO.alcance, o[1] + dir.y * RAIO.alcance, o[2] + dir.z * RAIO.alcance);
       this._desenharRaio(o[0], o[1], o[2], dir, pts, n);
+    } else if (efeito.tipo === 'meteoro') {
+      // O Meteoro (main.js) liga isto; sem ele, o efeito é ignorado
+      this.aoMeteoroRemoto?.(o[0], o[1], o[2], d?.[0] ?? 0, d?.[2] ?? -1);
     } else if (efeito.tipo === 'fogo' || efeito.tipo === 'gelo') {
       this._lancarProjetil(efeito.tipo, o[0], o[1], o[2], d?.[0] ?? 0, d?.[1] ?? 0, d?.[2] ?? -1, false);
     }

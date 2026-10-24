@@ -494,7 +494,7 @@ function limparAparencia(ap) {
 // ----- Efeitos e poderes (Fase 5) -----
 const PODERES_POR_SEGUNDO_MAX = 4;   // mensagens "poderes" aceitas por jogador, por segundo
 
-const TIPOS_EFEITO = new Set(['fogo', 'raio', 'gelo', 'poder']);
+const TIPOS_EFEITO = new Set(['fogo', 'raio', 'gelo', 'poder', 'meteoro']);
 const MAX_CADEIA = 3;                // pontos de salto do raio
 const LIMITE_VETOR = 1000;           // direção/componentes aceitos em módulo (a direção é ~1)
 

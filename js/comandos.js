@@ -2,13 +2,14 @@
 // Hackraft - Comandos do chat (Fase 4)
 // ---------------------------------------------------------------------
 // registrarComandos(chat, ctx) cadastra: /ajuda /dia /noite /voar /tp
-// /casa /setcasa /dar /hacker.
+// /casa /setcasa /dar /spawn /armageddon /hacker.
 // ctx = { jogador, ceu, rede, remotos, inventario, equipamento, hacker,
-//         mundo, mudarHora(segundos), obterCasa(), definirCasa(pos) }
+//         mundo, meteoro, mudarHora(segundos), obterCasa(), definirCasa(pos) }
 // =====================================================================
 
 import { CONFIG } from './config.js';
 import { ITENS } from './items.js';
+import { TIPOS_MOB } from './mobs.js';
 
 const QTD_MIN = 1;
 const QTD_MAX = 640;
@@ -179,6 +180,57 @@ export function registrarComandos(chat, ctx) {
       const rotulo = def.rotulo || nome;
       if (sobra > 0) ok('Você recebeu ' + (qtd - sobra) + 'x ' + rotulo + ' (' + sobra + ' foram para o chão, o inventário está cheio).');
       else ok('Você recebeu ' + qtd + 'x ' + rotulo + '.');
+    },
+  });
+
+  // ----- /spawn -----
+  chat.registrarComando('spawn', {
+    uso: '/spawn <mob> [quantidade]',
+    ajuda: 'Cria um mob (animal ou monstro) na sua frente. Sem o nome, lista os mobs.',
+    executar(args) {
+      const mobs = ctx.jogador.mobs;
+      if (!mobs) { erro('Os mobs não estão disponíveis neste jogo.'); return; }
+      const tipos = Object.keys(TIPOS_MOB);
+      if (args.length === 0) { info('Mobs que existem: ' + tipos.join(', ')); return; }
+      let qtd = 1;
+      let partes = args;
+      if (args.length > 1 && /^\d+$/.test(args[args.length - 1])) {
+        qtd = Math.max(1, Math.min(10, parseInt(args[args.length - 1], 10)));
+        partes = args.slice(0, -1);
+      }
+      const alvo = normalizar(partes.join(' '));
+      let tipo = tipos.find((t) => normalizar(t) === alvo || normalizar(TIPOS_MOB[t].nome || t) === alvo);
+      if (!tipo) {
+        const comeca = tipos.filter((t) => normalizar(t).startsWith(alvo));
+        if (comeca.length === 1) tipo = comeca[0];
+      }
+      if (!tipo) {
+        erro("Não conheço o mob '" + partes.join(' ') + "'. Mobs que existem: " + tipos.join(', '));
+        return;
+      }
+      if (!mobs.autoridade) { erro('Só o anfitrião pode criar mobs.'); return; }
+      const p = ctx.jogador.posicao;
+      const yaw = ctx.jogador.yaw;
+      let criados = 0;
+      for (let i = 0; i < qtd; i++) {
+        const dist = 3 + i * 0.5;
+        const x = p.x - Math.sin(yaw) * dist;
+        const z = p.z - Math.cos(yaw) * dist;
+        if (mobs.criarMob(tipo, x, p.y + 0.5, z) !== null) criados++;
+      }
+      if (criados === 0) erro('Não consegui criar o mob (limite de mobs no mundo?).');
+      else ok(criados + 'x ' + (TIPOS_MOB[tipo].nome || tipo) + ' criado(s) na sua frente.');
+    },
+  });
+
+  // ----- /armageddon -----
+  chat.registrarComando('armageddon', {
+    uso: '/armageddon',
+    ajuda: 'Faz um meteoro gigante cair do céu perto de você.',
+    executar() {
+      if (!ctx.meteoro) { erro('O meteoro não está disponível neste jogo.'); return; }
+      if (!ctx.meteoro.invocar()) { erro('Já tem um meteoro caindo. Espere ele cair!'); return; }
+      ok('Olhe para o céu... ☄');
     },
   });
 
