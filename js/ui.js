@@ -191,6 +191,7 @@ export class InterfaceJogo {
     this.debugLigado = false;
     this.mao = null;                    // pilha "na mão": { item, qtd } ou null
     this.aoNovoMundo = null;            // guardado em mostrarTelaInicial
+    this.aoSair = null;                 // idem: "Sair para o menu" da pausa
     this.morteAberta = false;           // tela "Você desmaiou!"
     this.aoUsarItem = null;             // callback do Q e do duplo clique (definirCallbacks)
     this.aoSoltarItem = null;           // callbacks (definirCallbacks)
@@ -1353,8 +1354,9 @@ export class InterfaceJogo {
   // ------------------------------------------------------------------
   // Telas
   // ------------------------------------------------------------------
-  mostrarTelaInicial({ aoCriarSala, aoEntrar, aoNovoMundo }) {
+  mostrarTelaInicial({ aoCriarSala, aoEntrar, aoNovoMundo, aoSair }) {
     this.aoNovoMundo = aoNovoMundo;
+    this.aoSair = aoSair;
     this.inicialAberta = true;
     this.elInicial.classList.remove('oculto');
 
@@ -1563,6 +1565,11 @@ export class InterfaceJogo {
       e.currentTarget.blur();
       som.musica?.alternar();
       this._atualizarBotaoMusica();
+    };
+    // Sair para o menu: o jogo é salvo e a página recarrega na tela inicial
+    $('btn-sair-menu').onclick = (e) => {
+      e.currentTarget.blur();
+      if (this.aoSair) this.aoSair();
     };
     this._confirmarDoisCliques($('btn-novo-pausa'), () => {
       this._esconderPausa();

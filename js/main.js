@@ -274,6 +274,14 @@ async function iniciar() {
     salvar();
   }
 
+  // Pausa > "Sair para o menu": salva, desconecta da sala e volta à tela inicial
+  function sairParaMenu() {
+    salvarSaindo();
+    impedirSalvar = true;   // o beforeunload não salva de novo
+    if (rede) rede.encerrar();
+    location.reload();
+  }
+
   function novoMundo() {
     if (rede && rede.modo === 'cliente') {
       ui.mostrarMensagem('Só o anfitrião pode criar um mundo novo.');
@@ -863,7 +871,7 @@ async function iniciar() {
 
   // ----- Pronto: mostra a tela inicial -----
   ui.esconderCarregando();
-  ui.mostrarTelaInicial({ aoCriarSala, aoEntrar, aoNovoMundo: novoMundo });
+  ui.mostrarTelaInicial({ aoCriarSala, aoEntrar, aoNovoMundo: novoMundo, aoSair: sairParaMenu });
 }
 
 iniciar().catch(mostrarErro);
