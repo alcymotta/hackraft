@@ -114,6 +114,64 @@ export function minerio(ctx, corPontos) {
   }
 }
 
+/** Converte "#rrggbb" em [r, g, b] */
+function corHex(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// Formas dos cristais (X = cristal): uma pequena (3x3) e duas grandes (4x4)
+const FORMAS_CRISTAL = [
+  ['.X.', 'XXX', 'XXX'],
+  ['.XX.', 'XXXX', 'XXXX', '.XX.'],
+  ['XXX.', 'XXXX', '.XXX', '..X.'],
+];
+
+/**
+ * Pedra com 3 a 5 cristais facetados (pixel claro no topo, cor média, borda escura).
+ * Reutilizável pelos minérios da Fase 9. corCristal: [r, g, b]
+ * A posição dos cristais vem do gerador `rnd` (semente do nome da textura).
+ */
+export function minerioCristal(ctx, corCristal) {
+  pedraBase(ctx);
+  const ocupado = new Uint8Array(T * T); // evita cristais colados um no outro
+  const total = 3 + inteiro(3);
+  let feitos = 0;
+  for (let tentativa = 0; tentativa < 60 && feitos < total; tentativa++) {
+    const forma = FORMAS_CRISTAL[inteiro(FORMAS_CRISTAL.length)];
+    const h = forma.length;
+    const w = forma[0].length;
+    const ox = 1 + inteiro(T - w - 1);
+    const oy = 1 + inteiro(T - h - 1);
+    // confere se a área (com 1 pixel de folga) está livre
+    let livre = true;
+    for (let y = oy - 1; y <= oy + h && livre; y++) {
+      for (let x = ox - 1; x <= ox + w; x++) {
+        if (x >= 0 && y >= 0 && x < T && y < T && ocupado[y * T + x]) { livre = false; break; }
+      }
+    }
+    if (!livre) continue;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (forma[y][x] !== 'X') continue;
+        ocupado[(oy + y) * T + ox + x] = 1;
+        const dentro = (cx, cy) => cy >= 0 && cy < h && cx >= 0 && cx < w && forma[cy][cx] === 'X';
+        // borda escura: lado de baixo e da direita; o resto é a cor média
+        const bordaBaixo = !dentro(x, y + 1);
+        const bordaDir = !dentro(x + 1, y);
+        const topoEsq = !dentro(x, y - 1) && !dentro(x - 1, y);
+        let c = corCristal;
+        if (topoEsq) c = tom(corCristal, 85);
+        else if (bordaBaixo || bordaDir) c = tom(corCristal, -75);
+        pixel(ctx, ox + x, oy + y, c);
+      }
+    }
+    // reflexo branco no pixel do topo
+    pixel(ctx, ox + forma[0].indexOf('X'), oy, tom(corCristal, 140));
+    feitos++;
+  }
+}
+
 /** Rachadura: caminhada aleatória a partir de um ponto, desenhada com a cor dada */
 function rachadura(ctx, x, y, passos, c) {
   for (let i = 0; i < passos; i++) {
@@ -321,7 +379,37 @@ export const RECEITAS = {
     pixel(ctx, 7, 1, tom(fita, 60));
     pixel(ctx, 8, 2, tom(fita, -40));
   },
+
+  // Gelo: azul-claro com linhas brancas de rachadura e reflexos
+  gelo(ctx) {
+    const base = [150, 215, 245];
+    ruidoBase(ctx, base, 10);
+    for (let i = 0; i < 3; i++) mancha(ctx, inteiro(T - 3), inteiro(T - 3), 3, 2, tom(base, rnd() < 0.5 ? -14 : 12));
+    for (let i = 0; i < 3; i++) rachadura(ctx, inteiro(T), inteiro(T), 5 + inteiro(4), [235, 250, 255]);
+    // reflexos diagonais
+    for (let i = 0; i < 2; i++) {
+      const x = 1 + inteiro(T - 6);
+      const y = 1 + inteiro(T - 6);
+      for (let k = 0; k < 3; k++) pixel(ctx, x + k, y + k, [255, 255, 255]);
+    }
+    salpicar(ctx, base, 12, 20);
+  },
 };
+
+// Receitas dos minérios de cristal (uma por cor), todas com o helper minerioCristal
+const COR_MINERIOS = {
+  minerio_azul: '#3fa9ff',
+  minerio_vermelho: '#ff3f4f',
+  minerio_dourado: '#ffcf3f',
+  minerio_verde: '#3fff7a',
+  minerio_roxo: '#b44fff',
+  minerio_fogo: '#ff8a2a',
+  minerio_raio: '#eef6ff',
+  minerio_gelo: '#a8f0ff',
+};
+for (const [nome, hex] of Object.entries(COR_MINERIOS)) {
+  RECEITAS[nome] = (ctx) => minerioCristal(ctx, corHex(hex));
+}
 
 // ---------------------------------------------------------------------
 // Geração de uma textura (canvas 16x16)
@@ -816,10 +904,38 @@ function interrogacao(g) {
   });
 }
 
+// --- Gema facetada (cristais de poder) ---
+function gema(g, cor) {
+  // Formato: coroa larga em cima e ponta embaixo (linhas y = 3 a 13)
+  const meia = (y) => (y <= 5 ? 3 + (y - 3) : y === 6 ? 6 : Math.max(0, 6 - (y - 6) * 0.9));
+  const dentro = (x, y) => y >= 3 && y <= 13 && Math.abs(x - 7.5) <= meia(y) - 0.5 + (y === 3 ? 0 : 0.5);
+  for (let y = 3; y <= 13; y++) {
+    for (let x = 0; x < T; x++) {
+      if (!dentro(x, y)) continue;
+      let c;
+      if (y <= 5) c = x < 8 ? tom(cor, 55) : tom(cor, 20);        // coroa: clara
+      else if (x <= 5) c = cor;                                    // faceta esquerda: média
+      else if (x >= 10) c = tom(cor, -70);                         // faceta direita: escura
+      else c = x < 8 ? tom(cor, 12) : tom(cor, -30);               // faceta do meio
+      ponto(g, x, y, c);
+    }
+  }
+  // linha que separa a coroa das facetas de baixo
+  for (let x = 0; x < T; x++) if (dentro(x, 6)) ponto(g, x, 6, tom(cor, -25));
+  // brilhos brancos
+  ponto(g, 6, 4, [255, 255, 255]); ponto(g, 5, 5, [255, 255, 255]);
+  ponto(g, 4, 7, tom(cor, 110));
+  ponto(g, 12, 2, [255, 255, 255]); ponto(g, 11, 1, tom(cor, 120)); ponto(g, 13, 1, tom(cor, 120)); // cintilar
+  ponto(g, 12, 0, tom(cor, 120)); ponto(g, 12, 1, tom(cor, 120));
+}
+
 /** Desenha o ícone de um item que não é bloco (item pode ser undefined) */
 function desenharIconeItem(item) {
   const g = novaGrade();
-  if (item && item.tipo === 'roupa' && ROUPA_ICONE[item.visual]) {
+  if (item && item.tipo === 'poder' && item.cor) {
+    gema(g, corHex(item.cor));
+    contornar(g);
+  } else if (item && item.tipo === 'roupa' && ROUPA_ICONE[item.visual]) {
     ROUPA_ICONE[item.visual](g);
     contornar(g);
   } else if (item && item.tipo === 'armadura') {

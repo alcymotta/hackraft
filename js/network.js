@@ -55,6 +55,19 @@
 //     pedirHora  { hora }
 //                "Quero mudar a hora" (/dia, /noite). O anfitrião confere que
 //                é um número, aplica e manda `hora` para todos na hora.
+//     efeito     { efeito: { tipo, origem, direcao, fim?, cor?, cadeia?, poder? } }   (Fase 5)
+//                (o `tipo` do efeito vai DENTRO de `efeito`, porque o `tipo` de fora
+//                é o da mensagem.) "Atirei um poder": efeito.tipo = 'fogo' | 'raio' | 'gelo' | 'poder'.
+//                origem/direcao/fim são { x, y, z } (ou [x, y, z]), cadeia é
+//                uma lista de até 3 pontos (saltos do raio), cor é um número
+//                0xRRGGBB ou um texto "#rrggbb", poder é o nome do poder. O
+//                anfitrião confere tudo (números finitos, no máximo ~10 por
+//                segundo por jogador) e repassa para os outros. Cada
+//                computador DESENHA o efeito; os blocos queimados/congelados
+//                vão pelo caminho normal da mensagem `bloco`.
+//     poderes    { lista }   (Fase 5)
+//                Os poderes que estão ativos em mim (nomes, no máximo 8).
+//                Mandado quando a lista muda. Serve para a aura dos outros.
 //     tchau      { }   "estou fechando a página" (vale nos dois sentidos)
 //
 //   Por que existe o `tchau`? Quando uma aba é fechada, o navegador do
@@ -100,6 +113,13 @@
 //                Só para quem pediu `pegar`: o item é seu. Se não couber
 //                tudo no inventário, o resto volta para o chão (`soltar`).
 //     aparencia  { id, ap }  a aparência de outro jogador mudou
+//     efeito     { de, efeito: { tipo, origem, direcao, fim?, cor?, cadeia?, poder? } }
+//                Um jogador (`de` = id) atirou um poder (Fase 5). Só desenhar.
+//     poderes    { id, lista }
+//                Poderes ativos do jogador `id` (aura). O anfitrião também
+//                manda, ao entrar alguém, os poderes de quem já estava na sala.
+//
+// PROTOCOLO VERSÃO 4 (Fase 5): acrescentou `efeito` e `poderes`.
 //
 // ITENS NO CHÃO: o anfitrião é a autoridade
 //   Só o anfitrião cria e remove itens no chão (no modo sozinho, é o
@@ -133,7 +153,7 @@ import { Equipamento } from './equipamento.js';
 import { quantoCabe } from './itens_chao.js';
 
 const PREFIXO_ID = 'hackraft-';
-const VERSAO_PROTOCOLO = 3;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4)
+const VERSAO_PROTOCOLO = 4;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5)
 const MAX_QTD_ITEM = 64;             // maior pilha aceita numa mensagem de item
 const VEL_MAX_ITEM = 20;             // maior velocidade aceita para um item solto
 const DIST_SOLTAR = 8;               // o cliente só solta itens até 8 blocos de onde está
@@ -339,6 +359,97 @@ function limparAparencia(ap) {
   };
 }
 
+// ----- Efeitos e poderes (Fase 5) -----
+const PODERES_POR_SEGUNDO_MAX = 4;   // mensagens "poderes" aceitas por jogador, por segundo
+
+const TIPOS_EFEITO = new Set(['fogo', 'raio', 'gelo', 'poder']);
+const MAX_CADEIA = 3;                // pontos de salto do raio
+const LIMITE_VETOR = 1000;           // direção/componentes aceitos em módulo (a direção é ~1)
+
+/** Vetor { x, y, z } ou [x, y, z] com números finitos (limite de módulo `max`). Devolve cópia no mesmo formato, ou null. */
+function limparVetor(v, max) {
+  let x, y, z, lista = false;
+  if (Array.isArray(v) && v.length === 3) { x = v[0]; y = v[1]; z = v[2]; lista = true; }
+  else if (v && typeof v === 'object') { x = v.x; y = v.y; z = v.z; }
+  else return null;
+  if (!ehNumero(x) || !ehNumero(y) || !ehNumero(z)) return null;
+  if (Math.abs(x) > max || Math.abs(y) > max || Math.abs(z) > max) return null;
+  return lista ? [x, y, z] : { x, y, z };
+}
+
+/** Posição no mundo { x, y, z } (ou lista) conferida, ou null */
+function limparPontoMundo(v) {
+  const r = limparVetor(v, LIMITE_COORD);
+  if (!r) return null;
+  const x = Array.isArray(r) ? r[0] : r.x;
+  const y = Array.isArray(r) ? r[1] : r.y;
+  const z = Array.isArray(r) ? r[2] : r.z;
+  return posicaoValida(x, y, z) ? r : null;
+}
+
+/** Cor de efeito: só texto "#rrggbb"; qualquer outra coisa é descartada (undefined) */
+function limparCorEfeito(c) {
+  if (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) return c;
+  return undefined;
+}
+
+/** Efeito vindo da rede (ou do jogo local) conferido, ou null */
+function limparEfeito(m) {
+  if (!m || typeof m !== 'object' || !TIPOS_EFEITO.has(m.tipo)) return null;
+  const origem = limparPontoMundo(m.origem);
+  const direcao = limparVetor(m.direcao, LIMITE_VETOR);
+  if (!origem || !direcao) return null;
+  const e = { tipo: m.tipo, origem, direcao };
+  if (m.fim !== undefined && m.fim !== null) {
+    const fim = limparPontoMundo(m.fim);
+    if (!fim) return null;
+    e.fim = fim;
+  }
+  if (m.cadeia !== undefined && m.cadeia !== null) {
+    if (!Array.isArray(m.cadeia) || m.cadeia.length > MAX_CADEIA) return null;
+    const cadeia = [];
+    for (const pt of m.cadeia) {
+      const c = limparPontoMundo(pt);
+      if (!c) return null;
+      cadeia.push(c);
+    }
+    e.cadeia = cadeia;
+  }
+  const cor = limparCorEfeito(m.cor);
+  if (cor !== undefined) e.cor = cor;
+  if (typeof m.poder === 'string' && m.poder.length <= 32) e.poder = m.poder;
+  return e;
+}
+
+// Nomes de poderes que existem (tirados dos itens de tipo 'poder'); recalculado se a lista de itens mudar
+let nomesPoderes = null;
+let tamanhoItensPoderes = -1;
+function poderesConhecidos() {
+  if (nomesPoderes && tamanhoItensPoderes === ITENS.size) return nomesPoderes;
+  nomesPoderes = new Set();
+  for (const def of ITENS.values()) {
+    if (def && def.tipo === 'poder' && typeof def.poder === 'string') nomesPoderes.add(def.poder);
+  }
+  tamanhoItensPoderes = ITENS.size;
+  return nomesPoderes;
+}
+
+/** Lista de poderes ativos conferida: só nomes que existem, sem repetir, no máximo MAX_PODERES_REDE */
+function limparListaPoderes(lista) {
+  const r = [];
+  if (!Array.isArray(lista)) return r;
+  const conhecidos = poderesConhecidos();
+  const max = CONFIG.MAX_PODERES_REDE;
+  for (const nome of lista.slice(0, 64)) {
+    if (typeof nome !== 'string' || nome.length > 32 || r.includes(nome)) continue;
+    // Sem itens de poder registrados (não deveria acontecer): aceita nome em formato seguro
+    const ok = conhecidos.size > 0 ? conhecidos.has(nome) : /^[a-z_]+$/.test(nome);
+    if (ok) r.push(nome);
+    if (r.length >= max) break;
+  }
+  return r;
+}
+
 /** Objeto de estado (posição) reaproveitado para cada jogador */
 function novoEstado() {
   return { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false };
@@ -470,6 +581,10 @@ export class Rede {
     this.ui = null;
     this.equipamento = null;
     this.itensChao = null;
+    this.poderes = null;              // Poderes (Fase 5)
+    this._meusPoderes = [];           // lista de poderes ativos em mim (a última enviada)
+    this._efIni = 0;                  // limite de efeitos que EU mando (início da janela de 1 s)
+    this._efN = 0;
     this._aoPegarItem = null;         // fn(item, qtd): o jogador local ganhou um item do chão
 
     // Minha aparência completa (Fase 3). Vai no bemvindo (anfitrião) ou na
@@ -731,6 +846,11 @@ export class Rede {
       msgPos: { tipo: 'pos', id: conn.peer, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false },
       criadoEm: agora,
       ultimaMsg: agora,
+      poderes: [],            // poderes ativos dele (Fase 5)
+      efIni: 0,               // limite de efeitos: início da janela de 1 s
+      pdIni: 0,               // limite de mensagens "poderes": início da janela de 1 s
+      pdN: 0,
+      efN: 0,                 // e quantos já passaram nela
     };
     this.clientes.set(cli.id, cli);
     conn.on('data', (msg) => this._dadosDoCliente(cli, msg));
@@ -787,6 +907,12 @@ export class Rede {
           return;
         case 'pedirHora':
           if (cli.pronto) this._pedirHoraDoCliente(cli, msg);
+          return;
+        case 'efeito':
+          if (cli.pronto) this._efeitoDoCliente(cli, msg);
+          return;
+        case 'poderes':
+          if (cli.pronto) this._poderesDoCliente(cli, msg);
           return;
         case 'tchau':
           this._clienteSaiu(cli);
@@ -892,6 +1018,52 @@ export class Rede {
     this._tempoHora = performance.now(); // a próxima hora automática só daqui a 5 s
   }
 
+  /**
+   * Deixa passar no máximo EFEITOS_POR_SEGUNDO_MAX efeitos por segundo.
+   * `dono` é o cliente (campos efIni/efN) ou a própria rede (_efIni/_efN).
+   */
+  _efeitoPermitido(dono, chaveIni, chaveN, limite = CONFIG.EFEITOS_POR_SEGUNDO_MAX) {
+    const agora = performance.now();
+    if (agora - dono[chaveIni] >= 1000) {
+      dono[chaveIni] = agora;
+      dono[chaveN] = 0;
+    }
+    if (dono[chaveN] >= limite) return false;
+    dono[chaveN]++;
+    return true;
+  }
+
+  /** Um cliente atirou um poder: confere, mostra aqui e repassa para os outros */
+  _efeitoDoCliente(cli, msg) {
+    const e = limparEfeito(msg.efeito);
+    if (!e || !this._efeitoPermitido(cli, 'efIni', 'efN')) return;
+    this._mostrarEfeito(e);
+    this._avisarTodos({ tipo: 'efeito', de: cli.id, efeito: e }, cli);
+  }
+
+  /** Um cliente mudou os poderes ativos: guarda, mostra a aura aqui e repassa */
+  _poderesDoCliente(cli, msg) {
+    if (!this._efeitoPermitido(cli, 'pdIni', 'pdN', PODERES_POR_SEGUNDO_MAX)) return;
+    const lista = limparListaPoderes(msg.lista);
+    cli.poderes = lista;
+    this._definirPoderesRemotos(cli.id, lista);
+    this._avisarTodos({ tipo: 'poderes', id: cli.id, lista }, cli);
+  }
+
+  /** Desenha o efeito de outro jogador (se o módulo de poderes existir) */
+  _mostrarEfeito(e) {
+    const p = this.poderes;
+    if (!p || typeof p.receberEfeitoRemoto !== 'function') return;
+    try { p.receberEfeitoRemoto(e); } catch (err) { console.warn('Hackraft: efeito remoto falhou', err); }
+  }
+
+  /** Mostra a aura de poderes de outro jogador */
+  _definirPoderesRemotos(id, lista) {
+    const p = this.poderes;
+    if (!p || typeof p.definirPoderesRemotos !== 'function') return;
+    try { p.definirPoderesRemotos(id, lista); } catch (err) { console.warn('Hackraft: aura remota falhou', err); }
+  }
+
   _recusar(cli, motivo) {
     cli.recusado = true;
     this._enviar(cli.conn, { tipo: 'recusado', motivo });
@@ -981,6 +1153,15 @@ export class Rede {
       if (outro.pronto) this._enviar(outro.conn, aviso);
     }
     cli.pronto = true;
+    // Poderes que já estão ativos nos outros (para ele ver as auras)
+    if (this._meusPoderes.length > 0) {
+      this._enviar(cli.conn, { tipo: 'poderes', id: this.meuId, lista: this._meusPoderes });
+    }
+    for (const outro of this.clientes.values()) {
+      if (outro !== cli && outro.pronto && outro.poderes.length > 0) {
+        this._enviar(cli.conn, { tipo: 'poderes', id: outro.id, lista: outro.poderes });
+      }
+    }
     this.remotos.adicionar(cli.id, cli.apelido, cli.cores);
     this._aviso(cli.apelido + ' entrou no mundo!');
     this._avisarListaMudou();
@@ -1058,6 +1239,7 @@ export class Rede {
     for (const c of this.clientes.values()) {
       if (c.pronto) this._enviar(c.conn, aviso);
     }
+    this._definirPoderesRemotos(cli.id, []);
     if (this.remotos) this.remotos.remover(cli.id);
     this._aviso(cli.apelido + ' saiu.');
     this._avisarListaMudou();
@@ -1220,6 +1402,8 @@ export class Rede {
           if (this.ligado && itemValido(msg.item) && qtdValida(msg.qtd)) this._receberItem(msg.item, msg.qtd);
           return;
         case 'aparencia': this._aparenciaDoAnfitriao(msg); return;
+        case 'efeito': this._efeitoDoAnfitriao(msg); return;
+        case 'poderes': this._poderesDoAnfitriao(msg); return;
         case 'tchau':
           if (this._entrada) this._entrada.falhar(erroRede('O anfitrião fechou a sala.', 'tchau'));
           else this._perdeuAnfitriao();
@@ -1437,6 +1621,24 @@ export class Rede {
     }
   }
 
+  /** O anfitrião repassou o efeito de alguém */
+  _efeitoDoAnfitriao(msg) {
+    if (!this.ligado) return;
+    if (typeof msg.de === 'string' && msg.de === this.meuId) return; // o meu eu já desenhei
+    const e = limparEfeito(msg.efeito);
+    if (e) this._mostrarEfeito(e);
+  }
+
+  /** Poderes ativos de outro jogador (aura) */
+  _poderesDoAnfitriao(msg) {
+    const id = msg.id;
+    if (typeof id !== 'string' || id === this.meuId) return;
+    const j = this.jogadores.get(id);
+    if (!j) return;
+    j.poderes = limparListaPoderes(msg.lista);
+    if (this.ligado) this._definirPoderesRemotos(id, j.poderes);
+  }
+
   /** O anfitrião pôs um item no chão */
   _itemNovoDoAnfitriao(msg) {
     const d = lerItemNovo(msg);
@@ -1463,6 +1665,7 @@ export class Rede {
     if (!j) return;
     this.jogadores.delete(id);
     if (!this.ligado) return;
+    this._definirPoderesRemotos(id, []);
     this.remotos.remover(id);
     this._aviso(j.apelido + ' saiu.');
     this._avisarListaMudou();
@@ -1525,11 +1728,12 @@ export class Rede {
 
   /**
    * @param pecas { mundo, ceu, jogador, inventario, remotos, ui,
-   *                equipamento, itensChao, aoPegarItem }
+   *                equipamento, itensChao, aoPegarItem, poderes }
+   *   `poderes` (Fase 5): recebe os efeitos e as auras dos outros jogadores.
    *   `aoPegarItem(item, qtd)` (opcional) é chamada quando o jogador local
    *   ganha um item do chão (o main toca um som).
    */
-  ligar({ mundo, ceu, jogador, inventario, remotos, ui, equipamento = null, itensChao = null, aoPegarItem = null }) {
+  ligar({ mundo, ceu, jogador, inventario, remotos, ui, equipamento = null, itensChao = null, aoPegarItem = null, poderes = null }) {
     this.mundo = mundo;
     this.ceu = ceu;
     this.jogador = jogador;
@@ -1539,6 +1743,7 @@ export class Rede {
     this.equipamento = equipamento;
     this.itensChao = itensChao;
     this._aoPegarItem = aoPegarItem;
+    this.poderes = poderes;
     this.ligado = true;
 
     // Itens no chão: quem manda é o anfitrião (ou quem joga sozinho).
@@ -1572,6 +1777,7 @@ export class Rede {
         remotos.adicionar(j.id, j.apelido, j.cores);
         if (j.aparencia) this._aplicarAparenciaRemota(j.id, j.aparencia);
         if (j.temEstado) remotos.receberEstado(j.id, j.estado);
+        if (j.poderes && j.poderes.length > 0) this._definirPoderesRemotos(j.id, j.poderes);
       }
       // Blocos, itens e hora que chegaram durante a montagem do mundo
       for (const b of this._blocosAntesDeLigar) this._blocoDoAnfitriao({ x: b[0], y: b[1], z: b[2], id: b[3], de: b[4] });
@@ -1736,6 +1942,44 @@ export class Rede {
   definirCasa(pos) {
     this.casa = limparCasa(pos);
     if (this.modo === 'cliente' && this.ligado && !this._caiu) this._enviarMeuEstado();
+  }
+
+  // ------------------------------------------------------------------
+  // Efeitos e poderes (Fase 5)
+  // ------------------------------------------------------------------
+
+  /**
+   * Avisa os outros jogadores que atirei um poder, para eles desenharem.
+   * `efeito` = { tipo: 'fogo' | 'raio' | 'gelo' | 'poder', origem, direcao,
+   * fim?, cor?, cadeia?, poder? }. Sozinho: não faz nada. Devolve true se mandou.
+   */
+  enviarEfeito(efeito) {
+    if (this.modo === 'sozinho' || !this.ligado || this.encerrado || this._caiu) return false;
+    const e = limparEfeito(efeito);
+    if (!e || !this._efeitoPermitido(this, '_efIni', '_efN')) return false;
+    if (this.modo === 'anfitriao') {
+      this._avisarTodos({ tipo: 'efeito', de: this.meuId, efeito: e });
+    } else {
+      this._enviar(this.conexaoAnfitriao, { tipo: 'efeito', efeito: e });
+    }
+    return true;
+  }
+
+  /**
+   * Avisa quais poderes estão ativos em mim (a lista de nomes, ex.: ['velocidade']).
+   * Aceita lista, Set ou Map (usa as chaves). Chame quando a lista mudar.
+   */
+  enviarPoderes(lista) {
+    let nomes = [];
+    if (Array.isArray(lista)) nomes = lista;
+    else if (lista && typeof lista.keys === 'function') nomes = [...lista.keys()];
+    this._meusPoderes = limparListaPoderes(nomes);
+    if (this.modo === 'sozinho' || !this.ligado || this.encerrado || this._caiu) return;
+    if (this.modo === 'anfitriao') {
+      this._avisarTodos({ tipo: 'poderes', id: this.meuId, lista: this._meusPoderes });
+    } else {
+      this._enviar(this.conexaoAnfitriao, { tipo: 'poderes', lista: this._meusPoderes });
+    }
   }
 
   // ------------------------------------------------------------------

@@ -8,6 +8,10 @@
 // Fase 3: a roupa muda o jogador (bônus de velocidade, passos silenciosos),
 // os presentes misteriosos dão um item quando quebrados, e o jogador pode
 // soltar itens no chão (soltarNaFrente).
+//
+// Fase 5: vida (machucar, curar, morrer), dano de queda e os poderes dos
+// cristais (velocidade, pulo, voar, quebra instantânea, ataque). Os poderes
+// vêm do objeto `poderes` (ligado depois, com `jogador.poderes = poderes`).
 // =====================================================================
 
 import * as THREE from 'three';
@@ -20,18 +24,26 @@ const ALTURA = CONFIG.ALTURA_JOGADOR;
 const EPS = 0.0001;                 // folguinha para evitar erros de arredondamento
 const PASSO_MAX = 0.3;              // deslocamento máximo por subpasso (em blocos)
 const LIMITE_PITCH = Math.PI / 2 - 0.01;
+// Modificadores "sem poder nenhum" (usado enquanto não há `poderes`)
+const MODS_VAZIOS = Object.freeze({
+  velocidade: 1, pulo: 1, voar: false, regeneracao: false, quebraInstantanea: false, ataque: null,
+  semDanoQueda: false,
+});
 
 export class Jogador {
   /**
    * @param opcoes { camera, scene, mundo, inventario, ui, som, personagem,
-   *                 texturas, equipamento, soltarItem }
+   *                 texturas, equipamento, soltarItem, particulas, poderes }
+   *   particulas:  Particulas (pedacinhos ao quebrar bloco), opcional
+   *   poderes:     Poderes (opcional; também pode ser ligado depois com
+   *                `jogador.poderes = poderes`)
    *   texturas:    usado nas rachaduras de quebrar bloco
    *   equipamento: Equipamento (os bônus da roupa e da armadura)
    *   soltarItem:  fn(item, qtd, x, y, z, vx, vy, vz) → true se deu certo.
    *                Põe um item no chão (o main liga isso à rede, porque no
    *                multiplayer quem cria o item é o anfitrião).
    */
-  constructor({ camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento = null, soltarItem = null }) {
+  constructor({ camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento = null, soltarItem = null, particulas = null, poderes = null }) {
     this.camera = camera;
     this.scene = scene;
     this.mundo = mundo;
@@ -42,6 +54,17 @@ export class Jogador {
     this.texturas = texturas;
     this.equipamento = equipamento;
     this.soltarItem = soltarItem;
+    this.particulas = particulas;
+    this.poderes = poderes;
+    this._mods = MODS_VAZIOS;          // modificadores dos poderes neste quadro
+
+    // Vida (Fase 5)
+    this.vida = CONFIG.VIDA_MAX;
+    this.morto = false;
+    this.obterPosRenascer = null;      // o main liga: () => [x, y, z] da casa/nascimento
+    this._ouvintesMorte = [];
+    this._caindo = false;              // saiu do chão e ainda não pousou?
+    this._yTopo = 0;                   // y mais alto desde que saiu do chão
 
     // Bônus do equipamento, guardados aqui (o loop não pede um objeto
     // novo ao equipamento a cada quadro). Atualizados quando ele muda.
@@ -128,7 +151,97 @@ export class Jogador {
 
   /** true se o jogador pode agir agora */
   get ativo() {
-    return this.ui.mouseTravado && !this.ui.menuAberto;
+    return !this.morto && this.ui.mouseTravado && !this.ui.menuAberto;
+  }
+
+  // ------------------------------------------------------------------
+  // Vida (Fase 5)
+  // ------------------------------------------------------------------
+
+  /** Registra uma função chamada quando o jogador morre (vida chegou a 0) */
+  aoMorrer(fn) {
+    if (typeof fn === 'function') this._ouvintesMorte.push(fn);
+  }
+
+  /**
+   * Tira vida. `causa` é um texto ('queda', 'fogo'...) ou um objeto
+   * { tipo, direcao: {x, y, z} } (a direção em que o golpe vai, para empurrar).
+   * Devolve a vida que restou.
+   */
+  machucar(qtd, causa = null) {
+    if (this.morto || !Number.isFinite(qtd) || qtd <= 0) return this.vida;
+    this.vida = Math.max(0, this.vida - qtd);
+    if (this.ui.sinalizarDano) this.ui.sinalizarDano();
+    if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, CONFIG.VIDA_MAX);
+    // Empurrãozinho se o golpe tem direção
+    const dir = causa && typeof causa === 'object' ? causa.direcao : null;
+    if (dir && Number.isFinite(dir.x) && Number.isFinite(dir.z)) {
+      const comp = Math.hypot(dir.x, dir.z) || 1;
+      this.velocidade.x += (dir.x / comp) * CONFIG.EMPURRAO_DANO;
+      this.velocidade.z += (dir.z / comp) * CONFIG.EMPURRAO_DANO;
+      this.velocidade.y = Math.max(this.velocidade.y, CONFIG.EMPURRAO_DANO_CIMA);
+      this.noChao = false;
+    }
+    if (this.som && typeof this.som.dano === 'function') this.som.dano();
+    if (this.vida <= 0) this._morrer();
+    return this.vida;
+  }
+
+  /** Devolve vida (sem passar do máximo). Não revive quem já morreu. */
+  curar(qtd) {
+    if (this.morto || !Number.isFinite(qtd) || qtd <= 0) return this.vida;
+    const nova = Math.min(CONFIG.VIDA_MAX, this.vida + qtd);
+    if (nova !== this.vida) {
+      this.vida = nova;
+      if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, CONFIG.VIDA_MAX);
+    }
+    return this.vida;
+  }
+
+  _morrer() {
+    this.morto = true;
+    this.vida = 0;
+    this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
+    this.teclas = {};
+    this._limparQuebra();
+    for (const fn of this._ouvintesMorte) {
+      try { fn(); } catch (e) { console.error(e); }
+    }
+  }
+
+  /** Volta à vida com a vida cheia (o main chama depois de teletransportar para casa) */
+  renascer() {
+    this.morto = false;
+    this.teclas = {};
+    this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
+    this.vida = CONFIG.VIDA_MAX;
+    this._caindo = false;
+    this.velocidade.set(0, 0, 0);
+    if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, CONFIG.VIDA_MAX);
+  }
+
+  /** Controla o dano de queda: guarda o y mais alto e, ao pousar, aplica (queda - QUEDA_SEGURA) */
+  _verificarQueda(voa, yAntes) {
+    const p = this.posicao;
+    // Voando, na água ou com o poder de superpulo: nada de dano (e recomeça a contagem)
+    if (voa || this.naAgua || this._mods.semDanoQueda || this._mods.pulo > 1) {
+      this._caindo = false;
+      this._yTopo = p.y;
+      return;
+    }
+    if (this.noChao) {
+      if (this._caindo) {
+        this._caindo = false;
+        const dano = Math.floor(this._yTopo - p.y - CONFIG.QUEDA_SEGURA + 0.001);
+        if (dano > 0) this.machucar(dano, 'queda');
+      }
+      this._yTopo = p.y;
+    } else if (!this._caindo) {
+      this._caindo = true;
+      this._yTopo = Math.max(p.y, yAntes); // o y de onde saiu do chão
+    } else if (p.y > this._yTopo) {
+      this._yTopo = p.y;
+    }
   }
 
   /** true se o evento de teclado veio de um campo de texto */
@@ -160,6 +273,7 @@ export class Jogador {
         }
         return;
       }
+      if (this.morto) return;   // morto: não registra teclas
       this.teclas[e.code] = true;
       // Evita que o espaço "aperte" algum botão da página
       if (e.code === 'Space' && this.ativo) e.preventDefault();
@@ -287,6 +401,9 @@ export class Jogador {
     const p = this.posicao;
     const mundo = this.mundo;
 
+    // Modificadores dos poderes (velocidade, pulo, voar...), lidos uma vez por quadro
+    this._mods = this.poderes ? (this.poderes.modificadores() || MODS_VAZIOS) : MODS_VAZIOS;
+
     // Sem controle (menu aberto): solta os botões do mouse
     if (!ativo) {
       this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
@@ -294,9 +411,12 @@ export class Jogador {
 
     // Só mexe na física se o chão sob o jogador já existe
     if (mundo.estaPronto(p.x, p.z)) {
+      const yAntes = p.y;
       this._fisica(dt, ativo);
+      this._verificarQueda(this.voando || !!this._mods.voar, yAntes);
     } else {
       this.velocidade.set(0, 0, 0);
+      this._caindo = false;
     }
 
     // Caiu no vazio: volta ao ponto de nascimento
@@ -357,14 +477,14 @@ export class Jogador {
     if (comp > 0) { dx /= comp; dz /= comp; }
 
     // Modo voo: física própria (sem gravidade, sem passos)
-    if (this.voando) {
+    if (this.voando || this._mods.voar) {
       this._fisicaVoando(dt, ativo, dx, dz);
       return;
     }
 
     // Velocidade básica × bônus da roupa (ninja: +10%)
     const vel = (naAgua ? CONFIG.VEL_NADAR : (correndo ? CONFIG.VEL_CORRER : CONFIG.VEL_ANDAR)) *
-      (1 + this.bonus.velocidade);
+      (1 + this.bonus.velocidade) * (this._mods.velocidade || 1);
     const alvoX = dx * vel;
     const alvoZ = dz * vel;
     const acel = (naAgua ? CONFIG.ACEL_AGUA : (this.noChao ? CONFIG.ACEL_CHAO : CONFIG.ACEL_AR)) * dt;
@@ -398,7 +518,7 @@ export class Jogador {
       v.y -= CONFIG.GRAVIDADE * dt;
       if (v.y < -CONFIG.VEL_MAX_QUEDA) v.y = -CONFIG.VEL_MAX_QUEDA;
       if (pulando && this.noChao) {
-        v.y = CONFIG.VEL_PULO;
+        v.y = CONFIG.VEL_PULO * (this._mods.pulo || 1);
         this.noChao = false;
       }
     }
@@ -446,7 +566,7 @@ export class Jogador {
   _fisicaVoando(dt, ativo, dx, dz) {
     const v = this.velocidade;
     const t = this.teclas;
-    const vel = CONFIG.VEL_VOAR * (1 + this.bonus.velocidade);
+    const vel = CONFIG.VEL_VOAR * (1 + this.bonus.velocidade) * (this._mods.velocidade || 1);
     const acel = CONFIG.ACEL_VOAR * dt;
 
     // Horizontal: aproxima da velocidade desejada
@@ -556,8 +676,16 @@ export class Jogador {
     if (this.espera > 0) this.espera -= dt;
     if (this.tempoColocar > 0) this.tempoColocar -= dt;
 
+    // ----- Ataque de poder (fogo, raio, gelo): o botão esquerdo atira e NÃO quebra -----
+    const mods = this._mods;
+    if (mods.ataque && this.poderes) {
+      if (this.botoes[0] && this.poderes.atirar(this._olhos, this._dir)) {
+        this.personagem.animarGolpe();
+        if (this.som && typeof this.som.tiro === 'function') this.som.tiro(mods.ataque);
+      }
+      if (this.temAlvoQuebra) this._limparQuebra();
     // ----- Quebrar (botão esquerdo) -----
-    if (this.botoes[0] && alvo && this.espera <= 0) {
+    } else if (this.botoes[0] && alvo && this.espera <= 0) {
       const mesmo = this.temAlvoQuebra && alvo.x === this.alvoX &&
                     alvo.y === this.alvoY && alvo.z === this.alvoZ;
       if (!mesmo) {
@@ -571,7 +699,9 @@ export class Jogador {
         // Bloco inquebrável: sem progresso, sem som e sem rachadura
         this.rachadura.visible = false;
       } else {
-        this.progresso += dt / Math.max(bloco.dureza, 0.01);
+        // Poder roxo: quebra na hora (progresso = 1)
+        if (mods.quebraInstantanea) this.progresso = 1;
+        else this.progresso += dt / Math.max(bloco.dureza, 0.01);
         // Som de golpe
         this.tempoGolpe -= dt;
         if (this.tempoGolpe <= 0) {
@@ -622,6 +752,7 @@ export class Jogador {
       return;
     }
     if (bloco.som) this.som.quebrar(bloco.som);
+    if (this.particulas) this.particulas.explosaoBloco(alvo.x, alvo.y, alvo.z, idAnterior, this.texturas);
     this._limparQuebra();
     this.espera = CONFIG.ESPERA_APOS_QUEBRAR;
   }
@@ -721,13 +852,23 @@ export class Jogador {
     this.posicao.set(x, y, z);
     this.velocidade.set(0, 0, 0);
     this.noChao = false;
+    this._caindo = false; // o teletransporte não conta como queda
+    this._yTopo = y;
   }
 
   serializar() {
+    // Morto: salva a casa (ou nascimento) com a vida cheia, para não reabrir no lugar da morte
+    if (this.morto && this.obterPosRenascer) {
+      const r = this.obterPosRenascer();
+      if (Array.isArray(r) && r.length === 3 && r.every(Number.isFinite)) {
+        return { pos: [r[0], r[1], r[2]], yaw: this.yaw, pitch: this.pitch, vida: CONFIG.VIDA_MAX };
+      }
+    }
     return {
       pos: [this.posicao.x, this.posicao.y, this.posicao.z],
       yaw: this.yaw,
       pitch: this.pitch,
+      vida: this.vida,
     };
   }
 
@@ -740,5 +881,12 @@ export class Jogador {
     if (Number.isFinite(dados.pitch)) {
       this.pitch = Math.max(-LIMITE_PITCH, Math.min(LIMITE_PITCH, dados.pitch));
     }
+    // Vida salva (saves antigos não têm: ficam com a vida cheia). Nunca carrega "morto".
+    if (Number.isFinite(dados.vida) && dados.vida > 0) {
+      this.vida = Math.min(CONFIG.VIDA_MAX, dados.vida);
+    } else {
+      this.vida = CONFIG.VIDA_MAX;
+    }
+    if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, CONFIG.VIDA_MAX);
   }
 }

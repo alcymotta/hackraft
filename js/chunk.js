@@ -13,6 +13,11 @@
 // para testar no Node. Quem transforma os arrays em BufferGeometry é o
 // world.js.
 //
+// Cada vértice leva: posição, uv, camada da textura, sombra (face × AO),
+// luz do céu e, desde a Fase 5, o "brilho" (0 = normal; 1..255 = bloco
+// com BLOCOS[id].brilho, e o valor é a fase da pulsação; ver o shader no
+// world.js).
+//
 // Exporta:
 //   TAM, ALTURA, AREA, VOLUME     tamanhos do chunk
 //   indiceLocal(x, y, z)          posição no array de dados
@@ -42,6 +47,26 @@ export function indiceLocal(x, y, z) {
 // Tabela "tem partes furadas" (folhas). Folha encostada em folha desenha a face.
 const RECORTE = new Uint8Array(256);
 for (const b of BLOCOS) if (b && b.recorte) RECORTE[b.id] = 1;
+
+// Tabela "brilha pulsando" (minérios de cristal, Fase 5). Vem do campo
+// `brilho` de cada bloco em blocks.js.
+const BRILHA = new Uint8Array(256);
+for (const b of BLOCOS) if (b && b.brilho) BRILHA[b.id] = 1;
+
+/**
+ * Valor do atributo aBrilho de um bloco que brilha: de 1 a 255, sorteado
+ * pela POSIÇÃO do bloco (sempre o mesmo para o mesmo lugar).
+ * O shader usa esse número como "fase" da pulsação: cada bloco pulsa num
+ * momento diferente, e os cristais não piscam todos juntos.
+ * (0 fica reservado para "não brilha".)
+ */
+function faseDoBrilho(wx, y, wz) {
+  let h = Math.imul(wx | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ Math.imul(wz | 0, 0x9e3779b1);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  return 1 + ((h >>> 0) % 255);
+}
 
 // =====================================================================
 // Dados de um chunk
@@ -223,12 +248,18 @@ const VIZ_AO = new Int32Array(6 * 4 * 3);
  * coletor de memória). No fim, extrair() copia só a parte usada.
  */
 class BufferMalha {
-  constructor(capacidade = 8192) {
+  /**
+   * @param capacidade quantos vértices cabem no começo (cresce sozinho)
+   * @param comBrilho  true = guarda também o atributo aBrilho (a água não usa)
+   */
+  constructor(capacidade = 8192, comBrilho = true) {
     this.capacidade = 0;
     this.nVert = 0;
     this.nInd = 0;
     this.yMin = 0;
     this.yMax = 0;
+    this.comBrilho = comBrilho;
+    this.brilho = null;
     this.crescer(capacidade);
   }
 
@@ -239,6 +270,7 @@ class BufferMalha {
     const camada = new Uint8Array(capacidade);
     const sombra = new Uint8Array(capacidade);
     const luzCeu = new Uint8Array(capacidade);
+    const brilho = this.comBrilho ? new Uint8Array(capacidade) : null;
     const ind = new Uint32Array((capacidade / 4) * 6);
     if (ant) {
       pos.set(ant.pos.subarray(0, ant.nVert * 3));
@@ -246,6 +278,7 @@ class BufferMalha {
       camada.set(ant.camada.subarray(0, ant.nVert));
       sombra.set(ant.sombra.subarray(0, ant.nVert));
       luzCeu.set(ant.luzCeu.subarray(0, ant.nVert));
+      if (brilho) brilho.set(ant.brilho.subarray(0, ant.nVert));
       ind.set(ant.ind.subarray(0, ant.nInd));
     }
     this.pos = pos;
@@ -253,6 +286,7 @@ class BufferMalha {
     this.camada = camada;
     this.sombra = sombra;
     this.luzCeu = luzCeu;
+    this.brilho = brilho;
     this.ind = ind;
     this.capacidade = capacidade;
   }
@@ -273,6 +307,9 @@ class BufferMalha {
       camadas: this.camada.slice(0, this.nVert),   // Uint8Array normalizado: camada = valor * 255
       sombras: this.sombra.slice(0, this.nVert),   // Uint8Array normalizado (face × AO)
       luzCeu: this.luzCeu.slice(0, this.nVert),    // Uint8Array normalizado (luz do céu 0..1)
+      // Uint8Array normalizado: 0 = não brilha; 1..255 = brilha, e o valor é a fase
+      // da pulsação (null na água, que nunca brilha)
+      brilhos: this.brilho ? this.brilho.slice(0, this.nVert) : null,
       indices: this.ind.slice(0, this.nInd),       // Uint32Array
       yMin: this.yMin,
       yMax: this.yMax,
@@ -308,12 +345,17 @@ export class MontadorMalha {
     this.blocos.fill(B.AR, (PY - 1) * PAREA, PVOLUME);
     this.luzCeu.fill(NIVEL_MAX, (PY - 1) * PAREA, PVOLUME);
 
-    this.solido = new BufferMalha(16384);
-    this.agua = new BufferMalha(4096);
+    this.solido = new BufferMalha(16384, true);
+    this.agua = new BufferMalha(4096, false); // a água nunca brilha
 
     // Rascunhos para os 4 cantos de uma face (sem alocar no laço)
     this._sombra = new Float32Array(4);
     this._luz = new Float32Array(4);
+
+    // Canto do chunk que está sendo montado, em coordenadas do mundo
+    // (para sortear a fase do brilho pela posição de verdade do bloco)
+    this._x0 = 0;
+    this._z0 = 0;
   }
 
   /** Camada da textura de uma face do bloco (com cache). */
@@ -381,6 +423,8 @@ export class MontadorMalha {
     agua.limpar();
     if (centro.yMaximo === 0) return { solido: null, agua: null, faces: 0 };
 
+    this._x0 = centro.cx * TAM;
+    this._z0 = centro.cz * TAM;
     this.copiarComBorda(vizinhos);
     const blocos = this.blocos;
     const yMax = centro.yMaximo;
@@ -456,7 +500,11 @@ export class MontadorMalha {
     const b3 = tmpS[3] * tmpL[3];
     const virar = b0 + b2 < b1 + b3;
 
-    this.escreverQuad(buf, x, y, z, f, this.camadaDe(id, TEX_FACE[f]), 1, virar);
+    // Bloco que brilha (cristal): a fase depende da posição no mundo, então
+    // as 6 faces do mesmo bloco pulsam juntas, e os vizinhos pulsam em outro momento
+    const brilho = BRILHA[id] ? faseDoBrilho(this._x0 + x, y, this._z0 + z) : 0;
+
+    this.escreverQuad(buf, x, y, z, f, this.camadaDe(id, TEX_FACE[f]), 1, virar, brilho);
   }
 
   /** Face de água: sem AO, superfície um pouco abaixada. */
@@ -469,11 +517,14 @@ export class MontadorMalha {
     const tmpS = this._sombra;
     const tmpL = this._luz;
     for (let k = 0; k < 4; k++) { tmpS[k] = s; tmpL[k] = l; }
-    this.escreverQuad(buf, x, y, z, f, this.camadaDe(id, TEX_FACE[f]), topo, false);
+    this.escreverQuad(buf, x, y, z, f, this.camadaDe(id, TEX_FACE[f]), topo, false, 0);
   }
 
-  /** Escreve os 4 vértices e os 6 índices de uma face. */
-  escreverQuad(buf, x, y, z, f, camada, topo, virar) {
+  /**
+   * Escreve os 4 vértices e os 6 índices de uma face.
+   * brilho: 0 = normal; 1..255 = bloco que brilha (o valor é a fase da pulsação)
+   */
+  escreverQuad(buf, x, y, z, f, camada, topo, virar, brilho) {
     if (buf.nVert + 4 > buf.capacidade) buf.crescer(buf.capacidade * 2);
     const v = buf.nVert;
     const pos = buf.pos;
@@ -481,6 +532,13 @@ export class MontadorMalha {
     const tmpS = this._sombra;
     const tmpL = this._luz;
     const rebaixado = topo !== 1;
+    const arrBrilho = buf.brilho; // null na água
+    if (arrBrilho) {
+      arrBrilho[v] = brilho;
+      arrBrilho[v + 1] = brilho;
+      arrBrilho[v + 2] = brilho;
+      arrBrilho[v + 3] = brilho;
+    }
 
     for (let k = 0; k < 4; k++) {
       const c = (f * 4 + k) * 3;

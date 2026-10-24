@@ -24,6 +24,12 @@
 //   comandos (/dia, /voar, /tp...). Os comandos recebem um "ctx" com as
 //   peças do jogo (veja registrarComandos em comandos.js). O ModoHacker
 //   cuida dos efeitos de tela do /hacker. A música troca entre dia e noite.
+//
+// VIDA, PODERES E PARTÍCULAS (Fase 5)
+//   O Jogador tem vida (morre e volta para casa). Os cristais ativam poderes
+//   (Poderes) e as Particulas desenham pedacinhos, brilhos e efeitos.
+//   Este arquivo liga as peças e roda: poderes.atualizar, particulas.atualizar,
+//   os brilhinhos dos minérios.
 // =====================================================================
 
 import * as THREE from 'three';
@@ -42,6 +48,8 @@ import { Rede } from './network.js';
 import { Chat } from './chat.js';
 import { registrarComandos } from './comandos.js';
 import { ModoHacker } from './hacker.js';
+import { Particulas } from './particulas.js';
+import { Poderes } from './powers.js';
 import { som } from './audio.js';
 import { BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { salvarJogo, carregarJogo, apagarJogo } from './save.js';
@@ -194,6 +202,10 @@ async function iniciar() {
       if (jogo) jogo.jogador.soltarNaFrente(item, qtd);
       else inventario.adicionar(item, qtd); // (sem jogo ainda: devolve)
     },
+    // Q ou duplo clique num cristal: usa o poder (quem consome o item é o Poderes.usar)
+    aoUsarItem(nome) {
+      return !!(jogo && jogo.poderes && jogo.poderes.usar(nome));
+    },
     // Salvou novas cores na tela C (a UI já guardou no localStorage)
     aoMudarAparenciaBase(cores) {
       if (!aparenciaBase) return; // ainda na tela inicial: as cores são lidas ao entrar
@@ -210,7 +222,7 @@ async function iniciar() {
   function salvar() {
     if (!podeSalvar()) return false;
     const ok = salvarJogo({
-      versao: 4,
+      versao: 5,
       semente: jogo.semente,
       modificacoes: jogo.mundo.exportarModificacoes(),
       jogador: jogo.jogador.serializar(),
@@ -262,19 +274,26 @@ async function iniciar() {
     aparenciaBase = lerAparenciaBase(apelido);
     const personagem = new Personagem(aparenciaBase);
     const itensChao = new ItensNoChao({ scene, mundo, texturas });
+    const particulas = new Particulas({ scene, mundo });
     const jogador = new Jogador({
-      camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento,
+      camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento, particulas,
       // No multiplayer, quem cria o item no chão é o anfitrião: passa pela rede
       soltarItem: (item, qtd, x, y, z, vx, vy, vz) => rede.soltarItem(item, qtd, x, y, z, vx, vy, vz),
     });
     const remotos = new JogadoresRemotos(scene);
 
-    jogo = { semente, mundo, ceu, personagem, jogador, remotos, itensChao };
+    // Poderes dos cristais (precisam do jogador, dos bonecos remotos e da rede)
+    const poderes = new Poderes({
+      jogador, mundo, scene, camera, particulas, som, ui, inventario, rede, remotos, texturas,
+    });
+    jogador.poderes = poderes;
+
+    jogo = { semente, mundo, ceu, personagem, jogador, remotos, itensChao, particulas, poderes };
   }
 
   // Depois de posicionar o jogador: liga a rede, expõe para depuração e começa o loop
   function comecar() {
-    const { mundo, ceu, jogador, remotos, itensChao } = jogo;
+    const { mundo, ceu, jogador, remotos, itensChao, particulas, poderes } = jogo;
     aplicarAparencia(); // boneco, preview e rede com a roupa certa
 
     // ----- Chat e avisos da rede (registrar ANTES de rede.ligar) -----
@@ -287,7 +306,10 @@ async function iniciar() {
     rede.ligar({
       mundo, ceu, jogador, inventario, remotos, ui, equipamento, itensChao,
       aoPegarItem: () => som.golpe('folhas'), // um "plim" curtinho ao pegar um item
+      poderes,
     });
+    // Os poderes ativos em mim vão para os outros jogadores (aura)
+    poderes.aoMudarAtivos((lista) => rede.enviarPoderes(lista));
 
     // O jogador local pega os itens do chão (se couber no inventário).
     // Quem decide se ele ganha mesmo o item é a rede (o anfitrião).
@@ -300,18 +322,36 @@ async function iniciar() {
     // ----- Modo hacker e comandos do chat -----
     const hacker = new ModoHacker({ equipamento, mundo, scene, camera, chat, som, ui });
 
+    /** Casa salva (vai no save do anfitrião ou no meuEstado do cliente) ou o ponto de nascimento */
+    const obterCasa = () => {
+      if (rede.casa) return rede.casa.slice();
+      const n = mundo.pontoDeNascimento();
+      return [n.x, n.y, n.z];
+    };
+
+    // Se salvar morto, o save guarda a casa (não o lugar da morte)
+    jogador.obterPosRenascer = obterCasa;
+
+    // ----- Vida: ao morrer, mostra a tela e volta para casa com a vida cheia -----
+    ui.atualizarVida(jogador.vida, CONFIG.VIDA_MAX);
+    jogador.aoMorrer(() => {
+      ui.mostrarMorte({
+        aoRenascer: () => {
+          const [cx, cy, cz] = obterCasa();
+          mundo.prepararArea({ x: cx, y: cy, z: cz }, 1); // o chão da casa precisa existir
+          jogador.teletransportar(cx, cy, cz);
+          jogador.renascer();
+        },
+      });
+    });
+
     /** Aceita [x, y, z] ou { x, y, z } (os comandos mandam uma lista) */
     const lerPos = (p) => (Array.isArray(p) ? { x: p[0], y: p[1], z: p[2] } : p);
     registrarComandos(chat, {
       jogador, ceu, rede, remotos, inventario, equipamento, hacker, mundo,
       // Muda a hora: a rede aplica (anfitrião/sozinho) ou pede ao anfitrião (cliente)
       mudarHora: (segundos) => rede.pedirHora(segundos),
-      // Casa salva (vai no save do anfitrião ou no meuEstado do cliente) ou o ponto de nascimento
-      obterCasa: () => {
-        if (rede.casa) return rede.casa.slice();
-        const n = mundo.pontoDeNascimento();
-        return [n.x, n.y, n.z];
-      },
+      obterCasa,
       definirCasa: (pos) => {
         const p = lerPos(pos);
         rede.definirCasa([p.x, p.y, p.z]);
@@ -321,7 +361,7 @@ async function iniciar() {
 
     window.jogo = {
       mundo, ceu, jogador, inventario, equipamento, itensChao, ui, som, salvar, rede, remotos,
-      renderer, scene, camera, texturas, chat, hacker,
+      renderer, scene, camera, texturas, chat, hacker, particulas, poderes,
     };
 
     // Música e boas-vindas
@@ -338,6 +378,24 @@ async function iniciar() {
     let quadrosDebug = 0;
     let fps = 0;
     let tempoSalvar = 0;
+    let tempoShader = 0;     // segundos desde o início (pulsar dos minérios que brilham)
+    let tempoBrilho = 0;     // brilhinhos dos cristais
+
+    /** A cada ~0.3 s, alguns minérios que brilham perto de você soltam brilhinhos na cor do cristal */
+    function brilharCristais(dt) {
+      tempoBrilho += dt;
+      if (tempoBrilho < CONFIG.BRILHO_INTERVALO_S) return;
+      tempoBrilho = 0;
+      if (typeof mundo.blocosProximos !== 'function' || typeof particulas.brilhoCristal !== 'function') return;
+      // Pega até 32 cristais perto (do mais perto ao mais longe) e sorteia alguns para brilhar
+      const lista = mundo.blocosProximos(jogador.posicao, CONFIG.BRILHO_RAIO, (id) => BLOCOS[id]?.brilho, 32);
+      if (!lista || lista.length === 0) return;
+      for (let i = 0; i < CONFIG.BRILHO_POR_VEZ; i++) {
+        const b = lista[Math.floor(Math.random() * lista.length)]; // b = [x, y, z, id]
+        const def = BLOCOS[b[3]];
+        if (def) particulas.brilhoCristal(b[0] + 0.5, b[1] + 0.5, b[2] + 0.5, def.corXray);
+      }
+    }
 
     const pad = (n) => String(n).padStart(2, '0');
 
@@ -368,12 +426,17 @@ async function iniciar() {
       const dt = Math.min(relogio.getDelta(), 0.05);
 
       jogador.atualizar(dt);
+      poderes.atualizar(dt);
+      particulas.atualizar(dt);
+      brilharCristais(dt);
       itensChao.atualizar(dt);
       rede.atualizar(dt);
       remotos.atualizar(dt);
       mundo.atualizar(jogador.posicao);
       ceu.atualizar(dt, camera.position);
       mundo.definirLuzDoDia(ceu.luzDoDia);
+      tempoShader += dt;
+      if (typeof mundo.definirTempo === 'function') mundo.definirTempo(tempoShader);
       itensChao.definirLuz(ceu.luzDoDia);
       hacker.atualizar(dt, jogador.posicao);
       const clima = ceu.ehNoite ? 'noite' : 'dia';

@@ -3,19 +3,20 @@
 // ---------------------------------------------------------------------
 // Cuida de tudo que é "terreno":
 //   - GeradorMundo: cria os blocos de cada chunk a partir da semente
-//     (morros, montanhas, biomas, água, areia, cavernas, árvores e os
-//     presentes misteriosos espalhados pelo chão)
+//     (morros, montanhas, biomas, água, areia, cavernas, minérios de
+//     cristal, árvores e os presentes misteriosos espalhados pelo chão)
 //   - Mundo: carrega os chunks em volta do jogador aos poucos, monta as
 //     malhas, descarrega os que ficaram longe, guarda as modificações
-//     do jogador, faz o raycast (qual bloco a mira está olhando) e cria
-//     o shader (material) que desenha os blocos.
+//     do jogador, faz o raycast (qual bloco a mira está olhando), acha
+//     blocos perto do jogador (blocosProximos) e cria o shader (material)
+//     que desenha os blocos (com o brilho pulsante dos cristais).
 //
-// Exporta: Mundo (contrato do CLAUDE.md), GeradorMundo, BIOMA
+// Exporta: Mundo (contrato do CLAUDE.md), GeradorMundo, BIOMA, TABELA_MINERIOS
 // =====================================================================
 
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
-import { B, OPACO, SOLIDO, LIQUIDO } from './blocks.js';
+import { B, BLOCOS, OPACO, SOLIDO, LIQUIDO } from './blocks.js';
 import { criarRuido, hash2D, hash3D, sementeParaNumero } from './noise.js';
 import { Chunk, MontadorMalha, TAM, ALTURA, AREA } from './chunk.js';
 
@@ -58,6 +59,50 @@ const DENSIDADE_ARVORES = [0.06, 0.7, 0]; // chance de árvore por célula: plan
 const CHANCE_PRESENTE = CONFIG.CHANCE_PRESENTE ?? 0.32; // chance de um chunk ter um presente (~1 a cada 3,5)
 const TENTATIVAS_PRESENTE = 6;        // lugares sorteados no chunk até achar um bom para o presente
 
+// --- Minérios (Fase 5; a Fase 9 acrescenta os metais) ---
+// Cada linha é um tipo de minério. Para criar um minério novo, basta pôr
+// uma linha aqui (e o bloco em blocks.js). Os campos:
+//   bloco     id do bloco (B.MINERIO_AZUL, ...)
+//   yMin/yMax faixa de altura em que os veios aparecem (inclusive)
+//   veios     quantos veios por chunk, em média (0.1 = 1 veio a cada 10 chunks;
+//             2.5 = 2 ou 3 veios em todo chunk)
+//   tamanho   [mínimo, máximo] de blocos por veio
+//   fundo     preferência pelo fundo: 1 = igual na faixa toda; 1.5 = bem mais
+//             comum embaixo do que em cima (a altura é sorteada como sorteio^fundo)
+//   dentro    bloco que pode virar minério (os veios só trocam ESTE bloco)
+// Os veios nunca saem do chunk em que nasceram (são pequenos), então cada
+// chunk decide os seus sozinho, sem depender da ordem em que foi gerado.
+// Mudar um número aqui muda os minérios dos mundos novos e das partes
+// ainda não visitadas (o que o jogador já cavou continua igual no save).
+//
+// Fase 9 (exemplo do formato, os números são só ideia):
+//   { bloco: B.MINERIO_COBRE,   yMin: 10, yMax: 60, veios: 3,    tamanho: [3, 8], fundo: 1   },
+//   { bloco: B.MINERIO_DIAMANTE, yMin: 3, yMax: 14, veios: 0.15, tamanho: [1, 3], fundo: 1.3 },
+const TABELA_MINERIOS_BASE = [
+  // Cristais de poder: ~1,5 bloco por chunk somando todas as cores.
+  // Dourado (voar) e roxo (soco forte) são os mais fortes: um pouco mais raros.
+  { bloco: B.MINERIO_AZUL,     yMin: 4, yMax: 28, veios: 0.09,  tamanho: [1, 4], fundo: 1.5 },
+  { bloco: B.MINERIO_VERMELHO, yMin: 4, yMax: 28, veios: 0.09,  tamanho: [1, 4], fundo: 1.5 },
+  { bloco: B.MINERIO_DOURADO,  yMin: 4, yMax: 28, veios: 0.06,  tamanho: [1, 4], fundo: 1.5 },
+  { bloco: B.MINERIO_VERDE,    yMin: 4, yMax: 28, veios: 0.09,  tamanho: [1, 4], fundo: 1.5 },
+  { bloco: B.MINERIO_ROXO,     yMin: 4, yMax: 28, veios: 0.06,  tamanho: [1, 4], fundo: 1.5 },
+  { bloco: B.MINERIO_FOGO,     yMin: 4, yMax: 28, veios: 0.09,  tamanho: [1, 4], fundo: 1.5 },
+  { bloco: B.MINERIO_RAIO,     yMin: 4, yMax: 28, veios: 0.09,  tamanho: [1, 4], fundo: 1.5 },
+  { bloco: B.MINERIO_GELO,     yMin: 4, yMax: 28, veios: 0.09,  tamanho: [1, 4], fundo: 1.5 },
+];
+
+// A tabela de verdade: ignora as linhas cujo bloco ainda não existe em
+// blocks.js (assim o jogo não quebra se um bloco for removido ou renomeado)
+// e preenche o "dentro" com PEDRA quando não foi dito.
+export const TABELA_MINERIOS = TABELA_MINERIOS_BASE
+  .filter((m) => Number.isInteger(m.bloco) && m.bloco > 0)
+  .map((m) => ({ ...m, dentro: m.dentro ?? B.PEDRA }));
+
+// As 6 direções em que um veio pode crescer (+X, -X, +Y, -Y, +Z, -Z)
+const DIR_X = new Int8Array([1, -1, 0, 0, 0, 0]);
+const DIR_Y = new Int8Array([0, 0, 1, -1, 0, 0]);
+const DIR_Z = new Int8Array([0, 0, 0, 0, 1, -1]);
+
 // Os ruídos são lidos numa área um pouco MAIOR que o chunk (MARGEM blocos
 // para cada lado). Isso deixa as árvores atravessarem a borda sem cortes
 // e permite saber se tem água perto (para as cavernas e a areia da praia).
@@ -75,7 +120,8 @@ function suavizar(a, b, v) {
  * Gera os blocos de um chunk. Não usa o three.js (dá para testar no Node).
  * Uso: const g = new GeradorMundo(semente); g.gerar(chunk);
  * O chunk precisa estar zerado (ar). As etapas ficam em funções separadas
- * para ser fácil inserir coisas novas (minérios nas Fases 5 e 9, por exemplo).
+ * para ser fácil inserir coisas novas (os minérios da Fase 9 entram só na
+ * TABELA_MINERIOS, sem mexer nas etapas).
  */
 export class GeradorMundo {
   constructor(semente) {
@@ -93,6 +139,8 @@ export class GeradorMundo {
     this.sementeRocha = s ^ 0x0b5c0fbc;
     this.sementeTerra = s ^ 0x3956c25b;
     this.sementeTesouro = s ^ 0x59f111f1;
+    this.sementeMinerio = s ^ 0x923f82a4;
+    this._estadoSorteio = 0; // estado do sorteador dos minérios (ver _sortear)
 
     // Rascunhos reaproveitados a cada chunk (nada de criar arrays no meio)
     this.altM = new Int16Array(LM * LM);   // altura do chão (com margem)
@@ -160,7 +208,8 @@ export class GeradorMundo {
     this.gerarTerreno(chunk, x0, z0);
     this.gerarAguaEAreia(chunk, x0, z0);
     this.escavarCavernas(chunk, x0, z0);
-    // (Fases 5 e 9: os minérios entram aqui, depois das cavernas)
+    // Depois das cavernas: assim alguns cristais ficam à mostra nas paredes delas
+    this.colocarMinerios(chunk);
     this.plantarArvores(chunk, x0, z0);
     this.colocarTesouros(chunk); // depois das árvores, para não cair dentro de uma
     chunk.calcularAlturas();
@@ -355,7 +404,91 @@ export class GeradorMundo {
   }
 
   /**
-   * Etapa 4: árvores.
+   * Etapa 4: minérios (Fase 5: cristais de poder; Fase 9: metais).
+   * Para cada linha da TABELA_MINERIOS:
+   *  1. sorteia quantos veios este chunk tem (a média é `veios`);
+   *  2. para cada veio, sorteia o lugar (x e z dentro do chunk, e a altura
+   *     "puxada" para o fundo) e o tamanho;
+   *  3. o veio cresce como uma minhoquinha: a partir do último bloco
+   *     colocado, tenta um vizinho sorteado (e, se não der, os outros 5).
+   * Só troca o bloco `dentro` (a pedra): nada de cristal flutuando no ar da
+   * caverna, dentro da água ou no meio da terra.
+   *
+   * Cada linha tem o seu próprio sorteador, que começa pela semente + o id
+   * do bloco + a posição do chunk. Por isso acrescentar uma linha nova na
+   * Fase 9 não muda onde os cristais que já existem nascem.
+   */
+  colocarMinerios(chunk) {
+    const tabela = TABELA_MINERIOS;
+    const d = chunk.dados;
+    const cx = chunk.cx, cz = chunk.cz;
+    for (let t = 0; t < tabela.length; t++) {
+      const m = tabela[t];
+      this._iniciarSorteio(Math.imul(m.bloco + 1, 0x9e3779b1), cx, cz);
+
+      // Quantos veios: a parte inteira de `veios` sempre; a parte quebrada vira
+      // uma chance (veios = 0.09 → 9% dos chunks têm 1 veio desta cor)
+      const inteiros = Math.floor(m.veios);
+      const qtd = inteiros + (this._sortear() < m.veios - inteiros ? 1 : 0);
+      if (qtd === 0) continue;
+
+      const faixa = m.yMax - m.yMin + 1;
+      const tMin = m.tamanho[0];
+      const tVariacao = m.tamanho[1] - m.tamanho[0] + 1;
+      const dentro = m.dentro;
+      const bloco = m.bloco;
+      for (let v = 0; v < qtd; v++) {
+        let x = Math.floor(this._sortear() * TAM);
+        let z = Math.floor(this._sortear() * TAM);
+        // sorteio^fundo fica mais perto de 0 (o fundo da faixa) quando fundo > 1
+        let y = m.yMin + Math.floor(Math.pow(this._sortear(), m.fundo) * faixa);
+        const tamanho = tMin + Math.floor(this._sortear() * tVariacao);
+        if (y >= ALTURA) continue;
+        const i = x + z * TAM + y * AREA;
+        if (d[i] !== dentro) continue; // caiu fora da pedra (caverna, terra...): sem veio
+        d[i] = bloco;
+
+        for (let k = 1; k < tamanho; k++) {
+          const dir0 = Math.floor(this._sortear() * 6);
+          let cresceu = false;
+          for (let j = 0; j < 6 && !cresceu; j++) {
+            const dir = (dir0 + j) % 6;
+            const nx = x + DIR_X[dir];
+            const ny = y + DIR_Y[dir];
+            const nz = z + DIR_Z[dir];
+            if (nx < 0 || nx >= TAM || nz < 0 || nz >= TAM) continue; // não sai do chunk
+            if (ny < m.yMin || ny > m.yMax || ny >= ALTURA) continue;  // nem da faixa
+            const ni = nx + nz * TAM + ny * AREA;
+            if (d[ni] !== dentro) continue;
+            d[ni] = bloco;
+            x = nx; y = ny; z = nz;
+            cresceu = true;
+          }
+          if (!cresceu) break; // ficou preso (em volta só tem ar, outro minério ou a borda)
+        }
+      }
+    }
+  }
+
+  /** Começa o sorteador dos minérios para (sal, chunk). Sempre igual para os mesmos dados. */
+  _iniciarSorteio(sal, cx, cz) {
+    this._estadoSorteio = (hash2D(this.sementeMinerio ^ sal, cx, cz) * 4294967296) | 0;
+  }
+
+  /**
+   * Próximo número "aleatório" em [0, 1) do sorteador (algoritmo mulberry32).
+   * Não é Math.random: a sequência depende só de onde começou (_iniciarSorteio),
+   * então todo computador com a mesma semente sorteia os mesmos números.
+   */
+  _sortear() {
+    let t = (this._estadoSorteio = (this._estadoSorteio + 0x6d2b79f5) | 0);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  /**
+   * Etapa 5: árvores.
    * O mundo é dividido em células de 5x5 blocos; cada célula pode ter no
    * máximo 1 árvore, numa posição sorteada pelo hash (sempre a mesma para
    * a mesma semente). Isso garante o espaçamento mínimo.
@@ -431,7 +564,7 @@ export class GeradorMundo {
   }
 
   /**
-   * Etapa 5: tesouros (Fase 3).
+   * Etapa 6: tesouros (Fase 3).
    * Alguns chunks ganham um "Presente misterioso" em cima da grama ou da
    * areia. Quem decide é o hash da semente com a posição do chunk: todo
    * computador com a mesma semente coloca os presentes nos mesmos lugares
@@ -474,20 +607,57 @@ export class GeradorMundo {
 // =====================================================================
 // Um material só (ShaderMaterial) para todos os chunks. Cada vértice
 // traz: uv (0..1 na face), aCamada (qual textura do DataArrayTexture),
-// aSombra (sombra da face × AO) e aLuzCeu (quanto de céu enxerga).
+// aSombra (sombra da face × AO), aLuzCeu (quanto de céu enxerga) e
+// aBrilho (Fase 5: 0 = normal; maior que 0 = bloco que brilha, e o valor
+// é a "fase" da pulsação dele).
 // Todos esses atributos são bytes "normalizados" (0..255 vira 0..1).
+//
+// Brilho dos cristais (Fase 5): o bloco tem luz própria, então aparece
+// mesmo no escuro (de noite e nas cavernas). Os pixels de CRISTAL (os
+// coloridos ou bem claros da textura) recebem a luz
+//     luz × (1 + 0.35 + 0.25 · seno(tempo · 2.5 + fase))
+// que sobe e desce devagar (uma "respiração" a cada 2,5 s). A pedra em
+// volta deles fica só um pouco iluminada (PULSO_LUZ_PEDRA), senão o bloco
+// inteiro viraria uma lâmpada cinza. Durante o dia, se o sol já ilumina
+// mais que o brilho, vale a luz do sol (é o max() das contas).
+
+// Números do brilho (dá para ajustar no config.js, se quiser)
+const PULSO_BASE = CONFIG.PULSO_BASE ?? 1.35;     // força média do brilho (1 = luz normal)
+const PULSO_ONDA = CONFIG.PULSO_ONDA ?? 0.25;     // quanto ele sobe e desce
+const PULSO_VELOCIDADE = CONFIG.PULSO_VELOCIDADE ?? 2.5; // rapidez da pulsação
+const PULSO_LUZ_PEDRA = CONFIG.PULSO_LUZ_PEDRA ?? 0.3;    // luz da parte de pedra do bloco que brilha
+
+// O uTempo (segundos) dá a volta de tempos em tempos para o número não ficar
+// enorme (a placa de vídeo perde precisão com números grandes). A volta é
+// um número inteiro de pulsações (~1 hora), então ninguém percebe o "pulo".
+const PERIODO_PULSO = (2 * Math.PI) / PULSO_VELOCIDADE;
+const VOLTA_TEMPO = PERIODO_PULSO * Math.max(1, Math.round(3600 / PERIODO_PULSO));
+
+/** Número JS → texto de número com vírgula no GLSL (o GLSL exige o ".0") */
+function glslNum(v) {
+  const t = String(Number(v));
+  return t.includes('.') || t.includes('e') ? t : t + '.0';
+}
 
 const SHADER_VERTICE = /* glsl */ `
   attribute float aCamada;
   attribute float aSombra;
   attribute float aLuzCeu;
+  #ifndef AGUA
+    attribute float aBrilho;
+  #endif
 
   uniform float uLuzDoDia;
   uniform float uLuzMinima;
+  uniform float uTempo;
 
   varying vec2 vUv;
   varying float vCamada;
   varying float vLuz;
+  #ifndef AGUA
+    varying float vBrilho;     // 1 = bloco que brilha, 0 = normal
+    varying float vLuzCristal; // luz dos pixels de cristal (só vale com vBrilho = 1)
+  #endif
 
   #include <fog_pars_vertex>
 
@@ -506,6 +676,23 @@ const SHADER_VERTICE = /* glsl */ `
     float ceu = aLuzCeu * aLuzCeu;
     vLuz = sombra * max(ceu * uLuzDoDia, uLuzMinima);
 
+    #ifndef AGUA
+      vBrilho = 0.0;
+      vLuzCristal = vLuz;
+      if (aBrilho > 0.0) {
+        // Os 4 cantos da face (e as 6 faces do bloco) têm o mesmo aBrilho,
+        // então a pulsação é a mesma no bloco inteiro.
+        float fase = aBrilho * 6.2831853;
+        float pulso = ${glslNum(PULSO_BASE)} + ${glslNum(PULSO_ONDA)} * sin(uTempo * ${glslNum(PULSO_VELOCIDADE)} + fase);
+        // Luz própria: quase não depende do céu nem do AO. Ainda guarda um
+        // pouco da sombra da face (0.55 a 1) para o bloco não ficar "chapado".
+        float propria = 0.55 + 0.45 * aSombra;
+        vLuzCristal = max(vLuz, propria * pulso);
+        vLuz = max(vLuz, propria * ${glslNum(PULSO_LUZ_PEDRA)} * pulso);
+        vBrilho = 1.0;
+      }
+    #endif
+
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mvPosition;
     #include <fog_vertex>
@@ -520,6 +707,10 @@ const SHADER_FRAGMENTO = /* glsl */ `
   varying vec2 vUv;
   varying float vCamada;
   varying float vLuz;
+  #ifndef AGUA
+    varying float vBrilho;
+    varying float vLuzCristal;
+  #endif
 
   #include <fog_pars_fragment>
 
@@ -531,7 +722,19 @@ const SHADER_FRAGMENTO = /* glsl */ `
     #else
       // Folhas: os furos (alfa baixo) são recortados
       if (texel.a < 0.5) discard;
-      gl_FragColor = vec4(texel.rgb * vLuz, 1.0);
+      float luz = vLuz;
+      if (vBrilho > 0.5) {
+        // Este pixel é cristal ou pedra? A pedra é cinza e meio escura; o
+        // cristal é colorido (saturado) ou bem claro (o reflexo branco).
+        // A conta é feita "como o olho vê" (raiz quadrada ≈ volta para sRGB).
+        vec3 olho = sqrt(texel.rgb);
+        float maior = max(olho.r, max(olho.g, olho.b));
+        float menor = min(olho.r, min(olho.g, olho.b));
+        float saturacao = (maior - menor) / max(maior, 0.001);
+        float cristal = max(smoothstep(0.12, 0.3, saturacao), smoothstep(0.72, 0.9, maior));
+        luz = mix(vLuz, vLuzCristal, cristal);
+      }
+      gl_FragColor = vec4(texel.rgb * luz, 1.0);
     #endif
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
@@ -544,6 +747,7 @@ function criarMateriais(texturas) {
   const uTexturas = { value: texturas?.array ?? null };
   const uLuzDoDia = { value: 1 };
   const uLuzMinima = { value: CONFIG.LUZ_MINIMA_BLOCOS ?? 0.04 };
+  const uTempo = { value: 0 };
 
   function uniforms() {
     // Os da névoa vêm do three (ele atualiza sozinho a partir de scene.fog).
@@ -552,6 +756,7 @@ function criarMateriais(texturas) {
     u.uTexturas = uTexturas;
     u.uLuzDoDia = uLuzDoDia;
     u.uLuzMinima = uLuzMinima;
+    u.uTempo = uTempo;
     u.uAlfaAgua = { value: CONFIG.ALFA_AGUA ?? 0.7 };
     return u;
   }
@@ -576,7 +781,7 @@ function criarMateriais(texturas) {
     side: THREE.DoubleSide,  // para ver a superfície por baixo (mergulhando)
   });
 
-  return { solido, agua, uLuzDoDia };
+  return { solido, agua, uLuzDoDia, uTempo };
 }
 
 /** Transforma os arrays do MontadorMalha numa BufferGeometry. */
@@ -587,6 +792,8 @@ function criarGeometria(m) {
   g.setAttribute('aCamada', new THREE.BufferAttribute(m.camadas, 1, true));
   g.setAttribute('aSombra', new THREE.BufferAttribute(m.sombras, 1, true));
   g.setAttribute('aLuzCeu', new THREE.BufferAttribute(m.luzCeu, 1, true));
+  // Só a malha sólida tem aBrilho (o shader da água nem declara esse atributo)
+  if (m.brilhos) g.setAttribute('aBrilho', new THREE.BufferAttribute(m.brilhos, 1, true));
   g.setIndex(new THREE.BufferAttribute(m.indices, 1));
   // Já sabemos o tamanho do chunk: definimos a esfera envolvente na mão
   // (o three usa para não desenhar o que está fora da tela).
@@ -606,6 +813,8 @@ function criarGeometria(m) {
 
 const ORCAMENTO_MS = CONFIG.ORCAMENTO_CHUNKS_MS ?? 8; // tempo máximo por quadro carregando chunks
 const MAX_RESERVA = 48; // chunks descarregados guardados para reaproveitar a memória
+// Maior raio aceito pelo blocosProximos: a área que fica carregada em volta do jogador
+const RAIO_MAX_PROXIMOS = (CONFIG.DISTANCIA_RENDER + 3) * TAM;
 
 /** Está dentro do círculo de raio r (em chunks)? */
 function dentroDoRaio(dx, dz, r) {
@@ -634,6 +843,19 @@ export class Mundo {
     this.materialSolido = mats.solido;
     this.materialAgua = mats.agua;
     this._uLuzDoDia = mats.uLuzDoDia;
+    // Relógio do brilho dos cristais: o atualizar() copia o tempo para o shader.
+    // Se alguém chamar definirTempo(t), o relógio próprio é desligado.
+    this._uTempo = mats.uTempo;
+    this._inicioTempo = performance.now();
+    this._tempoManual = false;
+
+    // Rascunhos do blocosProximos (reaproveitados a cada chamada)
+    this._listaProximos = [];
+    this._poolsProximos = new WeakMap(); // lista de saída → [x, y, z, id] já criados
+    this._filtroProximos = new Uint8Array(256);
+    this._ordemCx = new Int32Array(64);
+    this._ordemCz = new Int32Array(64);
+    this._ordemDist = new Float64Array(64);
 
     // Todos os chunks ficam dentro deste grupo
     this.grupo = new THREE.Group();
@@ -779,8 +1001,14 @@ export class Mundo {
    * Chamar todo quadro. Põe na fila os chunks em volta do jogador (do mais
    * perto para o mais longe), gera/monta alguns por quadro (até
    * CONFIG.CHUNKS_POR_QUADRO malhas e ~8 ms) e descarrega os que ficaram longe.
+   * Também avança o relógio do brilho dos cristais (uTempo do shader), a
+   * não ser que o tempo esteja sendo controlado por definirTempo().
    */
   atualizar(posJogador) {
+    if (!this._tempoManual) {
+      this._uTempo.value = ((performance.now() - this._inicioTempo) / 1000) % VOLTA_TEMPO;
+    }
+
     const pcx = Math.floor(posJogador.x / TAM);
     const pcz = Math.floor(posJogador.z / TAM);
     if (pcx !== this._cxJogador || pcz !== this._czJogador) {
@@ -1000,6 +1228,131 @@ export class Mundo {
   }
 
   /**
+   * Blocos carregados perto de `pos` que passam no filtro (Fase 5: os
+   * brilhinhos dos cristais perto do jogador e o raio-X do modo hacker).
+   *   pos      { x, y, z } (ex.: jogador.posicao)
+   *   raio     distância máxima, em blocos (medida até o centro de cada bloco;
+   *            no máximo (DISTANCIA_RENDER + 3) × 16, a área carregada)
+   *   filtroFn (id) → true/false. Só pode depender do id: ele é perguntado
+   *            UMA vez para cada tipo de bloco, e a resposta vai para uma tabela
+   *            (bem mais rápido que perguntar para cada um dos milhares de blocos).
+   *   max      no máximo quantos blocos devolver (padrão 256)
+   *   saida    (opcional) array que recebe o resultado
+   * Devolve uma lista de [x, y, z, id] (x, y, z inteiros: o canto do bloco),
+   * começando pelos chunks mais perto de `pos`. Se passar de `max`, os mais
+   * longe ficam de fora. Chunks que não estão carregados são pulados.
+   *   Ex.: mundo.blocosProximos(jogador.posicao, 12, (id) => BLOCOS[id].brilho, 64)
+   *
+   * Para não criar lixo a cada chamada, a lista e os [x, y, z, id] são
+   * REAPROVEITADOS: a próxima chamada (com a mesma `saida`) escreve por cima.
+   * Use a lista na hora (ou copie o que precisar guardar). Quem precisa de
+   * duas listas ao mesmo tempo passa um array próprio em `saida`.
+   */
+  blocosProximos(pos, raio, filtroFn, max = 256, saida = this._listaProximos) {
+    let pool = this._poolsProximos.get(saida);
+    if (!pool) {
+      pool = [];
+      this._poolsProximos.set(saida, pool);
+    }
+    saida.length = 0;
+    if (!(raio > 0) || !(max > 0) || typeof filtroFn !== 'function') return saida;
+    // Mais longe que isso não tem chunk carregado mesmo (e um raio enorme
+    // deixaria a ordenação dos chunks lenta)
+    if (raio > RAIO_MAX_PROXIMOS) raio = RAIO_MAX_PROXIMOS;
+
+    // 1) Tabela "este id passa no filtro?" (só os ids que existem em BLOCOS)
+    const filtro = this._filtroProximos;
+    let algum = false;
+    for (let id = 0; id < 256; id++) {
+      const passa = BLOCOS[id] !== undefined && !!filtroFn(id);
+      filtro[id] = passa ? 1 : 0;
+      if (passa) algum = true;
+    }
+    if (!algum) return saida;
+
+    // Caixa em volta da esfera
+    const px = pos.x, py = pos.y, pz = pos.z;
+    const r2 = raio * raio;
+    const x0 = Math.floor(px - raio), x1 = Math.floor(px + raio);
+    const z0 = Math.floor(pz - raio), z1 = Math.floor(pz + raio);
+    const y0 = Math.max(0, Math.floor(py - raio));
+    const y1 = Math.min(ALTURA - 1, Math.floor(py + raio));
+    if (y0 > y1) return saida;
+
+    // 2) Chunks que a caixa encosta, do mais perto para o mais longe
+    //    (ordenação por inserção: são poucos, uns 9 a 16)
+    const cx0 = x0 >> BITS, cx1 = x1 >> BITS;
+    const cz0 = z0 >> BITS, cz1 = z1 >> BITS;
+    const total = (cx1 - cx0 + 1) * (cz1 - cz0 + 1);
+    if (total > this._ordemCx.length) {
+      this._ordemCx = new Int32Array(total);
+      this._ordemCz = new Int32Array(total);
+      this._ordemDist = new Float64Array(total);
+    }
+    const oCx = this._ordemCx, oCz = this._ordemCz, oDist = this._ordemDist;
+    let nc = 0;
+    for (let cz = cz0; cz <= cz1; cz++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const ddx = cx * TAM + TAM / 2 - px;
+        const ddz = cz * TAM + TAM / 2 - pz;
+        const dist = ddx * ddx + ddz * ddz;
+        let k = nc++;
+        while (k > 0 && oDist[k - 1] > dist) {
+          oCx[k] = oCx[k - 1];
+          oCz[k] = oCz[k - 1];
+          oDist[k] = oDist[k - 1];
+          k--;
+        }
+        oCx[k] = cx;
+        oCz[k] = cz;
+        oDist[k] = dist;
+      }
+    }
+
+    // 3) Varre os blocos de cada chunk que ficam dentro da esfera
+    let n = 0;
+    for (let c = 0; c < nc && n < max; c++) {
+      const ch = this._chunkEm(oCx[c], oCz[c]);
+      if (!ch) continue;
+      const bx = oCx[c] * TAM;
+      const bz = oCz[c] * TAM;
+      const lx0 = Math.max(0, x0 - bx), lx1 = Math.min(MASCARA, x1 - bx);
+      const lz0 = Math.max(0, z0 - bz), lz1 = Math.min(MASCARA, z1 - bz);
+      const yTopo = Math.min(y1, ch.yMaximo - 1); // acima disso o chunk só tem ar
+      const dados = ch.dados;
+      for (let y = y0; y <= yTopo && n < max; y++) {
+        const dy = y + 0.5 - py;
+        const dy2 = dy * dy;
+        if (dy2 > r2) continue;
+        for (let lz = lz0; lz <= lz1 && n < max; lz++) {
+          const dz = bz + lz + 0.5 - pz;
+          const dyz = dy2 + dz * dz;
+          if (dyz > r2) continue;
+          const base = lz * TAM + y * AREA;
+          for (let lx = lx0; lx <= lx1; lx++) {
+            const id = dados[base + lx];
+            if (filtro[id] === 0) continue;
+            const dx = bx + lx + 0.5 - px;
+            if (dx * dx + dyz > r2) continue;
+            let item = pool[n];
+            if (item === undefined) {
+              item = [0, 0, 0, 0];
+              pool[n] = item;
+            }
+            item[0] = bx + lx;
+            item[1] = y;
+            item[2] = bz + lz;
+            item[3] = id;
+            saida[n++] = item;
+            if (n >= max) break;
+          }
+        }
+      }
+    }
+    return saida;
+  }
+
+  /**
    * Ponto de nascimento (os pés) em terra firme perto de (0, 0).
    * Procura em espiral, usando a altura do gerador (rápido), e confere a
    * coluna de verdade no chunk (para não nascer em cima de uma árvore).
@@ -1106,6 +1459,17 @@ export class Mundo {
   /** Luz do dia (0 a 1), vinda do Ceu. Escurece os blocos à noite. */
   definirLuzDoDia(v) {
     this._uLuzDoDia.value = v;
+  }
+
+  /**
+   * Relógio do brilho dos cristais (uTempo do shader), em segundos.
+   * NÃO precisa chamar: o atualizar() já avança o tempo sozinho a cada quadro.
+   * Serve para quem quiser controlar na mão (testes, fotos, pausa). Depois da
+   * 1ª chamada, o relógio próprio desliga e vale só o que for passado aqui.
+   */
+  definirTempo(t) {
+    this._tempoManual = true;
+    this._uTempo.value = ((t % VOLTA_TEMPO) + VOLTA_TEMPO) % VOLTA_TEMPO;
   }
 
   /** Números para a tela de debug (F3) */

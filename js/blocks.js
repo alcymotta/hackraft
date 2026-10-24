@@ -18,6 +18,16 @@ export const B = {
   FOLHAS: 7,
   ROCHA_MATRIZ: 8,
   PRESENTE: 9,
+  // Minérios de cristal (Fase 5)
+  MINERIO_AZUL: 10,
+  MINERIO_VERMELHO: 11,
+  MINERIO_DOURADO: 12,
+  MINERIO_VERDE: 13,
+  MINERIO_ROXO: 14,
+  MINERIO_FOGO: 15,
+  MINERIO_RAIO: 16,
+  MINERIO_GELO: 17,
+  GELO: 18,
 };
 
 // BLOCOS[id] devolve a descrição completa do bloco
@@ -48,6 +58,8 @@ const porNome = new Map();
  *  - xray: aparece com contorno brilhante no raio-X do modo hacker (padrão false).
  *    Os minérios de poder da Fase 5 vão usar este campo.
  *  - corXray: cor CSS do contorno do raio-X (null = verde padrão)
+ *  - brilho: o bloco brilha pulsando, visível até no escuro (padrão false).
+ *    A malha passa este valor para o shader (minérios de cristal).
  */
 function registrar(id, def) {
   const bloco = {
@@ -65,6 +77,7 @@ function registrar(id, def) {
     sorteio: def.sorteio ?? null,
     xray: def.xray ?? false,
     corXray: def.corXray ?? null,
+    brilho: def.brilho ?? false,
   };
   BLOCOS[id] = bloco;
   SOLIDO[id] = bloco.solido ? 1 : 0;
@@ -120,6 +133,33 @@ registrar(B.PRESENTE, {
   texturas: { topo: 'presente_topo', lado: 'presente_lado', baixo: 'presente_lado' },
   dureza: 0.3, som: 'madeira', item: null, sorteio: 'presente',
   xray: true, corXray: '#ffd23f',
+});
+
+// Minérios de cristal: [chave em B, sufixo do nome, texto do rótulo, cor]
+const CRISTAIS_BLOCOS = [
+  ['MINERIO_AZUL', 'azul', 'azul', '#3fa9ff'],
+  ['MINERIO_VERMELHO', 'vermelho', 'vermelho', '#ff3f4f'],
+  ['MINERIO_DOURADO', 'dourado', 'dourado', '#ffcf3f'],
+  ['MINERIO_VERDE', 'verde', 'verde', '#3fff7a'],
+  ['MINERIO_ROXO', 'roxo', 'roxo', '#b44fff'],
+  ['MINERIO_FOGO', 'fogo', 'de fogo', '#ff8a2a'],
+  ['MINERIO_RAIO', 'raio', 'de raio', '#eef6ff'],
+  ['MINERIO_GELO', 'gelo', 'de gelo', '#a8f0ff'],
+];
+for (const [chave, sufixo, texto, cor] of CRISTAIS_BLOCOS) {
+  registrar(B[chave], {
+    nome: 'minerio_' + sufixo,
+    rotulo: 'Minério de cristal ' + texto,
+    texturas: igual('minerio_' + sufixo),
+    dureza: 2, som: 'pedra',
+    item: 'cristal_' + sufixo,
+    xray: true, corXray: cor,
+    brilho: true,
+  });
+}
+registrar(B.GELO, {
+  nome: 'gelo', rotulo: 'Gelo', texturas: igual('gelo'),
+  dureza: 0.5, som: 'pedra',
 });
 
 /** Devolve o id do bloco a partir do nome (ou undefined se não existir) */

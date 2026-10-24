@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------
 // Um item é qualquer coisa que pode ficar no inventário. Ele é
 // identificado por um nome em texto (ex.: 'grama').
-// Tipos: 'bloco' | 'roupa' | 'armadura' | 'arma' | 'acessorio'
+// Tipos: 'bloco' | 'roupa' | 'armadura' | 'arma' | 'acessorio' | 'poder'
 // Este arquivo não usa three nem o DOM (dá para testar no Node).
 // =====================================================================
 
@@ -23,6 +23,7 @@ export const ITENS = new Map();
  *  - armadura: parte, material e defesa
  *  - arma: visual e dano
  *  - acessorio: visual
+ *  - poder (tipo 'poder'): poder, duracao (segundos), cor (CSS) e ataque (true = atira)
  */
 export function registrarItem(def) {
   ITENS.set(def.nome, {
@@ -38,6 +39,10 @@ export function registrarItem(def) {
     material: def.material ?? null,
     defesa: def.defesa ?? 0,
     dano: def.dano ?? 0,
+    poder: def.poder ?? null,
+    duracao: def.duracao ?? 0,
+    cor: def.cor ?? null,
+    ataque: def.ataque ?? false,
   });
 }
 
@@ -107,6 +112,34 @@ registrarItem({
   nome: 'capa_azul', rotulo: 'Capa azul', tipo: 'acessorio', pilha: 1,
   descricao: 'Elegante como um príncipe do reino.', visual: 'capa_azul',
 });
+
+// ---------------------------------------------------------------------
+// Cristais de poder (Fase 5): soltos pelos minérios, usados com a tecla Q
+// ---------------------------------------------------------------------
+const PODERES = [
+  // [sufixo, rótulo, poder, cor, ataque, descrição]
+  ['azul', 'Cristal azul', 'velocidade', '#3fa9ff', false, 'Supervelocidade por 30 s.'],
+  ['vermelho', 'Cristal vermelho', 'pulo', '#ff3f4f', false, 'Superpulo por 30 s, sem dano de queda.'],
+  ['dourado', 'Cristal dourado', 'voar', '#ffcf3f', false, 'Você voa por 30 s.'],
+  ['verde', 'Cristal verde', 'regeneracao', '#3fff7a', false, 'Recupera vida aos poucos por 30 s.'],
+  ['roxo', 'Cristal roxo', 'soco', '#b44fff', false, 'Quebra qualquer bloco na hora por 30 s.'],
+  ['fogo', 'Cristal de fogo', 'fogo', '#ff8a2a', true, 'Atira bolas de fogo por 30 s. Queima madeira e folhas.'],
+  ['raio', 'Cristal de raio', 'raio', '#eef6ff', true, 'Solta raios na mira por 30 s.'],
+  ['gelo', 'Cristal de gelo', 'gelo', '#a8f0ff', true, 'Atira gelo por 30 s. Congela a água.'],
+];
+
+/** Nomes de todos os cristais de poder */
+export const CRISTAIS = [];
+
+for (const [sufixo, rotulo, poder, cor, ataque, texto] of PODERES) {
+  const nome = 'cristal_' + sufixo;
+  CRISTAIS.push(nome);
+  registrarItem({
+    nome, rotulo, tipo: 'poder', pilha: 16,
+    descricao: `${texto} Aperte Q para usar.`,
+    poder, duracao: 30, cor, ataque,
+  });
+}
 
 // ---------------------------------------------------------------------
 // Slots de equipamento

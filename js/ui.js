@@ -40,7 +40,25 @@ const CORES_BASE_PADRAO = {
 // Cor do nome do item na dica, conforme o tipo
 const COR_TIPO = { roupa: '#c58bff', armadura: '#6ab4ff', arma: '#ff6b6b', acessorio: '#ffd35a' };
 
-const VELOCIDADE_GIRO_PREVIEW = 0.6;   // radianos por segundo do boneco girando sozinho
+// ----- Vida (corações) -----
+const CORACOES = 10;                 // quantos corações aparecem (cada um vale 2 de vida)
+const VIDA_BAIXA = 4;                // com esta vida ou menos os corações tremem
+const TEMPO_DANO_MS = 400;           // tempo da vinheta vermelha
+const TEMPO_PISCAR_MS = 200;         // tempo dos corações brancos
+// Desenho do coração, 9x9 ('X' = pixel do coração)
+const FORMA_CORACAO = [
+  '..XX.XX..',
+  '.XXXXXXX.',
+  'XXXXXXXXX',
+  'XXXXXXXXX',
+  'XXXXXXXXX',
+  '.XXXXXXX.',
+  '..XXXXX..',
+  '...XXX...',
+  '....X....',
+];
+
+const VELOCIDADE_GIRO_PREVIEW = 0.6;  // radianos por segundo do boneco girando sozinho
 const SENSIBILIDADE_GIRO = 0.012;      // radianos por pixel ao arrastar
 const CHAVE_APARENCIA = 'hackraft-aparencia';
 
@@ -56,6 +74,7 @@ const CONTROLES = [
   ['E', 'inventário e equipamento'],
   ['C', 'aparência'],
   ['G', 'largar item (Shift: tudo)'],
+  ['Q', 'usar cristal de poder'],
   ['T', 'chat'],
   ['/', 'comandos'],
   ['V ou F5', 'trocar câmera'],
@@ -168,6 +187,8 @@ export class InterfaceJogo {
     this.debugLigado = false;
     this.mao = null;                    // pilha "na mão": { item, qtd } ou null
     this.aoNovoMundo = null;            // guardado em mostrarTelaInicial
+    this.morteAberta = false;           // tela "Você desmaiou!"
+    this.aoUsarItem = null;             // callback do Q e do duplo clique (definirCallbacks)
     this.aoSoltarItem = null;           // callbacks (definirCallbacks)
     this.aoMudarAparenciaBase = null;
     this.iconesPorNome = new Map();     // cache: nome do item -> dataURL
@@ -195,6 +216,13 @@ export class InterfaceJogo {
     this.elDebug = $('debug');
     this.elMensagem = $('mensagem');
     this.elSubmerso = $('submerso');
+    this.elVida = $('vida');
+    this.elDano = $('dano');
+    this.elMorte = $('tela-morte');
+    this.temporizadorDano = null;
+    this.temporizadorPiscar = null;
+    this.vidaMostrada = -1;             // última vida desenhada (para só mexer no DOM quando muda)
+    this.vidaMaxMostrada = -1;
 
     this.codigoSala = null;
     this.jogadoresOnline = 0;
@@ -209,6 +237,7 @@ export class InterfaceJogo {
     this._montarEquipamento();
     this._montarPaletas();
     this._montarControles();
+    this._montarCoracoes();
     this._ligarBotoes();
     this._ligarEventos();
 
@@ -221,7 +250,8 @@ export class InterfaceJogo {
   }
 
   // Guarda os callbacks que o main usa
-  definirCallbacks({ aoSoltarItem, aoMudarAparenciaBase } = {}) {
+  definirCallbacks({ aoSoltarItem, aoMudarAparenciaBase, aoUsarItem } = {}) {
+    if (aoUsarItem !== undefined) this.aoUsarItem = aoUsarItem;
     if (aoSoltarItem !== undefined) this.aoSoltarItem = aoSoltarItem;
     if (aoMudarAparenciaBase !== undefined) this.aoMudarAparenciaBase = aoMudarAparenciaBase;
   }
@@ -286,13 +316,121 @@ export class InterfaceJogo {
       const e = this._criarEspaco(i, clicar, fonte(i));
       this.elInvGrade.appendChild(e.el);
       this.espacosInv[i] = e;
+      this._ligarDuploClique(e.el, fonte(i));
     }
     // Hotbar dentro do inventário: espaços 0 a 8
     for (let i = 0; i < n; i++) {
       const e = this._criarEspaco(i, clicar, fonte(i));
       this.elInvHotbar.appendChild(e.el);
       this.espacosInv[i] = e;
+      this._ligarDuploClique(e.el, fonte(i));
     }
+  }
+
+  // Duplo clique num cristal de poder (tela E): usa o cristal
+  _ligarDuploClique(el, fonte) {
+    el.addEventListener('dblclick', () => {
+      if (this.mao || !this.aoUsarItem) return;
+      const nome = fonte();
+      const def = nome ? obterItem(nome) : null;
+      if (def && def.tipo === 'poder') this.aoUsarItem(nome);
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Vida: 10 corações pixelados acima da hotbar
+  // ------------------------------------------------------------------
+  // Desenha um coração num canvas de 9x9: tipo 'cheio', 'meio' ou 'vazio'
+  _desenharCoracao(tipo) {
+    const c = document.createElement('canvas');
+    c.width = 9; c.height = 9;
+    const g = c.getContext('2d');
+    const dentro = (x, y) => y >= 0 && y < 9 && x >= 0 && x < 9 && FORMA_CORACAO[y][x] === 'X';
+    for (let y = 0; y < 9; y++) {
+      for (let x = 0; x < 9; x++) {
+        if (!dentro(x, y)) continue;
+        const borda = !dentro(x - 1, y) || !dentro(x + 1, y) || !dentro(x, y - 1) || !dentro(x, y + 1);
+        let cor;
+        if (borda) cor = '#2a0606';
+        else {
+          const vermelho = tipo === 'cheio' || (tipo === 'meio' && x <= 4);
+          cor = vermelho ? ((x === 2 && y === 2) || (x === 3 && y === 2) ? '#ff9a9a' : '#e02424') : '#3b1c1c';
+        }
+        g.fillStyle = cor;
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+    return c.toDataURL();
+  }
+
+  _montarCoracoes() {
+    this.imagensCoracao = {
+      cheio: this._desenharCoracao('cheio'),
+      meio: this._desenharCoracao('meio'),
+      vazio: this._desenharCoracao('vazio'),
+    };
+    this.coracoes = [];
+    this.elVida.innerHTML = '';
+    for (let i = 0; i < CORACOES; i++) {
+      const img = document.createElement('img');
+      img.className = 'coracao';
+      img.draggable = false;
+      img.src = this.imagensCoracao.cheio;
+      img.dataset.tipo = 'cheio';
+      this.elVida.appendChild(img);
+      this.coracoes.push(img);
+    }
+  }
+
+  /** Atualiza os corações (cada coração vale 2 de vida; ímpar = meio coração) */
+  atualizarVida(vida, max = 20) {
+    vida = Math.max(0, Math.round(vida));
+    if (vida === this.vidaMostrada && max === this.vidaMaxMostrada) return;
+    this.vidaMostrada = vida;
+    this.vidaMaxMostrada = max;
+    for (let i = 0; i < CORACOES; i++) {
+      const tipo = vida >= 2 * i + 2 ? 'cheio' : (vida >= 2 * i + 1 ? 'meio' : 'vazio');
+      const img = this.coracoes[i];
+      if (img.dataset.tipo !== tipo) {
+        img.dataset.tipo = tipo;
+        img.src = this.imagensCoracao[tipo];
+      }
+    }
+    this.elVida.classList.toggle('tremendo', vida > 0 && vida <= VIDA_BAIXA);
+  }
+
+  /** Tomou dano: vinheta vermelha por um instante e corações brancos uma vez */
+  sinalizarDano() {
+    this.elDano.classList.remove('ativo');
+    void this.elDano.offsetWidth;          // reinicia a animação do CSS
+    this.elDano.classList.add('ativo');
+    clearTimeout(this.temporizadorDano);
+    this.temporizadorDano = setTimeout(() => this.elDano.classList.remove('ativo'), TEMPO_DANO_MS + 50);
+    this.elVida.classList.add('piscando');
+    clearTimeout(this.temporizadorPiscar);
+    this.temporizadorPiscar = setTimeout(() => this.elVida.classList.remove('piscando'), TEMPO_PISCAR_MS);
+  }
+
+  /** Tela "Você desmaiou!". Os itens não se perdem. */
+  mostrarMorte({ aoRenascer } = {}) {
+    // A pilha da mão volta ao inventário (sobra vai ao chão), para o inventário fechar de verdade
+    this.devolverMao(true);
+    // Fecha o que estiver aberto, sem prender o mouse de novo
+    if (this.inventarioAberto) this.fecharInventario(false);
+    if (this.aparenciaAberta) this.fecharAparencia('nada');
+    this._esconderPausa();
+    this.elDano.classList.remove('ativo');
+    this.morteAberta = true;
+    this.elMorte.classList.remove('oculto');
+    this.soltarMouse();
+    const botao = $('btn-renascer');
+    botao.onclick = (e) => {
+      e.currentTarget.blur();
+      this.morteAberta = false;
+      this.elMorte.classList.add('oculto');
+      if (aoRenascer) aoRenascer();
+      this.travarMouse();
+    };
   }
 
   // Os 7 espaços de equipamento, em duas colunas em volta do preview
@@ -603,7 +741,7 @@ export class InterfaceJogo {
     el.innerHTML = '';
     const titulo = document.createElement('div');
     titulo.className = 'dica-nome';
-    titulo.style.color = COR_TIPO[def.tipo] || '#ffffff';
+    titulo.style.color = (def.tipo === 'poder' && def.cor) ? def.cor : (COR_TIPO[def.tipo] || '#ffffff');
     titulo.textContent = def.rotulo;
     el.appendChild(titulo);
 
@@ -614,6 +752,7 @@ export class InterfaceJogo {
       el.appendChild(d);
     };
     if (def.descricao) linha(def.descricao, 'dica-desc');
+    if (def.tipo === 'poder') linha('Q para usar · ' + (def.duracao ?? 30) + ' s', 'dica-num');
     const bonus = def.bonus || {};
     const defesa = def.defesa ?? bonus.defesa;
     if (defesa) linha('Defesa +' + defesa, 'dica-num');
@@ -810,12 +949,15 @@ export class InterfaceJogo {
 
   // Devolve a pilha da mão ao inventário (o que sobrar se perde).
   // Usado ao fechar a página, antes de salvar.
-  devolverMao() {
+  // Com soltarSobra = true, o que não couber vai para o chão (aoSoltarItem).
+  devolverMao(soltarSobra = false) {
     if (!this.mao) return;
-    this.inventario.adicionar(this.mao.item, this.mao.qtd);
+    const { item, qtd } = this.mao;
+    const sobra = this.inventario.adicionar(item, qtd);
     this.mao = null;
     this._desenharMao();
     this.inventario.notificar();
+    if (sobra > 0 && soltarSobra && this.aoSoltarItem) this.aoSoltarItem(item, sobra);
   }
 
   _mostrarPausa() {
@@ -852,13 +994,13 @@ export class InterfaceJogo {
       // Alguns navegadores devolvem uma Promise; se recusar, mantemos a pausa
       if (p && typeof p.catch === 'function') {
         p.catch(() => {
-          if (!this.mouseTravado && !this.inventarioAberto && !this.aparenciaAberta && !this.inicialAberta) {
+          if (!this.mouseTravado && !this.inventarioAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta) {
             this._mostrarPausa();
           }
         });
       }
     } catch (e) {
-      if (!this.inventarioAberto && !this.aparenciaAberta && !this.inicialAberta) this._mostrarPausa();
+      if (!this.inventarioAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta) this._mostrarPausa();
     }
   }
 
@@ -871,7 +1013,7 @@ export class InterfaceJogo {
   }
 
   get menuAberto() {
-    if (this.inventarioAberto || this.aparenciaAberta || this.pausaAberta || this.inicialAberta) return true;
+    if (this.inventarioAberto || this.aparenciaAberta || this.pausaAberta || this.inicialAberta || this.morteAberta) return true;
     for (const fn of this.menusExtras) if (fn()) return true;
     return false;
   }
@@ -1123,7 +1265,7 @@ export class InterfaceJogo {
         // Tira o foco de qualquer campo/controle, para as teclas voltarem ao jogo
         if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
         this._esconderPausa();
-      } else if (!this.inventarioAberto && !this.aparenciaAberta && !this.inicialAberta &&
+      } else if (!this.inventarioAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta &&
                  this.elCarregando.classList.contains('oculto')) {
         this._mostrarPausa();
       }
@@ -1148,7 +1290,7 @@ export class InterfaceJogo {
 
       // Durante o carregamento, as teclas do jogo são ignoradas
       const carregando = !this.elCarregando.classList.contains('oculto');
-      const emJogo = !this.inicialAberta && !this.pausaAberta && !this.aparenciaAberta && !carregando;
+      const emJogo = !this.inicialAberta && !this.pausaAberta && !this.aparenciaAberta && !carregando && !this.morteAberta;
 
       // Teclas 1 a 9
       if (/^Digit[1-9]$/.test(e.code) && emJogo) {
@@ -1174,6 +1316,18 @@ export class InterfaceJogo {
           if (e.repeat || !emJogo || this.menuAberto || !this.mouseTravado) return;
           this._largarSelecionado(e.shiftKey);
           break;
+        case 'KeyQ': {
+          // Usa o cristal de poder selecionado na hotbar
+          if (e.repeat || !emJogo || this.menuAberto || !this.mouseTravado) return;
+          const s = this.inventario.itemSelecionado();
+          const def = s ? obterItem(s.item) : null;
+          if (def && def.tipo === 'poder') {
+            if (this.aoUsarItem) this.aoUsarItem(s.item);
+          } else {
+            this.mostrarMensagem('Esse item não tem poder para usar.');
+          }
+          break;
+        }
         case 'F3':
           e.preventDefault();
           this.debugLigado = !this.debugLigado;

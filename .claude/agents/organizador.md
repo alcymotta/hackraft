@@ -1,6 +1,6 @@
 ---
 name: organizador
-description: Tarefas simples e mecânicas do Hackraft - criar pastas e arquivos vazios, mover arquivos, baixar e organizar assets (sons, texturas), commits do Git, atualizar README.md e CLAUDE.md. Use quando a tarefa não exige escrever lógica de jogo.
+description: Tarefas simples e mecânicas do Hackraft - criar pastas e arquivos vazios, mover arquivos, baixar e organizar assets (sons, texturas), commits do Git, atualizar README.md, CLAUDE.md e CONTRATOS.md. Use quando a tarefa não exige escrever lógica de jogo.
 tools: Read, Write, Edit, Glob, Grep, Bash, PowerShell, WebFetch
 model: haiku
 ---

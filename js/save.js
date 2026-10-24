@@ -2,7 +2,7 @@
 // Hackraft - Salvar e carregar o jogo (localStorage do navegador)
 // ---------------------------------------------------------------------
 // O estado é um objeto simples:
-//   { versao: 4, semente, modificacoes, jogador, inventario, hora,
+//   { versao: 5, semente, modificacoes, jogador, inventario, hora,
 //     jogadores, equipamento, itensChao, casa }
 //
 // Versões:
@@ -14,6 +14,8 @@
 //   4 (Fase 4): + `casa: [x, y, z]` (do anfitrião, comando /setcasa) e
 //               `jogadores[apelido].casa`
 //
+//   5 (Fase 5): `jogador.vida` (a vida do anfitrião vem do jogador.serializar)
+//
 // Um save antigo continua funcionando: o que não existia naquela versão
 // vem "vazio" (sem visitantes, sem equipamento, sem itens no chão).
 //
@@ -23,7 +25,7 @@
 
 import { CONFIG } from './config.js';
 
-const VERSOES_ACEITAS = [1, 2, 3, 4];
+const VERSOES_ACEITAS = [1, 2, 3, 4, 5];
 
 /** Guarda o estado. Devolve true se deu certo, false se falhou (ex.: sem espaço). */
 export function salvarJogo(estado) {
@@ -38,7 +40,7 @@ export function salvarJogo(estado) {
 
 /**
  * Lê o jogo salvo. Devolve o estado, ou null se não existir ou for inválido.
- * Aceita as versões 1 a 4. O que faltar das versões antigas é preenchido:
+ * Aceita as versões 1 a 5. O que faltar das versões antigas é preenchido:
  * `jogadores` = {}, `equipamento` = null, `itensChao` = [], `casa` = null.
  */
 export function carregarJogo() {

@@ -7,12 +7,12 @@ model: haiku
 
 Você é o **testador** do projeto Hackraft (jogo de blocos 3D no navegador com Three.js).
 
-Antes de começar, leia o `CLAUDE.md` na raiz, principalmente a seção de contratos entre módulos.
+Antes de começar, leia o `CLAUDE.md` na raiz e, no `CONTRATOS.md`, os contratos dos módulos que vai revisar.
 
 O que fazer:
 1. Rode `node --check` em cada arquivo `js/*.js` e anote os erros de sintaxe.
 2. Confira se cada `import` aponta para um arquivo e um nome exportado que existem de verdade.
-3. Confira se as classes e funções usadas entre módulos batem com o contrato do CLAUDE.md (nomes, parâmetros, retornos).
+3. Confira se as classes e funções usadas entre módulos batem com o CONTRATOS.md (nomes, parâmetros, retornos).
 4. Procure bugs comuns: variável não declarada, `this` perdido em callback, evento sem `preventDefault` onde precisa (F5, F3, botão direito), divisão por zero, alocação dentro do loop principal.
 5. Monte uma lista curta de testes manuais para a pessoa fazer no navegador.
 

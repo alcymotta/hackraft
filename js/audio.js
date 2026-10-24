@@ -647,6 +647,101 @@ class Som {
     this._salvar();
   }
 
+  // ----- Sons da Fase 5 (poderes e vida), todos sintetizados e curtinhos -----
+
+  /** Pode tocar agora? (áudio ligado, sem mudo) */
+  _podeTocar() {
+    if (!this.ctx || this.mudo || this.volume <= 0) return false;
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    return true;
+  }
+
+  /** Tom com forma de onda, que vai de `de` Hz até `ate` Hz */
+  _tomOnda(t0, onda, de, ate, dur, forca) {
+    const ctx = this.ctx;
+    const osc = ctx.createOscillator();
+    osc.type = onda;
+    osc.frequency.setValueAtTime(de, t0);
+    osc.frequency.exponentialRampToValueAtTime(ate, t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(forca, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g).connect(this.mestre);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+
+  /** Ruído filtrado cuja frequência vai de `de` até `ate` */
+  _ruidoVarrido(t0, tipoFiltro, de, ate, dur, forca, q = 1) {
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this.ruido;
+    src.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = tipoFiltro;
+    f.Q.value = q;
+    f.frequency.setValueAtTime(de, t0);
+    f.frequency.exponentialRampToValueAtTime(ate, t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(forca, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f).connect(g).connect(this.mestre);
+    src.start(t0, Math.random() * 0.5);
+    src.stop(t0 + dur + 0.02);
+  }
+
+  /** "Brilho" ascendente ao ativar um cristal (o `id` do poder muda um pouco o tom) */
+  poder(id) {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      let base = 520;
+      if (typeof id === 'string') {
+        let h = 0;
+        for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 7;
+        base *= Math.pow(2, h / 12);
+      }
+      // quatro notinhas subindo (arpejo) + um chiado agudo
+      [1, 1.25, 1.5, 2].forEach((m, k) => {
+        this._tomOnda(t0 + k * 0.06, 'triangle', base * m, base * m * 1.02, 0.25, 0.12);
+      });
+      this._ruidoVarrido(t0, 'highpass', 3000, 9000, 0.35, 0.04);
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Som do tiro: 'fogo' (whoosh grave), 'raio' (estalo elétrico), 'gelo' (cristal agudo) */
+  tiro(tipo) {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      if (tipo === 'raio') {
+        this._ruidoVarrido(t0, 'highpass', 6000, 1500, 0.18, 0.2);
+        this._tomOnda(t0, 'sawtooth', 1800, 90, 0.2, 0.12);
+        this._tomOnda(t0 + 0.05, 'square', 900, 120, 0.12, 0.05);
+      } else if (tipo === 'gelo') {
+        this._tomOnda(t0, 'sine', 2400, 3600, 0.25, 0.1);
+        this._tomOnda(t0 + 0.04, 'sine', 3200, 4800, 0.2, 0.06);
+        this._ruidoVarrido(t0, 'highpass', 5000, 8000, 0.15, 0.05);
+      } else {
+        // fogo (e qualquer outro): whoosh grave que sobe e some
+        this._ruidoVarrido(t0, 'lowpass', 300, 1400, 0.4, 0.25, 0.8);
+        this._tomOnda(t0, 'sine', 140, 70, 0.3, 0.14);
+      }
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** "Uff" curto e grave de quando o jogador leva dano */
+  dano() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      this._tomOnda(t0, 'sawtooth', 190, 90, 0.18, 0.12);
+      this._ruidoVarrido(t0, 'lowpass', 900, 250, 0.15, 0.18);
+    } catch (e) { /* som é enfeite */ }
+  }
+
   alternarMudo() {
     this.mudo = !this.mudo;
     this._aplicarGanho();

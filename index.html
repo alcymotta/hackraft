@@ -28,6 +28,9 @@
   <!-- Tom azul quando a câmera está debaixo d'água -->
   <div id="submerso" class="oculto"></div>
 
+  <!-- Vinheta vermelha ao tomar dano -->
+  <div id="dano"></div>
+
   <!-- Mira no centro -->
   <div id="mira"></div>
 
@@ -43,6 +46,7 @@
   <!-- Hotbar -->
   <div id="hud-inferior">
     <div id="nome-item"></div>
+    <div id="vida"></div>
     <div id="hotbar" class="grade-espacos"></div>
   </div>
 
@@ -150,6 +154,17 @@
       <div class="painel caixa-controles">
         <h3>Controles</h3>
         <ul class="lista-controles"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tela de morte -->
+  <div id="tela-morte" class="fundo-tela oculto">
+    <div class="conteudo-central">
+      <h1 class="titulo-morte">Você desmaiou!</h1>
+      <p class="frase-morte">Seus itens estão a salvo.</p>
+      <div class="botoes">
+        <button id="btn-renascer" class="botao">Voltar para casa</button>
       </div>
     </div>
   </div>

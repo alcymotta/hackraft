@@ -96,6 +96,18 @@ export const CONFIG = {
   // ----- Chat (Fase 4) -----
   CHAT_MAX_CARACTERES: 200,      // tamanho máximo de uma mensagem de chat (o resto é cortado)
   CHAT_INTERVALO_MIN_MS: 150,    // o anfitrião ignora mensagens de um mesmo cliente mais rápidas que isso (anti-spam)
+
+  // ----- Vida e poderes (Fase 5) -----
+  VIDA_MAX: 20,                  // 20 = 10 corações
+  QUEDA_SEGURA: 3,               // blocos que dá para cair sem se machucar
+  EMPURRAO_DANO: 5,              // empurrãozinho horizontal ao levar dano com direção
+  EMPURRAO_DANO_CIMA: 4,         // e para cima
+  EFEITOS_POR_SEGUNDO_MAX: 10,   // limite de mensagens `efeito` por jogador (anti-spam)
+  MAX_PODERES_REDE: 8,           // máximo de poderes ativos aceitos numa mensagem `poderes`
+  REGEN_INTERVALO_S: 1.5,        // cristal verde: +1 de vida a cada tanto tempo
+  BRILHO_INTERVALO_S: 0.3,       // de quanto em quanto tempo saem brilhinhos dos cristais
+  BRILHO_RAIO: 14,               // distância máxima (blocos) para os brilhinhos
+  BRILHO_POR_VEZ: 3,             // quantos blocos brilham a cada vez
 };
 
 // Duração total de um dia completo (dia + noite), em segundos
