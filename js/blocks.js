@@ -17,6 +17,7 @@ export const B = {
   TRONCO: 6,
   FOLHAS: 7,
   ROCHA_MATRIZ: 8,
+  PRESENTE: 9,
 };
 
 // BLOCOS[id] devolve a descrição completa do bloco
@@ -42,6 +43,8 @@ const porNome = new Map();
  *  - dureza: segundos segurando o botão para quebrar (Infinity = inquebrável)
  *  - som: tipo de som de passo/quebra ('grama', 'terra', 'pedra', 'areia', 'madeira', 'folhas', 'agua')
  *  - item: nome do item que cai ao quebrar (null = não cai nada)
+ *  - sorteio: nome de uma tabela de sorteio (ex.: 'presente'). Ao quebrar, o jogador
+ *    ganha 1 item aleatório dessa tabela (null = sem sorteio)
  */
 function registrar(id, def) {
   const bloco = {
@@ -56,6 +59,7 @@ function registrar(id, def) {
     dureza: def.dureza ?? 1,
     som: def.som ?? 'pedra',
     item: def.item === undefined ? def.nome : def.item,
+    sorteio: def.sorteio ?? null,
   };
   BLOCOS[id] = bloco;
   SOLIDO[id] = bloco.solido ? 1 : 0;
@@ -105,6 +109,11 @@ registrar(B.FOLHAS, {
 registrar(B.ROCHA_MATRIZ, {
   nome: 'rocha_matriz', rotulo: 'Rocha-matriz', texturas: igual('rocha_matriz'),
   dureza: Infinity, som: 'pedra', item: null,
+});
+registrar(B.PRESENTE, {
+  nome: 'presente', rotulo: 'Presente misterioso',
+  texturas: { topo: 'presente_topo', lado: 'presente_lado', baixo: 'presente_lado' },
+  dureza: 0.3, som: 'madeira', item: null, sorteio: 'presente',
 });
 
 /** Devolve o id do bloco a partir do nome (ou undefined se não existir) */

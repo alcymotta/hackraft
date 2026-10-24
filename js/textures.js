@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { BLOCOS, NOMES_TEXTURAS, texturaDaFace } from './blocks.js';
+import { obterItem } from './items.js';
 
 const T = 16; // tamanho de cada textura, em pixels
 
@@ -260,6 +261,66 @@ export const RECEITAS = {
     }
     for (let i = 0; i < 3; i++) rachadura(ctx, inteiro(T), inteiro(T), 5, [4, 4, 6]);
   },
+
+  // Topo do presente: caixa dourada com o laço vermelho em cruz e um nó no centro
+  presente_topo(ctx) {
+    const ouro = [236, 190, 52];
+    const fita = [206, 38, 46];
+    ruidoBase(ctx, ouro, 8);
+    // borda mais escura (a tampa da caixa)
+    for (let i = 0; i < T; i++) {
+      for (const k of [0, T - 1]) {
+        pixel(ctx, i, k, tom(ouro, -34));
+        pixel(ctx, k, i, tom(ouro, -34));
+      }
+    }
+    // brilhinhos
+    for (let i = 0; i < 5; i++) pixel(ctx, 2 + inteiro(T - 4), 2 + inteiro(T - 4), tom(ouro, 30));
+    // fitas em cruz (2 pixels de largura)
+    for (let i = 0; i < T; i++) {
+      for (let k = 7; k <= 8; k++) {
+        pixel(ctx, k, i, tom(fita, k === 7 ? 14 : -14));
+        pixel(ctx, i, k, tom(fita, k === 7 ? 14 : -14));
+      }
+    }
+    // nó no centro (4x4) com brilho e sombra
+    mancha(ctx, 6, 6, 4, 4, tom(fita, 22));
+    mancha(ctx, 7, 7, 2, 2, tom(fita, -30));
+    pixel(ctx, 6, 6, tom(fita, 70));
+    pixel(ctx, 9, 9, tom(fita, -50));
+    // pontinhas do laço saindo do nó
+    pixel(ctx, 5, 5, tom(fita, 8)); pixel(ctx, 10, 5, tom(fita, -8));
+    pixel(ctx, 5, 10, tom(fita, -8)); pixel(ctx, 10, 10, tom(fita, -20));
+  },
+
+  // Lado do presente: caixa dourada com a fita vertical vermelha
+  presente_lado(ctx) {
+    const ouro = [226, 180, 46];
+    const fita = [206, 38, 46];
+    ruidoBase(ctx, ouro, 8);
+    // tampa (faixa mais escura no alto) e base
+    for (let x = 0; x < T; x++) {
+      pixel(ctx, x, 0, tom(ouro, 22));
+      pixel(ctx, x, 1, tom(ouro, 8));
+      pixel(ctx, x, 3, tom(ouro, -38));
+      pixel(ctx, x, T - 1, tom(ouro, -34));
+    }
+    // cantos da caixa
+    for (let y = 0; y < T; y++) {
+      pixel(ctx, 0, y, tom(ouro, -26));
+      pixel(ctx, T - 1, y, tom(ouro, -26));
+    }
+    for (let i = 0; i < 4; i++) pixel(ctx, 2 + inteiro(T - 4), 4 + inteiro(T - 6), tom(ouro, 26));
+    // fita vertical
+    for (let y = 0; y < T; y++) {
+      pixel(ctx, 7, y, tom(fita, 14));
+      pixel(ctx, 8, y, tom(fita, -14));
+    }
+    // a fita fica mais clara sobre a tampa
+    mancha(ctx, 6, 0, 4, 3, tom(fita, 24));
+    pixel(ctx, 7, 1, tom(fita, 60));
+    pixel(ctx, 8, 2, tom(fita, -40));
+  },
 };
 
 // ---------------------------------------------------------------------
@@ -461,14 +522,319 @@ export async function criarTexturas() {
     return url;
   }
 
+  // Ícone de QUALQUER item (48x48, em cache)
+  const cacheItens = new Map();
+  function iconeItem(nome) {
+    if (cacheItens.has(nome)) return cacheItens.get(nome);
+    let url;
+    const item = obterItem(nome);
+    if (item && item.tipo === 'bloco') url = iconeBloco(item.bloco);
+    else url = desenharIconeItem(item);
+    cacheItens.set(nome, url);
+    return url;
+  }
+
   return {
     array,
     indice,
     atlasCanvas,
     canvasDaTextura,
     iconeBloco,
+    iconeItem,
     rachaduras: criarRachaduras(),
   };
+}
+
+// ---------------------------------------------------------------------
+// Ícones de itens (roupa, armadura, espada, capa) desenhados pixel a pixel
+// ---------------------------------------------------------------------
+// Cada ícone é uma "grade" 16x16 de cores. Depois de desenhar a forma,
+// colocamos um contorno escuro em volta e ampliamos para 48x48.
+
+/** Grade vazia 16x16 (cada posição é null ou [r, g, b]) */
+function novaGrade() {
+  return new Array(T * T).fill(null);
+}
+
+function ponto(g, x, y, c) {
+  if (x < 0 || y < 0 || x >= T || y >= T) return;
+  g[y * T + x] = c;
+}
+
+function retangulo(g, x0, y0, x1, y1, c) {
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) ponto(g, x, y, c);
+}
+
+/** Preenche com `cor` todos os pixels onde mascara(x, y) é verdadeira, com um degradê suave de luz */
+function preencher(g, mascara, cor) {
+  for (let y = 0; y < T; y++) {
+    for (let x = 0; x < T; x++) {
+      if (!mascara(x, y)) continue;
+      let d = ((7.5 - x) + (7.5 - y) * 0.6) * 1.5;
+      d = d < -20 ? -20 : d > 20 ? 20 : d;
+      ponto(g, x, y, tom(cor, d));
+    }
+  }
+}
+
+/** Contorno: todo pixel vazio ao lado de um pixel pintado vira uma versão bem escura dele */
+function contornar(g) {
+  const original = g.slice();
+  const viz = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (let y = 0; y < T; y++) {
+    for (let x = 0; x < T; x++) {
+      if (original[y * T + x]) continue;
+      for (const [dx, dy] of viz) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= T || ny >= T) continue;
+        const c = original[ny * T + nx];
+        if (c) { g[y * T + x] = tom(c, -105); break; }
+      }
+    }
+  }
+}
+
+/** Converte a grade em dataURL 48x48, sem suavizar */
+function grade48(g) {
+  const pequeno = novoCanvas();
+  const pctx = pequeno.getContext('2d');
+  for (let y = 0; y < T; y++) {
+    for (let x = 0; x < T; x++) {
+      const c = g[y * T + x];
+      if (c) { pctx.fillStyle = rgb(c); pctx.fillRect(x, y, 1, 1); }
+    }
+  }
+  const grande = novoCanvas(48);
+  const ctx = grande.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(pequeno, 0, 0, 48, 48);
+  return grande.toDataURL('image/png');
+}
+
+// --- Camiseta (roupas) ---
+function mascaraCamiseta(x, y) {
+  if (y === 3) return (x >= 1 && x <= 5) || (x >= 10 && x <= 14);
+  if (y >= 4 && y <= 7) return x >= 1 && x <= 14;
+  if (y >= 8 && y <= 13) return x >= 4 && x <= 11;
+  return false;
+}
+
+// Cores e enfeites de cada visual de roupa
+const ROUPA_ICONE = {
+  ninja(g) {
+    const preto = [38, 38, 48];
+    const vermelho = [214, 40, 44];
+    preencher(g, mascaraCamiseta, preto);
+    retangulo(g, 6, 4, 9, 4, tom(preto, 30));       // gola
+    retangulo(g, 4, 11, 11, 12, vermelho);           // faixa na cintura
+    ponto(g, 12, 12, vermelho); ponto(g, 13, 13, tom(vermelho, -20)); // ponta da faixa
+    ponto(g, 11, 13, tom(vermelho, -30));
+    retangulo(g, 1, 7, 3, 7, tom(preto, 24));        // punho
+    retangulo(g, 12, 7, 14, 7, tom(preto, 24));
+  },
+  cavaleiro(g) {
+    const azul = [48, 88, 190];
+    const ouro = [240, 200, 60];
+    preencher(g, mascaraCamiseta, azul);
+    retangulo(g, 6, 4, 9, 4, ouro);                  // gola dourada
+    retangulo(g, 4, 12, 11, 12, ouro);               // cinto
+    retangulo(g, 4, 13, 11, 13, tom(azul, -22));
+    retangulo(g, 7, 6, 8, 10, ouro);                 // cruz no peito
+    retangulo(g, 6, 7, 9, 7, ouro);
+    retangulo(g, 1, 7, 3, 7, ouro); retangulo(g, 12, 7, 14, 7, ouro); // punhos
+  },
+  mago(g) {
+    const roxo = [112, 62, 176];
+    const amarelo = [255, 226, 80];
+    preencher(g, mascaraCamiseta, roxo);
+    retangulo(g, 6, 4, 9, 4, tom(roxo, 40));
+    retangulo(g, 4, 13, 11, 13, amarelo);            // barra dourada
+    // estrela no peito (sinal de mais com brilho)
+    retangulo(g, 7, 6, 8, 10, amarelo);
+    retangulo(g, 6, 8, 9, 8, amarelo);
+    ponto(g, 7, 8, [255, 255, 215]);
+    ponto(g, 5, 6, amarelo); ponto(g, 10, 10, amarelo);
+    retangulo(g, 1, 7, 3, 7, tom(roxo, 36)); retangulo(g, 12, 7, 14, 7, tom(roxo, 36));
+  },
+  astronauta(g) {
+    const branco = [232, 234, 240];
+    const laranja = [250, 130, 30];
+    preencher(g, mascaraCamiseta, branco);
+    retangulo(g, 6, 4, 9, 4, laranja);               // gola
+    retangulo(g, 1, 6, 3, 6, laranja); retangulo(g, 12, 6, 14, 6, laranja); // faixas nas mangas
+    retangulo(g, 4, 12, 11, 12, laranja);            // cinto
+    retangulo(g, 6, 7, 9, 9, tom(branco, -40));      // painel de controle
+    ponto(g, 6, 7, [80, 200, 255]); ponto(g, 8, 8, laranja); ponto(g, 9, 9, [120, 235, 120]);
+  },
+  pirata(g) {
+    const vermelho = [196, 40, 48];
+    const branco = [240, 236, 226];
+    preencher(g, mascaraCamiseta, branco);
+    // listras horizontais, uma linha sim e outra não
+    for (let y = 3; y <= 13; y++) {
+      if ((y & 1) === 0) continue;
+      for (let x = 0; x < T; x++) {
+        if (mascaraCamiseta(x, y)) ponto(g, x, y, tom(vermelho, ((7.5 - x) + (7.5 - y) * 0.6) * 1.5 > 0 ? 8 : -8));
+      }
+    }
+    retangulo(g, 6, 4, 9, 4, [60, 40, 30]);          // gola escura
+  },
+  hacker(g) {
+    const preto = [18, 22, 20];
+    const verde = [40, 255, 110];
+    preencher(g, mascaraCamiseta, preto);
+    retangulo(g, 6, 4, 9, 4, verde);                 // gola neon
+    // "código" em pontinhos verdes
+    const codigo = [[5, 6], [7, 6], [8, 6], [10, 6], [6, 8], [9, 8], [10, 8], [5, 10], [7, 10], [8, 10], [6, 12], [9, 12]];
+    for (const [x, y] of codigo) ponto(g, x, y, tom(verde, -30));
+    ponto(g, 2, 5, verde); ponto(g, 13, 6, verde);
+    retangulo(g, 1, 7, 3, 7, tom(verde, -60)); retangulo(g, 12, 7, 14, 7, tom(verde, -60));
+  },
+};
+
+// --- Armaduras ---
+const COR_MATERIAL = {
+  couro: [150, 98, 58],
+  ferro: [206, 210, 218],
+};
+
+function pecaArmadura(g, parte, material) {
+  const cor = COR_MATERIAL[material] ?? [160, 160, 172];
+  const realce = tom(cor, 38);
+  const sombra = tom(cor, -36);
+  if (parte === 'capacete') {
+    preencher(g, (x, y) => (y === 3 ? x >= 5 && x <= 10 : y >= 4 && y <= 9 ? x >= 4 && x <= 11 : y >= 10 && y <= 12 ? (x >= 4 && x <= 5) || (x >= 10 && x <= 11) : false), cor);
+    retangulo(g, 6, 7, 9, 8, [26, 24, 30]);          // abertura do rosto
+    retangulo(g, 5, 4, 7, 4, realce);                // brilho no alto
+    retangulo(g, 4, 9, 11, 9, sombra);               // aba
+  } else if (parte === 'peitoral') {
+    preencher(g, (x, y) => (y === 3 || y === 4 ? ((x >= 2 && x <= 5) || (x >= 10 && x <= 13)) : y === 5 ? x >= 2 && x <= 13 : y >= 6 && y <= 12 ? x >= 4 && x <= 11 : y === 13 ? x >= 5 && x <= 10 : false), cor);
+    retangulo(g, 4, 5, 4, 12, realce);
+    retangulo(g, 7, 6, 8, 12, tom(cor, -12));        // faixa central do peito
+    retangulo(g, 4, 12, 11, 12, sombra);
+  } else if (parte === 'calca') {
+    preencher(g, (x, y) => (y >= 2 && y <= 5 ? x >= 3 && x <= 12 : y >= 6 && y <= 13 ? (x >= 3 && x <= 6) || (x >= 9 && x <= 12) : false), cor);
+    retangulo(g, 3, 2, 12, 2, sombra);               // cós
+    retangulo(g, 7, 3, 8, 3, realce);                // fivela
+    retangulo(g, 3, 13, 6, 13, sombra); retangulo(g, 9, 13, 12, 13, sombra); // barras
+  } else if (parte === 'botas') {
+    const bota = (x, y) => (y >= 3 && y <= 9 ? (x >= 2 && x <= 5) || (x >= 10 && x <= 13)
+      : y >= 10 && y <= 12 ? (x >= 1 && x <= 6) || (x >= 9 && x <= 14) : false);
+    preencher(g, bota, cor);
+    retangulo(g, 1, 12, 6, 12, [52, 38, 30]); retangulo(g, 9, 12, 14, 12, [52, 38, 30]); // solas
+    retangulo(g, 2, 3, 5, 3, sombra); retangulo(g, 10, 3, 13, 3, sombra);               // cano
+    ponto(g, 3, 6, realce); ponto(g, 11, 6, realce);
+  }
+  // Detalhes do material
+  if (material === 'couro') {
+    // costuras (pontinhos claros)
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const c = g[y * T + x];
+        if (c && (x + y) % 5 === 0 && ((x * 3 + y) % 2 === 0)) g[y * T + x] = tom(c, 28);
+      }
+    }
+  } else if (material === 'ferro') {
+    // rebites cinza-escuros
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const c = g[y * T + x];
+        if (c && (x * 5 + y * 3) % 11 === 0) g[y * T + x] = tom(c, -45);
+      }
+    }
+  }
+}
+
+// --- Espada de madeira (diagonal, cabo embaixo à esquerda) ---
+function espadaMadeira(g) {
+  const lamina = [196, 154, 92];
+  const cabo = [96, 62, 34];
+  const guarda = [128, 88, 48];
+  for (let i = 0; i < 9; i++) {
+    const x = 6 + i;
+    const y = 9 - i;
+    ponto(g, x, y, tom(lamina, 20));                 // lado de cima (mais claro)
+    ponto(g, x - 1, y, tom(lamina, -8));
+    ponto(g, x, y + 1, tom(lamina, -30));            // lado de baixo (sombra)
+  }
+  ponto(g, 14, 1, tom(lamina, 40));                  // ponta
+  // guarda (barra atravessada)
+  for (let i = -2; i <= 2; i++) ponto(g, 5 + i, 10 + i, guarda);
+  ponto(g, 4, 9, tom(guarda, 20)); ponto(g, 6, 11, tom(guarda, -20));
+  // cabo
+  ponto(g, 4, 11, cabo); ponto(g, 3, 12, tom(cabo, 10)); ponto(g, 3, 13, cabo);
+  ponto(g, 2, 13, tom(cabo, -20)); ponto(g, 2, 14, tom(cabo, -30));
+}
+
+// --- Capa ---
+const COR_CAPA = {
+  capa_vermelha: [196, 36, 44],
+  capa_azul: [46, 84, 200],
+};
+
+function capa(g, cor) {
+  // Ombros estreitos em cima, abrindo para baixo (trapézio)
+  preencher(g, (x, y) => {
+    if (y < 2 || y > 13) return false;
+    const meia = 3 + Math.floor((y - 2) / 3);
+    return x >= 8 - meia && x <= 7 + meia;
+  }, cor);
+  // dobras (colunas mais escuras / claras)
+  for (let y = 4; y <= 13; y++) {
+    ponto(g, 5, y, tom(cor, -26));
+    ponto(g, 8, y, tom(cor, 18));
+    ponto(g, 11, y, tom(cor, -26));
+  }
+  // barra de baixo irregular
+  retangulo(g, 2, 13, 13, 13, tom(cor, -40));
+  // gola e fecho dourado
+  retangulo(g, 5, 2, 10, 2, tom(cor, -50));
+  ponto(g, 7, 3, [244, 206, 70]); ponto(g, 8, 3, [244, 206, 70]);
+}
+
+// --- Interrogação (item desconhecido) ---
+function interrogacao(g) {
+  retangulo(g, 1, 1, 14, 14, [120, 120, 126]);
+  for (let i = 1; i <= 14; i++) {              // moldura
+    ponto(g, i, 1, [168, 168, 174]); ponto(g, 1, i, [168, 168, 174]);
+    ponto(g, i, 14, [82, 82, 88]); ponto(g, 14, i, [82, 82, 88]);
+  }
+  const forma = [
+    '.XXX.',
+    'X...X',
+    '....X',
+    '...X.',
+    '..X..',
+    '.....',
+    '..X..',
+  ];
+  forma.forEach((linha, j) => {
+    for (let i = 0; i < linha.length; i++) {
+      if (linha[i] === 'X') ponto(g, 5 + i, 4 + j, [250, 250, 250]);
+    }
+  });
+}
+
+/** Desenha o ícone de um item que não é bloco (item pode ser undefined) */
+function desenharIconeItem(item) {
+  const g = novaGrade();
+  if (item && item.tipo === 'roupa' && ROUPA_ICONE[item.visual]) {
+    ROUPA_ICONE[item.visual](g);
+    contornar(g);
+  } else if (item && item.tipo === 'armadura') {
+    pecaArmadura(g, item.parte, item.material);
+    contornar(g);
+  } else if (item && item.tipo === 'arma' && item.visual === 'espada_madeira') {
+    espadaMadeira(g);
+    contornar(g);
+  } else if (item && item.tipo === 'acessorio' && COR_CAPA[item.visual]) {
+    capa(g, COR_CAPA[item.visual]);
+    contornar(g);
+  } else {
+    interrogacao(g);
+  }
+  return grade48(g);
 }
 
 // ---------------------------------------------------------------------

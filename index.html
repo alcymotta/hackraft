@@ -46,15 +46,45 @@
     <div id="hotbar" class="grade-espacos"></div>
   </div>
 
-  <!-- Inventário (tecla E) -->
+  <!-- Inventário + equipamento (tecla E) -->
   <div id="inventario" class="fundo-tela oculto">
     <div class="painel painel-inventario">
-      <h2 class="titulo-painel">Inventário</h2>
-      <div id="inv-grade" class="grade-espacos"></div>
-      <div class="separador"></div>
-      <div id="inv-hotbar" class="grade-espacos"></div>
+      <div class="inv-colunas">
+        <section class="inv-equip">
+          <h2 class="titulo-painel">Equipamento</h2>
+          <div class="equip-corpo">
+            <div id="eq-esq" class="equip-coluna"></div>
+            <canvas id="preview-inv" class="preview-boneco" width="170" height="300"></canvas>
+            <div id="eq-dir" class="equip-coluna"></div>
+          </div>
+          <label class="caixa-marcar"><input type="checkbox" id="chk-armadura"> Esconder armadura</label>
+          <label class="caixa-marcar"><input type="checkbox" id="chk-capacete"> Esconder capacete</label>
+        </section>
+        <section class="inv-itens">
+          <h2 class="titulo-painel">Inventário</h2>
+          <div id="inv-grade" class="grade-espacos"></div>
+          <div class="separador"></div>
+          <div id="inv-hotbar" class="grade-espacos"></div>
+        </section>
+      </div>
     </div>
   </div>
+
+  <!-- Aparência (tecla C ou botão "Personagem" da tela inicial) -->
+  <div id="tela-aparencia" class="fundo-tela oculto">
+    <div class="painel painel-aparencia">
+      <h2 class="titulo-painel">Aparência</h2>
+      <div class="aparencia-corpo">
+        <canvas id="preview-aparencia" class="preview-boneco" width="240" height="340"></canvas>
+        <div id="paletas"></div>
+      </div>
+      <div class="aparencia-botoes">
+        <button id="btn-aparencia-salvar" class="botao botao-pequeno">Salvar</button>
+        <button id="btn-aparencia-cancelar" class="botao botao-pequeno">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Nome do item sob o mouse -->
   <div id="dica" class="oculto"></div>
   <!-- Pilha "na mão", que segue o mouse -->
@@ -76,7 +106,10 @@
           <input id="campo-codigo" class="campo campo-codigo" type="text" maxlength="5" autocomplete="off" spellcheck="false" placeholder="ABCDE">
           <button id="btn-entrar" class="botao botao-pequeno">Entrar</button>
         </div>
-        <button id="btn-novo-inicial" class="botao botao-pequeno">Novo mundo</button>
+        <div class="linha-codigo">
+          <button id="btn-personagem" class="botao botao-pequeno">Personagem</button>
+          <button id="btn-novo-inicial" class="botao botao-pequeno">Novo mundo</button>
+        </div>
         <p id="status-inicial" class="status-inicial"></p>
       </div>
       <div class="painel caixa-controles">

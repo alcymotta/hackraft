@@ -3,7 +3,8 @@
 // ---------------------------------------------------------------------
 // Cuida de tudo que é "terreno":
 //   - GeradorMundo: cria os blocos de cada chunk a partir da semente
-//     (morros, montanhas, biomas, água, areia, cavernas, árvores)
+//     (morros, montanhas, biomas, água, areia, cavernas, árvores e os
+//     presentes misteriosos espalhados pelo chão)
 //   - Mundo: carrega os chunks em volta do jogador aos poucos, monta as
 //     malhas, descarrega os que ficaram longe, guarda as modificações
 //     do jogador, faz o raycast (qual bloco a mira está olhando) e cria
@@ -54,6 +55,8 @@ const CAVERNA_PROF_MIN = 4;           // a caverna fica pelo menos 4 blocos abai
 const CAVERNA_Y_MIN = 2;              // e nunca abaixo de y = 2 (perto da rocha-matriz)
 const CELULA_ARVORE = 5;              // no máximo 1 árvore a cada 5x5 blocos (espaçamento)
 const DENSIDADE_ARVORES = [0.06, 0.7, 0]; // chance de árvore por célula: planície, floresta, deserto
+const CHANCE_PRESENTE = CONFIG.CHANCE_PRESENTE ?? 0.32; // chance de um chunk ter um presente (~1 a cada 3,5)
+const TENTATIVAS_PRESENTE = 6;        // lugares sorteados no chunk até achar um bom para o presente
 
 // Os ruídos são lidos numa área um pouco MAIOR que o chunk (MARGEM blocos
 // para cada lado). Isso deixa as árvores atravessarem a borda sem cortes
@@ -89,6 +92,7 @@ export class GeradorMundo {
     this.sementeArvore = s ^ 0x71374491;
     this.sementeRocha = s ^ 0x0b5c0fbc;
     this.sementeTerra = s ^ 0x3956c25b;
+    this.sementeTesouro = s ^ 0x59f111f1;
 
     // Rascunhos reaproveitados a cada chunk (nada de criar arrays no meio)
     this.altM = new Int16Array(LM * LM);   // altura do chão (com margem)
@@ -158,6 +162,7 @@ export class GeradorMundo {
     this.escavarCavernas(chunk, x0, z0);
     // (Fases 5 e 9: os minérios entram aqui, depois das cavernas)
     this.plantarArvores(chunk, x0, z0);
+    this.colocarTesouros(chunk); // depois das árvores, para não cair dentro de uma
     chunk.calcularAlturas();
   }
 
@@ -422,6 +427,44 @@ export class GeradorMundo {
         const i = lx + lz * TAM + y * AREA;
         if (d[i] === B.AR || d[i] === B.FOLHAS) d[i] = B.TRONCO;
       }
+    }
+  }
+
+  /**
+   * Etapa 5: tesouros (Fase 3).
+   * Alguns chunks ganham um "Presente misterioso" em cima da grama ou da
+   * areia. Quem decide é o hash da semente com a posição do chunk: todo
+   * computador com a mesma semente coloca os presentes nos mesmos lugares
+   * (sem isso, cada jogador veria presentes diferentes no multiplayer).
+   *
+   * Sorteamos alguns lugares dentro do chunk e usamos o primeiro que for
+   * bom: chão de grama ou areia, ar em cima (nada de água), e sem árvore
+   * em volta (nem tronco, nem folha por cima).
+   */
+  colocarTesouros(chunk) {
+    const s = this.sementeTesouro;
+    const cx = chunk.cx, cz = chunk.cz;
+    if (hash2D(s, cx, cz) >= CHANCE_PRESENTE) return;
+    const d = chunk.dados;
+    for (let t = 0; t < TENTATIVAS_PRESENTE; t++) {
+      // Cada tentativa usa um "sorteio" diferente (a semente muda com t).
+      // Fica longe da borda (1 bloco) para o presente não grudar no vizinho.
+      const lx = 1 + Math.floor(hash2D(s ^ Math.imul(t + 1, 0x1b873593), cx, cz) * (TAM - 2));
+      const lz = 1 + Math.floor(hash2D(s ^ Math.imul(t + 1, 0x0cc9e2d5), cx, cz) * (TAM - 2));
+      const col = lx + lz * TAM;
+      const h = this.altM[(lx + MARGEM) + (lz + MARGEM) * LM]; // altura do chão nesta coluna
+      if (h < NIVEL_MAR || h + 12 >= ALTURA) continue; // fundo do mar ou alto demais
+      const chao = d[col + h * AREA];
+      if (chao !== B.GRAMA && chao !== B.AREIA) continue;
+      // Ar em cima e nada de árvore até 10 blocos acima (nem do vizinho)
+      let livre = true;
+      for (let y = h + 1; y <= h + 10 && livre; y++) {
+        const id = d[col + y * AREA];
+        if (id !== B.AR) livre = false;
+      }
+      if (!livre) continue;
+      d[col + (h + 1) * AREA] = B.PRESENTE;
+      return;
     }
   }
 }
@@ -845,6 +888,12 @@ export class Mundo {
    * Muda um bloco. Registra em `modificacoes`, remonta o chunk na hora (e os
    * vizinhos, se o bloco estiver na borda) e avisa os ouvintes.
    * Devolve true se algo mudou.
+   *
+   * Se o chunk não estiver carregado (ex.: o outro jogador está longe), os
+   * dados dele são gerados antes (sem malha, é rápido). Sem isso não
+   * daria para saber qual era o bloco original: quebrar uma pedra (= pôr
+   * ar) seria ignorado, porque "ar" é o que um chunk não carregado parece
+   * ter. O chunk gerado assim é descartado sozinho quando ficar longe.
    */
   definirBloco(x, y, z, id, origem = 'local') {
     x = Math.floor(x);
@@ -856,11 +905,10 @@ export class Mundo {
     const lx = x & MASCARA;
     const lz = z & MASCARA;
     const iLocal = lx + lz * TAM + y * AREA;
-    const ch = this._chunkEm(cx, cz);
+    const ch = this._garantirDados(cx, cz);
     const chaveBloco = x + ',' + y + ',' + z;
 
-    // Chunk não carregado: o valor anterior é o da modificação (se houver)
-    const anterior = ch ? ch.dados[iLocal] : (this.modificacoes.get(chaveBloco) ?? B.AR);
+    const anterior = ch.dados[iLocal];
     if (anterior === id) return false;
 
     this.modificacoes.set(chaveBloco, id);
@@ -872,17 +920,15 @@ export class Mundo {
     }
     mapa.set(iLocal, id);
 
-    if (ch) {
-      ch.definir(lx, y, lz, id); // também atualiza o mapa de altura da coluna
-      if (ch.temMalha) this._montarMalha(ch);
-      // Na borda, o vizinho também muda (a face dele e o AO dos cantos).
-      // Num canto do chunk, até o vizinho da diagonal.
-      const ddx = lx === 0 ? -1 : (lx === MASCARA ? 1 : 0);
-      const ddz = lz === 0 ? -1 : (lz === MASCARA ? 1 : 0);
-      if (ddx !== 0) this._remontarSeTiver(cx + ddx, cz);
-      if (ddz !== 0) this._remontarSeTiver(cx, cz + ddz);
-      if (ddx !== 0 && ddz !== 0) this._remontarSeTiver(cx + ddx, cz + ddz);
-    }
+    ch.definir(lx, y, lz, id); // também atualiza o mapa de altura da coluna
+    if (ch.temMalha) this._montarMalha(ch);
+    // Na borda, o vizinho também muda (a face dele e o AO dos cantos).
+    // Num canto do chunk, até o vizinho da diagonal.
+    const ddx = lx === 0 ? -1 : (lx === MASCARA ? 1 : 0);
+    const ddz = lz === 0 ? -1 : (lz === MASCARA ? 1 : 0);
+    if (ddx !== 0) this._remontarSeTiver(cx + ddx, cz);
+    if (ddz !== 0) this._remontarSeTiver(cx, cz + ddz);
+    if (ddx !== 0 && ddz !== 0) this._remontarSeTiver(cx + ddx, cz + ddz);
 
     const evento = { x, y, z, id, anterior, origem };
     for (let i = 0; i < this.ouvintes.length; i++) this.ouvintes[i](evento);

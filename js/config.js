@@ -59,6 +59,22 @@ export const CONFIG = {
   ESPACOS_HOTBAR: 9,
   ESPACOS_INVENTARIO: 36,   // total (9 da hotbar + 27 da mochila)
 
+  // ----- Itens no chão (Fase 3) -----
+  ITEM_TAMANHO: 0.4,        // tamanho do desenho do item no chão, em blocos
+  ITEM_RAIO_PEGAR: 1.3,     // a esta distância (em blocos) o jogador pega o item
+  ITEM_RAIO_PUXAR: 2.5,     // a esta distância o item começa a ser puxado para o jogador
+  ITEM_FORCA_PUXAR: 16,     // força do "puxão" (maior = o item vem mais rápido)
+  ITEM_VIDA_S: 600,         // segundos até o item sumir sozinho (600 = 10 minutos)
+  ITEM_ATRASO_S: 0.5,       // segundos até um item recém-solto poder ser pego
+  ITEM_ATRASO_DONO_S: 2,    // quem soltou espera mais para pegar de volta (e o item não é puxado para ele)
+  ITEM_GRAVIDADE: 20,       // gravidade dos itens (um pouco menor que a do jogador)
+  ITEM_IMPULSO: 4.5,        // velocidade do item ao ser jogado (tecla G), na direção do olhar
+  MAX_ITENS_CHAO: 256,      // máximo de itens no chão ao mesmo tempo (o mais antigo some)
+
+  // ----- Tesouros (Fase 3) -----
+  CHANCE_PRESENTE: 0.32,    // chance de um chunk ter um presente misterioso (0.32 = ~1 a cada 3,5 chunks; no mar e nos picos não tem)
+                            // (mudar isto muda onde os presentes nascem em TODOS os mundos)
+
   // ----- Salvamento -----
   CHAVE_SAVE: 'hackraft-save-v1',
   AUTOSAVE_SEGUNDOS: 30,

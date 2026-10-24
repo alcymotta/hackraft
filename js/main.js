@@ -12,24 +12,43 @@
 //        apagaria o mundo de quem está entrando).
 //   3) Monta o mundo, o céu, o jogador e os bonecos dos outros, liga a
 //      rede e começa o loop do jogo.
+//
+// APARÊNCIA (Fase 3)
+//   A aparência completa de um jogador = as cores da skin base (de cada
+//   navegador, editadas na tela C) + o que ele está vestindo (Equipamento).
+//   Sempre que uma das duas muda, aplicarAparencia() atualiza o boneco,
+//   o preview da interface e manda para os outros jogadores.
 // =====================================================================
 
 import * as THREE from 'three';
 import { CONFIG, CICLO_SEGUNDOS } from './config.js';
 import { criarTexturas } from './textures.js';
 import { Inventario } from './inventory.js';
+import { Equipamento } from './equipamento.js';
 import { InterfaceJogo } from './ui.js';
 import { Mundo } from './world.js';
 import { Ceu } from './sky.js';
 import { Personagem, coresPorApelido } from './character.js';
 import { Jogador } from './player.js';
 import { JogadoresRemotos } from './jogadores_remotos.js';
+import { ItensNoChao, quantoCabe } from './itens_chao.js';
 import { Rede } from './network.js';
 import { som } from './audio.js';
 import { BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { salvarJogo, carregarJogo, apagarJogo } from './save.js';
 
 const NOMES_MODO = { sozinho: 'sozinho', anfitriao: 'anfitrião', cliente: 'cliente' };
+const CHAVES_CORES = ['pele', 'cabelo', 'olhos', 'camisa', 'calca', 'sapato'];
+
+/** Só as cores conhecidas, e só se forem textos curtos (vêm do localStorage) */
+function limparCores(c) {
+  const r = {};
+  if (!c || typeof c !== 'object') return r;
+  for (const k of CHAVES_CORES) {
+    if (typeof c[k] === 'string' && c[k].length <= 32) r[k] = c[k];
+  }
+  return r;
+}
 
 // Mostra um erro na tela de carregamento (usa a UI se ela já existir)
 let ui = null;
@@ -113,18 +132,65 @@ async function iniciar() {
     camera.updateProjectionMatrix();
   });
 
-  // ----- Texturas, inventário e interface -----
+  // ----- Texturas, inventário, equipamento e interface -----
   // (a tela de carregamento do index.html já começa visível, com "Carregando...")
   const texturas = await criarTexturas();
   const inventario = new Inventario();
-  ui = new InterfaceJogo({ inventario, texturas, canvas });
+  const equipamento = new Equipamento();
+  ui = new InterfaceJogo({ inventario, equipamento, texturas, canvas });
 
   // ----- Estado da partida (preenchido quando o jogo é montado) -----
   let rede = null;          // Rede (modo 'sozinho', 'anfitriao' ou 'cliente')
-  let jogo = null;          // { semente, mundo, ceu, personagem, jogador, remotos }
+  let jogo = null;          // { semente, mundo, ceu, personagem, jogador, remotos, itensChao }
   let montando = false;     // evita montar duas vezes (clique duplo)
   let impedirSalvar = false; // ligado no "Novo mundo", senão o mundo velho voltaria
   let ultimoAvisoSalvar = -Infinity; // quando avisamos do save cheio pela última vez
+  let aparenciaBase = null; // cores da skin base deste navegador (definidas ao entrar no jogo)
+
+  // ----- Aparência (cores da skin + equipamento) -----
+
+  /**
+   * Cores da skin base: as que foram salvas na tela C (a UI guarda no
+   * localStorage 'hackraft-aparencia') ou, se nunca mexeram, as cores
+   * escolhidas pelo apelido.
+   */
+  function lerAparenciaBase(apelido) {
+    const padrao = coresPorApelido(apelido);
+    const salvas = ui.aparenciaBase;
+    if (salvas && typeof salvas === 'object') return { ...padrao, ...limparCores(salvas) };
+    return padrao;
+  }
+
+  /** A aparência completa: { cores, roupa, armadura, mao, acessorio } */
+  function aparenciaCompleta() {
+    return { cores: { ...aparenciaBase }, ...equipamento.aparencia() };
+  }
+
+  /** Atualiza o boneco, o preview da interface e avisa os outros jogadores */
+  function aplicarAparencia() {
+    if (!aparenciaBase) return; // o jogo ainda não começou
+    const ap = aparenciaCompleta();
+    if (jogo) jogo.personagem.definirAparencia(ap);
+    ui.definirAparenciaPreview(ap);
+    if (rede) rede.enviarAparencia(ap);
+  }
+
+  // Trocar de roupa/armadura (pela tela E ou pelos comandos) muda o boneco na hora
+  equipamento.aoMudar(() => aplicarAparencia());
+
+  ui.definirCallbacks({
+    // A UI já tirou o item do inventário: ele vai para o chão, na frente do jogador
+    aoSoltarItem(item, qtd) {
+      if (jogo) jogo.jogador.soltarNaFrente(item, qtd);
+      else inventario.adicionar(item, qtd); // (sem jogo ainda: devolve)
+    },
+    // Salvou novas cores na tela C (a UI já guardou no localStorage)
+    aoMudarAparenciaBase(cores) {
+      if (!aparenciaBase) return; // ainda na tela inicial: as cores são lidas ao entrar
+      aparenciaBase = { ...aparenciaBase, ...limparCores(cores) };
+      aplicarAparencia();
+    },
+  });
 
   // ----- Salvamento (só anfitrião ou sozinho; o cliente NUNCA salva) -----
   function podeSalvar() {
@@ -134,13 +200,15 @@ async function iniciar() {
   function salvar() {
     if (!podeSalvar()) return false;
     const ok = salvarJogo({
-      versao: 2,
+      versao: 3,
       semente: jogo.semente,
       modificacoes: jogo.mundo.exportarModificacoes(),
       jogador: jogo.jogador.serializar(),
       inventario: inventario.serializar(),
       hora: jogo.ceu.hora,
       jogadores: rede.exportarDadosJogadores(),
+      equipamento: equipamento.serializar(),
+      itensChao: jogo.itensChao.exportar(),
     });
     // Save cheio: avisa, no máximo uma vez a cada 60 s
     if (!ok && performance.now() - ultimoAvisoSalvar > 60000) {
@@ -179,21 +247,39 @@ async function iniciar() {
     const ceu = new Ceu(scene);
     if (typeof hora === 'number' && Number.isFinite(hora)) ceu.definirHora(hora);
 
-    // Cada apelido tem uma cor de roupa (os outros veem a mesma cor)
-    const personagem = new Personagem(coresPorApelido(apelido));
-    const jogador = new Jogador({ camera, scene, mundo, inventario, ui, som, personagem, texturas });
+    // O boneco começa com as cores da skin base (a roupa vem em aplicarAparencia)
+    aparenciaBase = lerAparenciaBase(apelido);
+    const personagem = new Personagem(aparenciaBase);
+    const itensChao = new ItensNoChao({ scene, mundo, texturas });
+    const jogador = new Jogador({
+      camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento,
+      // No multiplayer, quem cria o item no chão é o anfitrião: passa pela rede
+      soltarItem: (item, qtd, x, y, z, vx, vy, vz) => rede.soltarItem(item, qtd, x, y, z, vx, vy, vz),
+    });
     const remotos = new JogadoresRemotos(scene);
 
-    jogo = { semente, mundo, ceu, personagem, jogador, remotos };
+    jogo = { semente, mundo, ceu, personagem, jogador, remotos, itensChao };
   }
 
   // Depois de posicionar o jogador: liga a rede, expõe para depuração e começa o loop
   function comecar() {
-    const { mundo, ceu, jogador, remotos } = jogo;
-    rede.ligar({ mundo, ceu, jogador, inventario, remotos, ui });
+    const { mundo, ceu, jogador, remotos, itensChao } = jogo;
+    aplicarAparencia(); // boneco, preview e rede com a roupa certa
+    rede.ligar({
+      mundo, ceu, jogador, inventario, remotos, ui, equipamento, itensChao,
+      aoPegarItem: () => som.golpe('folhas'), // um "plim" curtinho ao pegar um item
+    });
+
+    // O jogador local pega os itens do chão (se couber no inventário).
+    // Quem decide se ele ganha mesmo o item é a rede (o anfitrião).
+    itensChao.definirColetor({
+      posicao: jogador.posicao,
+      podePegar: (item) => quantoCabe(inventario, item) > 0,
+      aoPegar: (entrada) => rede.pegarItem(entrada),
+    });
 
     window.jogo = {
-      mundo, ceu, jogador, inventario, ui, som, salvar, rede, remotos,
+      mundo, ceu, jogador, inventario, equipamento, itensChao, ui, som, salvar, rede, remotos,
       renderer, scene, camera, texturas,
     };
 
@@ -222,6 +308,7 @@ async function iniciar() {
         'Hora: ' + pad(Math.floor(hora / 60)) + ':' + pad(hora % 60) + ' (' + (ceu.ehNoite ? 'Noite' : 'Dia') + ')',
         'Chunks: ' + est.chunks + '  Fila: ' + est.fila + '  Faces: ' + est.faces,
         'Semente: ' + jogo.semente,
+        'Itens no chão: ' + itensChao.quantidade,
         'Câmera: ' + jogador.modoCamera,
         'Rede: ' + NOMES_MODO[rede.modo] + (rede.codigo ? '  Sala: ' + rede.codigo : '') +
           '  Jogadores: ' + rede.quantidadeJogadores,
@@ -232,11 +319,13 @@ async function iniciar() {
       const dt = Math.min(relogio.getDelta(), 0.05);
 
       jogador.atualizar(dt);
+      itensChao.atualizar(dt);
       rede.atualizar(dt);
       remotos.atualizar(dt);
       mundo.atualizar(jogador.posicao);
       ceu.atualizar(dt, camera.position);
       mundo.definirLuzDoDia(ceu.luzDoDia);
+      itensChao.definirLuz(ceu.luzDoDia);
       renderer.render(scene, camera);
 
       // Debug a cada ~0.25 s
@@ -265,7 +354,7 @@ async function iniciar() {
     if (montando || jogo) return;
     montando = true;
     try {
-      rede = new Rede({ apelido, cores: coresPorApelido(apelido) });
+      rede = new Rede({ apelido, cores: lerAparenciaBase(apelido) });
       let codigo = null;
       try {
         codigo = await rede.criarSala();
@@ -274,7 +363,7 @@ async function iniciar() {
         console.warn('Hackraft: multiplayer indisponível, jogando sozinho.', erro);
       }
 
-      const estado = carregarJogo(); // versão 1 ou 2 (ou null)
+      const estado = carregarJogo(); // versão 1, 2 ou 3 (ou null)
       const semente = estado && estado.semente !== undefined
         ? estado.semente
         : Math.floor(Math.random() * 2147483647);
@@ -286,7 +375,9 @@ async function iniciar() {
       });
 
       if (estado && estado.inventario) inventario.carregar(estado.inventario);
-      const { mundo, jogador } = jogo;
+      if (estado && estado.equipamento) equipamento.carregar(estado.equipamento);
+      const { mundo, jogador, itensChao } = jogo;
+      if (estado) itensChao.carregar(estado.itensChao);
       if (estado && estado.jogador && Array.isArray(estado.jogador.pos)) {
         jogador.carregar(estado.jogador);
       } else {
@@ -325,7 +416,7 @@ async function iniciar() {
   async function aoEntrar(apelido, codigo) {
     if (montando || jogo) return;
     montando = true;
-    const novaRede = new Rede({ apelido, cores: coresPorApelido(apelido) });
+    const novaRede = new Rede({ apelido, cores: lerAparenciaBase(apelido) });
     let dados;
     try {
       dados = await novaRede.entrarNaSala(codigo);
@@ -346,8 +437,9 @@ async function iniciar() {
       });
       const { mundo, jogador } = jogo;
 
-      // Inventário: o que o anfitrião guardou deste apelido (ou vazio)
+      // Inventário e equipamento: o que o anfitrião guardou deste apelido (ou vazio)
       inventario.carregar(dados.meuEstado ? dados.meuEstado.inventario : null);
+      equipamento.carregar(dados.meuEstado ? dados.meuEstado.equipamento : null);
 
       // Posição: onde parou da última vez, ou ao lado do anfitrião
       if (dados.meuEstado) {

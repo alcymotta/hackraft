@@ -4,12 +4,16 @@
 // Cuida de: teclado e mouse, movimento e física (gravidade, pulo, água),
 // colisão com os blocos, câmera (1ª e 3ª pessoa), quebrar e colocar blocos.
 // O jogador só age quando o mouse está travado e nenhum menu está aberto.
+//
+// Fase 3: a roupa muda o jogador (bônus de velocidade, passos silenciosos),
+// os presentes misteriosos dão um item quando quebrados, e o jogador pode
+// soltar itens no chão (soltarNaFrente).
 // =====================================================================
 
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { B, BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
-import { obterItem } from './items.js';
+import { obterItem, TABELA_PRESENTE } from './items.js';
 
 const METADE_LARGURA = CONFIG.LARGURA_JOGADOR / 2;
 const ALTURA = CONFIG.ALTURA_JOGADOR;
@@ -19,10 +23,15 @@ const LIMITE_PITCH = Math.PI / 2 - 0.01;
 
 export class Jogador {
   /**
-   * @param opcoes { camera, scene, mundo, inventario, ui, som, personagem, texturas }
-   * `texturas` é extra (fora do contrato): usado nas rachaduras de quebrar bloco.
+   * @param opcoes { camera, scene, mundo, inventario, ui, som, personagem,
+   *                 texturas, equipamento, soltarItem }
+   *   texturas:    usado nas rachaduras de quebrar bloco
+   *   equipamento: Equipamento (os bônus da roupa e da armadura)
+   *   soltarItem:  fn(item, qtd, x, y, z, vx, vy, vz) → true se deu certo.
+   *                Põe um item no chão (o main liga isso à rede, porque no
+   *                multiplayer quem cria o item é o anfitrião).
    */
-  constructor({ camera, scene, mundo, inventario, ui, som, personagem, texturas }) {
+  constructor({ camera, scene, mundo, inventario, ui, som, personagem, texturas, equipamento = null, soltarItem = null }) {
     this.camera = camera;
     this.scene = scene;
     this.mundo = mundo;
@@ -31,6 +40,17 @@ export class Jogador {
     this.som = som;
     this.personagem = personagem;
     this.texturas = texturas;
+    this.equipamento = equipamento;
+    this.soltarItem = soltarItem;
+
+    // Bônus do equipamento, guardados aqui (o loop não pede um objeto
+    // novo ao equipamento a cada quadro). Atualizados quando ele muda.
+    this.bonus = { velocidade: 0, defesa: 0, silencioso: false };
+    this._contPassos = 0;
+    if (equipamento) {
+      this.atualizarBonus();
+      equipamento.aoMudar(() => this.atualizarBonus());
+    }
 
     // Estado do jogador
     this.posicao = new THREE.Vector3(0, 80, 0); // nos pés
@@ -90,6 +110,15 @@ export class Jogador {
     this.estagioRachadura = -1;
 
     this._ligarEventos();
+  }
+
+  /** Lê de novo os bônus da roupa e da armadura (chamado quando o equipamento muda) */
+  atualizarBonus() {
+    const b = this.equipamento ? this.equipamento.bonus() : null;
+    const vel = b && Number.isFinite(b.velocidade) ? b.velocidade : 0;
+    this.bonus.velocidade = Math.max(-0.9, Math.min(2, vel)); // limites de segurança
+    this.bonus.defesa = b && Number.isFinite(b.defesa) ? b.defesa : 0;
+    this.bonus.silencioso = !!(b && b.silencioso);
   }
 
   // ------------------------------------------------------------------
@@ -204,7 +233,22 @@ export class Jogador {
     this.velocidade.y = 0;
   }
 
+  /** Se a caixa começa dentro de um bloco sólido, sobe até achar espaço livre (máx. 3 blocos) */
+  _sairDeDentroDoBloco() {
+    const p = this.posicao;
+    if (!this._colide(p.x, p.y, p.z)) return;
+    for (let i = 1; i <= 3; i++) {
+      const y = Math.floor(p.y + EPS) + i;
+      if (!this._colide(p.x, y, p.z)) {
+        p.y = y;
+        if (this.velocidade.y < 0) this.velocidade.y = 0;
+        return;
+      }
+    }
+  }
+
   _moverX(d) {
+    if (d === 0) return;
     const p = this.posicao;
     const novo = p.x + d;
     if (!this._colide(novo, p.y, p.z)) {
@@ -218,6 +262,7 @@ export class Jogador {
   }
 
   _moverZ(d) {
+    if (d === 0) return;
     const p = this.posicao;
     const novo = p.z + d;
     if (!this._colide(p.x, p.y, novo)) {
@@ -308,7 +353,9 @@ export class Jogador {
     const comp = Math.hypot(dx, dz);
     if (comp > 0) { dx /= comp; dz /= comp; }
 
-    const vel = naAgua ? CONFIG.VEL_NADAR : (correndo ? CONFIG.VEL_CORRER : CONFIG.VEL_ANDAR);
+    // Velocidade básica × bônus da roupa (ninja: +10%)
+    const vel = (naAgua ? CONFIG.VEL_NADAR : (correndo ? CONFIG.VEL_CORRER : CONFIG.VEL_ANDAR)) *
+      (1 + this.bonus.velocidade);
     const alvoX = dx * vel;
     const alvoZ = dz * vel;
     const acel = (naAgua ? CONFIG.ACEL_AGUA : (this.noChao ? CONFIG.ACEL_CHAO : CONFIG.ACEL_AR)) * dt;
@@ -352,6 +399,7 @@ export class Jogador {
     const maior = Math.max(Math.abs(ddx), Math.abs(ddy), Math.abs(ddz));
     const n = Math.max(1, Math.ceil(maior / PASSO_MAX));
     this.noChao = false;
+    this._sairDeDentroDoBloco(); // preso dentro de um bloco: sobe
     for (let i = 0; i < n; i++) {
       this._moverY(ddy / n);
       this._moverX(ddx / n);
@@ -365,8 +413,11 @@ export class Jogador {
       this.distPasso += this.velHorizontal * dt;
       if (this.distPasso >= CONFIG.DISTANCIA_PASSO) {
         this.distPasso = 0;
+        // Roupa silenciosa (ninja): só 1 de cada 3 passos faz barulho
+        this._contPassos = (this._contPassos + 1) % 3;
+        const toca = !this.bonus.silencioso || this._contPassos === 0;
         const bloco = BLOCOS[mundo.obterBloco(p.x, p.y - 0.1, p.z)];
-        if (bloco && bloco.som) this.som.passo(bloco.som);
+        if (toca && bloco && bloco.som) this.som.passo(bloco.som);
       }
     } else if (!this.noChao) {
       this.distPasso = 0;
@@ -489,14 +540,79 @@ export class Jogador {
   }
 
   _quebrar(alvo, bloco) {
+    const idAnterior = alvo.id;
     this.mundo.definirBloco(alvo.x, alvo.y, alvo.z, B.AR);
     if (bloco.item !== null) {
       const sobrou = this.inventario.adicionar(bloco.item, 1);
       if (sobrou > 0) this.ui.mostrarMensagem('Inventário cheio!');
     }
+    if (bloco.sorteio === 'presente' && !this._abrirPresente(alvo)) {
+      // Nada coube nem caiu no chão: o presente volta ao lugar, sem perder o item
+      this.mundo.definirBloco(alvo.x, alvo.y, alvo.z, idAnterior);
+      this.ui.mostrarMensagem('Inventário cheio! Libere espaço para abrir o presente.');
+      this._limparQuebra();
+      this.espera = CONFIG.ESPERA_APOS_QUEBRAR;
+      return;
+    }
     if (bloco.som) this.som.quebrar(bloco.som);
     this._limparQuebra();
     this.espera = CONFIG.ESPERA_APOS_QUEBRAR;
+  }
+
+  /**
+   * Presente misterioso: sorteia 1 item da TABELA_PRESENTE.
+   * (Aqui pode usar Math.random: é um sorteio do jogo, não a geração do
+   * mundo. O lugar dos presentes, esse sim, vem da semente.)
+   * Se o inventário estiver cheio, o item cai no chão onde estava o presente.
+   */
+  _abrirPresente(alvo) {
+    const tabela = Array.isArray(TABELA_PRESENTE) ? TABELA_PRESENTE : [];
+    if (tabela.length === 0) return true;
+    const nome = tabela[Math.floor(Math.random() * tabela.length)];
+    const def = obterItem(nome);
+    if (!def) return true;
+    const sobrou = this.inventario.adicionar(nome, 1);
+    let texto = 'Você ganhou: ' + def.rotulo + '!';
+    if (sobrou > 0) {
+      const caiu = this.soltarItem &&
+        this.soltarItem(nome, sobrou, alvo.x + 0.5, alvo.y + 0.3, alvo.z + 0.5, 0, 3, 0);
+      if (!caiu) return false; // o item não se perde: quem chamou devolve o presente
+      texto += ' (inventário cheio: caiu no chão)';
+    }
+    this.ui.mostrarMensagem(texto);
+    return true;
+  }
+
+  /**
+   * Solta um item na frente do jogador, com um pequeno impulso na direção
+   * do olhar (tecla G, ou arrastando a pilha para fora do inventário).
+   * O item já deve ter saído do inventário. Se não der para soltar (sem
+   * conexão com o anfitrião, por exemplo), ele volta para o inventário.
+   */
+  soltarNaFrente(item, qtd) {
+    const p = this.posicao;
+    const cp = Math.cos(this.pitch);
+    const dx = -Math.sin(this.yaw) * cp;
+    const dy = Math.sin(this.pitch);
+    const dz = -Math.cos(this.yaw) * cp;
+    // Sai da altura do peito, um pouco à frente (se a frente for parede,
+    // sai de dentro do próprio jogador, que é sempre espaço livre)
+    let x = p.x + dx * 0.4;
+    let y = p.y + 1.3;
+    let z = p.z + dz * 0.4;
+    if (SOLIDO[this.mundo.obterBloco(x, y, z)]) {
+      x = p.x;
+      z = p.z;
+    }
+    const forca = CONFIG.ITEM_IMPULSO ?? 4.5;
+    const ok = this.soltarItem &&
+      this.soltarItem(item, qtd, x, y, z, dx * forca, dy * forca + 1.5, dz * forca);
+    if (!ok) {
+      const sobrou = this.inventario.adicionar(item, qtd);
+      if (sobrou > 0) this.ui.mostrarMensagem('Não deu para soltar o item.');
+    }
+    this.personagem.animarGolpe();
+    return !!ok;
   }
 
   _colocar(alvo) {

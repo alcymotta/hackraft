@@ -13,7 +13,9 @@ const SUAVIZACAO = 12;          // quanto maior, mais rápido o boneco alcança 
 const DISTANCIA_TELEPORTE = 8;  // acima disso (em blocos), pula direto para o alvo
 const INTERVALO_GOLPE = 0.3;    // segundos entre golpes enquanto quebra
 const ALTURA_ETIQUETA = 2.15;   // altura da etiqueta acima dos pés
-const ALTURA_TEXTO = 0.28;      // altura da etiqueta em blocos
+// Quanto subir a etiqueta quando a roupa tem chapéu/capacete 3D
+const EXTRA_ETIQUETA = { mago: 0.45, pirata: 0.2, astronauta: 0.1 };
+const ALTURA_TEXTO = 0.28;     // altura da etiqueta em blocos
 
 const DOIS_PI = Math.PI * 2;
 
@@ -21,6 +23,7 @@ export class JogadoresRemotos {
   constructor(scene) {
     this.scene = scene;
     this.remotos = new Map(); // id -> dados do jogador remoto
+    this.aparenciasPendentes = new Map(); // aparência que chegou antes do jogador ser criado
   }
 
   /** Cria o boneco e a etiqueta de um jogador */
@@ -30,6 +33,13 @@ export class JogadoresRemotos {
     const personagem = new Personagem(cores);
     personagem.grupo.visible = false; // só aparece quando chegar o primeiro estado
     this.scene.add(personagem.grupo);
+
+    // Se a aparência chegou antes do jogador, aplica agora
+    const pendente = this.aparenciasPendentes.get(id);
+    if (pendente) {
+      personagem.definirAparencia(pendente);
+      this.aparenciasPendentes.delete(id);
+    }
 
     const etiqueta = this._criarEtiqueta(apelido);
     this.scene.add(etiqueta.sprite);
@@ -58,9 +68,21 @@ export class JogadoresRemotos {
     r.etiqueta.sprite.material.map.dispose();
     r.etiqueta.sprite.material.dispose();
     this.remotos.delete(id);
+    this.aparenciasPendentes.delete(id);
+  }
+
+  /** Aplica roupa, armadura, mão e acessório: { cores, roupa, armadura, mao, acessorio } */
+  definirAparencia(id, aparencia) {
+    const r = this.remotos.get(id);
+    if (!r) { this.aparenciasPendentes.set(id, aparencia); return; }
+    r.personagem.definirAparencia(aparencia);
+    // Guarda quanto subir a etiqueta para não cobrir chapéu/capacete
+    const roupa = r.personagem.aparenciaAtual;
+    r.subirEtiqueta = (EXTRA_ETIQUETA[roupa.roupa] || 0) + (roupa.armadura && roupa.armadura.capacete ? 0.1 : 0);
   }
 
   limpar() {
+    this.aparenciasPendentes.clear();
     for (const id of Array.from(this.remotos.keys())) this.remover(id);
   }
 
@@ -138,7 +160,7 @@ export class JogadoresRemotos {
       }
 
       // Etiqueta acima da cabeça
-      r.etiqueta.sprite.position.set(pos.x, pos.y + ALTURA_ETIQUETA, pos.z);
+      r.etiqueta.sprite.position.set(pos.x, pos.y + ALTURA_ETIQUETA + (r.subirEtiqueta || 0), pos.z);
     }
   }
 

@@ -34,9 +34,20 @@
 //                1 vez por segundo, que serve de "ainda estou aqui").
 //     bloco      { x, y, z, id }
 //                O cliente mudou um bloco (ele já mudou na tela dele).
-//     meuEstado  { pos: [x, y, z], yaw, pitch, inventario }
-//                A cada 10 s e ao fechar a página. O anfitrião guarda
-//                pelo apelido em `dadosJogadores`, que vai no save dele.
+//     meuEstado  { pos: [x, y, z], yaw, pitch, inventario, equipamento }
+//                A cada 10 s (ou ~1 s depois de pegar/soltar um item) e
+//                ao fechar a página. O anfitrião guarda pelo apelido em
+//                `dadosJogadores`, que vai no save dele.
+//     soltar     { item, qtd, x, y, z, vx, vy, vz }
+//                "Soltei um item aqui" (o item já saiu do meu inventário).
+//                O anfitrião cria o item no chão e avisa todos (itemNovo).
+//     pegar      { id, qtd }
+//                "Encostei no item `id` e cabem `qtd` no meu inventário".
+//                O anfitrião confere se o item ainda existe (outro pode ter
+//                pegado antes), tira do chão e responde com `ganhou`.
+//     aparencia  { ap }
+//                Minha aparência completa: { cores, roupa, armadura, mao,
+//                acessorio }. Ao entrar e sempre que mudar.
 //     tchau      { }   "estou fechando a página" (vale nos dois sentidos)
 //
 //   Por que existe o `tchau`? Quando uma aba é fechada, o navegador do
@@ -48,10 +59,12 @@
 //   Anfitrião → cliente
 //     bemvindo   { versao, meuId, apelido, semente, hora, meuEstado,
 //                  posAnfitriao: [x, y, z], totalMods, lotes,
-//                  jogadores: [{ id, apelido, cores, anfitriao, estado }] }
+//                  jogadores: [{ id, apelido, cores, anfitriao, estado, aparencia }],
+//                  itensChao: [{ id, item, qtd, pos: [x, y, z], idade }] }
 //                Resposta ao `ola`. `apelido` pode voltar diferente
 //                ("Pai 2") se o nome já estava em uso. `meuEstado` é o
-//                que o anfitrião guardou desse apelido (ou null).
+//                que o anfitrião guardou desse apelido (ou null), com o
+//                inventário e o equipamento.
 //     mods       { n, dados }
 //                Logo depois do `bemvindo` vêm `lotes` mensagens destas
 //                com os blocos mudados do mundo. `dados` é um Int32Array
@@ -68,6 +81,19 @@
 //                para TODOS, inclusive para quem mudou: para esse, a
 //                mensagem é a "confirmação" (veja _blocoDoAnfitriao).
 //     hora       { hora }   a cada 5 s (segundos desde o nascer do sol)
+//     itemNovo   { id, item, qtd, x, y, z, vx, vy, vz, de }
+//                Um item apareceu no chão (`de` = id de quem soltou, ou '').
+//     itemRemovido { id }   o item sumiu (alguém pegou, ou o tempo acabou)
+//     ganhou     { item, qtd }
+//                Só para quem pediu `pegar`: o item é seu. Se não couber
+//                tudo no inventário, o resto volta para o chão (`soltar`).
+//     aparencia  { id, ap }  a aparência de outro jogador mudou
+//
+// ITENS NO CHÃO: o anfitrião é a autoridade
+//   Só o anfitrião cria e remove itens no chão (no modo sozinho, é o
+//   próprio jogador). Assim dois jogadores nunca pegam o mesmo item: o
+//   anfitrião atende os pedidos na ordem em que chegam, e o segundo pedido
+//   encontra o item já removido.
 //
 // SEGURANÇA
 //   Tudo o que chega pela rede é conferido (tipos, números finitos, id de
@@ -79,9 +105,16 @@
 
 import { CONFIG, CICLO_SEGUNDOS } from './config.js';
 import { BLOCOS } from './blocks.js';
+import { ITENS } from './items.js';
+import { Equipamento } from './equipamento.js';
+import { quantoCabe } from './itens_chao.js';
 
 const PREFIXO_ID = 'hackraft-';
-const VERSAO_PROTOCOLO = 1;          // mude quando o formato das mensagens mudar
+const VERSAO_PROTOCOLO = 2;          // mude quando o formato das mensagens mudar (2 = Fase 3)
+const MAX_QTD_ITEM = 64;             // maior pilha aceita numa mensagem de item
+const VEL_MAX_ITEM = 20;             // maior velocidade aceita para um item solto
+const DIST_SOLTAR = 8;               // o cliente só solta itens até 8 blocos de onde está
+const DIST_PEGAR = 6;                // e só pega itens até 6 blocos (folga para o atraso da rede)
 const LETRAS_CODIGO = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // sem 0/O, 1/I/L
 const CODIGO_VALIDO = /^[ABCDEFGHJKMNPQRSTUVWXYZ2-9]{5}$/;
 const TAMANHO_APELIDO = 16;
@@ -157,7 +190,26 @@ function limparInventario(inv) {
   return { espacos, selecionado };
 }
 
-/** { pos, yaw, pitch, inventario } conferido, ou null */
+/**
+ * Equipamento vindo da rede ou do save, conferido.
+ * Em vez de repetir aqui as regras do equipamento (que item vai em que
+ * espaço), deixamos a própria classe Equipamento conferir: carregamos os
+ * dados num Equipamento novo (ele ignora o que for inválido) e pegamos o
+ * resultado limpo com serializar().
+ */
+function limparEquipamento(d) {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+  try {
+    const eq = new Equipamento();
+    eq.carregar(d);
+    return eq.serializar();
+  } catch (e) {
+    console.warn('Hackraft: equipamento inválido ignorado', e);
+    return null;
+  }
+}
+
+/** { pos, yaw, pitch, inventario, equipamento } conferido, ou null */
 function limparEstadoJogador(e) {
   if (!e || typeof e !== 'object') return null;
   const p = e.pos;
@@ -167,6 +219,87 @@ function limparEstadoJogador(e) {
     yaw: ehNumero(e.yaw) ? e.yaw : 0,
     pitch: ehNumero(e.pitch) ? e.pitch : 0,
     inventario: limparInventario(e.inventario),
+    equipamento: limparEquipamento(e.equipamento),
+  };
+}
+
+// ----- Itens (Fase 3) -----
+
+/** O nome é de um item que existe? */
+function itemValido(nome) {
+  return typeof nome === 'string' && nome.length <= 40 && ITENS.has(nome);
+}
+
+/** Quantidade inteira de 1 a 64 */
+function qtdValida(q) {
+  return Number.isInteger(q) && q >= 1 && q <= MAX_QTD_ITEM;
+}
+
+/** Id de item no chão: inteiro positivo (quem cria é o anfitrião) */
+function idItemValido(id) {
+  return Number.isInteger(id) && id >= 0 && id <= 0x7fffffff;
+}
+
+/** Velocidade conferida: número finito e não muito grande (senão 0) */
+function velocidadeItem(v) {
+  if (!ehNumero(v)) return 0;
+  return v > VEL_MAX_ITEM ? VEL_MAX_ITEM : (v < -VEL_MAX_ITEM ? -VEL_MAX_ITEM : v);
+}
+
+/** Item no chão vindo da rede (mensagem itemNovo), conferido, ou null */
+function lerItemNovo(m) {
+  if (!m || typeof m !== 'object') return null;
+  if (!idItemValido(m.id) || !itemValido(m.item) || !qtdValida(m.qtd) || !posicaoValida(m.x, m.y, m.z)) return null;
+  return {
+    id: m.id, item: m.item, qtd: m.qtd,
+    x: m.x, y: m.y, z: m.z,
+    vx: velocidadeItem(m.vx), vy: velocidadeItem(m.vy), vz: velocidadeItem(m.vz),
+    de: typeof m.de === 'string' && m.de.length <= 100 ? m.de : '',
+  };
+}
+
+// ----- Aparência (Fase 3) -----
+
+// Os nomes de visual e de material que existem, tirados da lista de itens.
+// Calculado só quando a lista de itens muda de tamanho.
+let visuais = null;
+let tamanhoItensVisto = -1;
+function visuaisConhecidos() {
+  if (visuais && tamanhoItensVisto === ITENS.size) return visuais;
+  visuais = { roupa: new Set(), mao: new Set(), acessorio: new Set(), material: new Set() };
+  for (const def of ITENS.values()) {
+    if (!def) continue;
+    if (typeof def.visual === 'string') {
+      visuais.mao.add(def.visual); // na mão pode ir qualquer coisa que tenha visual
+      if (def.tipo === 'roupa') visuais.roupa.add(def.visual);
+      if (def.tipo === 'acessorio') visuais.acessorio.add(def.visual);
+    }
+    if (def.tipo === 'armadura' && typeof def.material === 'string') visuais.material.add(def.material);
+  }
+  tamanhoItensVisto = ITENS.size;
+  return visuais;
+}
+
+/**
+ * Aparência completa conferida: { cores, roupa, armadura: { capacete,
+ * peitoral, calca, botas }, mao, acessorio }. Nome desconhecido vira null.
+ */
+function limparAparencia(ap) {
+  if (!ap || typeof ap !== 'object') return null;
+  const v = visuaisConhecidos();
+  const nome = (x, conjunto) => (typeof x === 'string' && x.length <= 40 && conjunto.has(x) ? x : null);
+  const a = ap.armadura && typeof ap.armadura === 'object' ? ap.armadura : {};
+  return {
+    cores: limparCores(ap.cores),
+    roupa: nome(ap.roupa, v.roupa),
+    armadura: {
+      capacete: nome(a.capacete, v.material),
+      peitoral: nome(a.peitoral, v.material),
+      calca: nome(a.calca, v.material),
+      botas: nome(a.botas, v.material),
+    },
+    mao: nome(ap.mao, v.mao),
+    acessorio: nome(ap.acessorio, v.acessorio),
   };
 }
 
@@ -299,6 +432,15 @@ export class Rede {
     this.inventario = null;
     this.remotos = null;
     this.ui = null;
+    this.equipamento = null;
+    this.itensChao = null;
+    this._aoPegarItem = null;         // fn(item, qtd): o jogador local ganhou um item do chão
+
+    // Minha aparência completa (Fase 3). Vai no bemvindo (anfitrião) ou na
+    // mensagem `aparencia` (todos), sempre que mudar.
+    this.aparencia = null;
+    this._aparenciaPendente = false;  // mudou e ainda não foi mandada
+    this._tempoAparencia = 0;
 
     // --- Anfitrião ---
     this.clientes = new Map();        // id do PeerJS → dados do cliente
@@ -315,6 +457,8 @@ export class Rede {
     this._blocosAntesDeLigar = [];    // blocos que chegaram enquanto o mundo era montado
     this._horaPendente = null;
     this._pendentes = new Map();      // "x,y,z" → quantas mudanças minhas o anfitrião ainda não confirmou
+    this._itensPendentes = new Map(); // itens no chão que chegaram enquanto o mundo era montado (id → dados)
+    this._estadoLogo = false;         // pegou/soltou item: manda o meuEstado em ~1 s
     this._ultimaMsgAnfitriao = 0;
     this._caiu = false;
     this._ouvintesDesconectar = [];
@@ -538,6 +682,7 @@ export class Rede {
       conn,
       apelido: '',
       cores: {},
+      aparencia: null,        // aparência completa (chega na mensagem `aparencia`)
       pronto: false,          // já mandou o `ola` e recebeu o `bemvindo`
       recusado: false,
       olaPendente: null,      // `ola` que chegou antes de o mundo existir
@@ -589,6 +734,15 @@ export class Rede {
             }
           }
           return;
+        case 'soltar':
+          if (cli.pronto) this._soltarDoCliente(cli, msg);
+          return;
+        case 'pegar':
+          if (cli.pronto) this._pegarDoCliente(cli, msg);
+          return;
+        case 'aparencia':
+          if (cli.pronto) this._aparenciaDoCliente(cli, msg);
+          return;
         case 'tchau':
           this._clienteSaiu(cli);
           try { cli.conn.close(); } catch (e) { /* ignora */ }
@@ -599,6 +753,55 @@ export class Rede {
     } catch (e) {
       console.warn('Hackraft: mensagem do cliente ignorada', e);
     }
+  }
+
+  /** Manda uma mensagem para todos os clientes que já estão na sala (anfitrião) */
+  _avisarTodos(msg, exceto = null) {
+    if (this.modo !== 'anfitriao') return;
+    for (const c of this.clientes.values()) {
+      if (c.pronto && c !== exceto) this._enviar(c.conn, msg);
+    }
+  }
+
+  /** Um cliente soltou um item: o anfitrião cria e avisa todos (inclusive ele) */
+  _soltarDoCliente(cli, m) {
+    if (!itemValido(m.item) || !qtdValida(m.qtd) || !posicaoValida(m.x, m.y, m.z)) return;
+    let x = m.x, y = m.y, z = m.z;
+    // Longe demais de onde o cliente está? Põe o item nos pés dele.
+    if (cli.temEstado) {
+      const e = cli.estado;
+      const dx = x - e.x, dy = y - e.y, dz = z - e.z;
+      if (dx * dx + dy * dy + dz * dz > DIST_SOLTAR * DIST_SOLTAR) {
+        x = e.x; y = e.y + 1; z = e.z;
+      }
+    }
+    this._criarItem(m.item, m.qtd, x, y, z,
+      velocidadeItem(m.vx), velocidadeItem(m.vy), velocidadeItem(m.vz), cli.id);
+  }
+
+  /** Um cliente encostou num item e pediu para pegar */
+  _pegarDoCliente(cli, m) {
+    if (!this.itensChao || !idItemValido(m.id) || !qtdValida(m.qtd)) return;
+    const e = this.itensChao.obter(m.id);
+    if (!e) return; // alguém pegou antes (ou o tempo acabou): nada a fazer
+    // Ele está mesmo perto? Só dá para conferir se o chunk do item está
+    // carregado aqui (senão o item está parado no ar, onde foi solto).
+    if (cli.temEstado && this.mundo.estaPronto(e.x, e.z)) {
+      const p = cli.estado;
+      const dx = e.x - p.x, dy = e.y - (p.y + 0.9), dz = e.z - p.z;
+      if (dx * dx + dy * dy + dz * dz > DIST_PEGAR * DIST_PEGAR) return;
+    }
+    const r = this._entregarItem(m.id, m.qtd);
+    if (r) this._enviar(cli.conn, { tipo: 'ganhou', item: r.item, qtd: r.qtd });
+  }
+
+  /** Um cliente mudou de roupa/cores: guarda, mostra e repassa para os outros */
+  _aparenciaDoCliente(cli, m) {
+    const ap = limparAparencia(m.ap);
+    if (!ap) return;
+    cli.aparencia = ap;
+    this._aplicarAparenciaRemota(cli.id, ap);
+    this._avisarTodos({ tipo: 'aparencia', id: cli.id, ap }, cli);
   }
 
   _recusar(cli, motivo) {
@@ -666,6 +869,7 @@ export class Rede {
       meuEstado: this.dadosJogadores.get(cli.apelido) || null,
       posAnfitriao: [p.x, p.y, p.z],
       jogadores: this._listaParaBemvindo(),
+      itensChao: this.itensChao ? this.itensChao.exportar() : [],
       totalMods: total,
       lotes,
     });
@@ -682,7 +886,8 @@ export class Rede {
       }
     }
 
-    // 3) agora ele faz parte da sala: avisa os outros e cria o boneco dele
+    // 3) agora ele faz parte da sala: avisa os outros e cria o boneco dele.
+    //    (A aparência completa dele chega logo depois, na mensagem `aparencia`.)
     const aviso = { tipo: 'entrou', id: cli.id, apelido: cli.apelido, cores: cli.cores };
     for (const outro of this.clientes.values()) {
       if (outro.pronto) this._enviar(outro.conn, aviso);
@@ -702,10 +907,15 @@ export class Rede {
       cores: this.cores,
       anfitriao: true,
       estado: { x: j.posicao.x, y: j.posicao.y, z: j.posicao.z, yaw: j.yaw, pitch: j.pitch, noAr: !j.noChao, quebrando: false },
+      aparencia: this.aparencia,
     }];
     for (const c of this.clientes.values()) {
       if (!c.pronto) continue;
-      lista.push({ id: c.id, apelido: c.apelido, cores: c.cores, anfitriao: false, estado: c.temEstado ? { ...c.estado } : null });
+      lista.push({
+        id: c.id, apelido: c.apelido, cores: c.cores, anfitriao: false,
+        estado: c.temEstado ? { ...c.estado } : null,
+        aparencia: c.aparencia,
+      });
     }
     return lista;
   }
@@ -745,7 +955,9 @@ export class Rede {
       d.yaw = e.yaw;
       d.pitch = e.pitch;
     } else {
-      this.dadosJogadores.set(cli.apelido, { pos: [e.x, e.y, e.z], yaw: e.yaw, pitch: e.pitch, inventario: null });
+      this.dadosJogadores.set(cli.apelido, {
+        pos: [e.x, e.y, e.z], yaw: e.yaw, pitch: e.pitch, inventario: null, equipamento: null,
+      });
     }
   }
 
@@ -774,14 +986,17 @@ export class Rede {
     }
   }
 
-  /** Anfitrião: dados dos visitantes para o save ({ [apelido]: { pos, yaw, pitch, inventario } }) */
+  /** Anfitrião: dados dos visitantes para o save ({ [apelido]: { pos, yaw, pitch, inventario, equipamento } }) */
   exportarDadosJogadores() {
     // Quem está online agora: atualiza a posição antes de salvar
     for (const c of this.clientes.values()) if (c.pronto) this._guardarPosicao(c);
     // Objeto sem "protótipo": um apelido como "__proto__" vira só mais uma chave
     const obj = Object.create(null);
     for (const [apelido, d] of this.dadosJogadores) {
-      obj[apelido] = { pos: d.pos.slice(), yaw: d.yaw, pitch: d.pitch, inventario: d.inventario };
+      obj[apelido] = {
+        pos: d.pos.slice(), yaw: d.yaw, pitch: d.pitch,
+        inventario: d.inventario, equipamento: d.equipamento ?? null,
+      };
     }
     return obj;
   }
@@ -908,6 +1123,12 @@ export class Rede {
         case 'hora':
           if (ehNumero(msg.hora)) this._sincronizarHora(msg.hora);
           return;
+        case 'itemNovo': this._itemNovoDoAnfitriao(msg); return;
+        case 'itemRemovido': this._itemRemovidoDoAnfitriao(msg); return;
+        case 'ganhou':
+          if (this.ligado && itemValido(msg.item) && qtdValida(msg.qtd)) this._receberItem(msg.item, msg.qtd);
+          return;
+        case 'aparencia': this._aparenciaDoAnfitriao(msg); return;
         case 'tchau':
           if (this._entrada) this._entrada.falhar(erroRede('O anfitrião fechou a sala.', 'tchau'));
           else this._perdeuAnfitriao();
@@ -949,7 +1170,18 @@ export class Rede {
           anfitriao: j.anfitriao === true,
           estado,
           temEstado: lerEstado(j.estado, estado),
+          aparencia: limparAparencia(j.aparencia),
         });
+      }
+    }
+
+    // Itens que já estão no chão (criados de verdade em ligar, quando o mundo existir)
+    this._itensPendentes.clear();
+    if (Array.isArray(msg.itensChao)) {
+      for (const d of msg.itensChao.slice(0, (CONFIG.MAX_ITENS_CHAO ?? 256) * 2)) {
+        if (!d || typeof d !== 'object' || !Array.isArray(d.pos) || d.pos.length !== 3) continue;
+        const it = lerItemNovo({ id: d.id, item: d.item, qtd: d.qtd, x: d.pos[0], y: d.pos[1], z: d.pos[2] });
+        if (it) this._itensPendentes.set(it.id, it);
       }
     }
 
@@ -1004,7 +1236,7 @@ export class Rede {
     }
     this.jogadores.set(this.meuId, {
       id: this.meuId, apelido: this.apelido, cores: this.cores, anfitriao: false,
-      estado: novoEstado(), temEstado: false,
+      estado: novoEstado(), temEstado: false, aparencia: null,
     });
 
     this._entrada.concluir({
@@ -1065,11 +1297,54 @@ export class Rede {
     if (typeof id !== 'string' || id.length > 100 || id === this.meuId) return;
     const apelido = limparApelido(msg.apelido);
     const cores = limparCores(msg.cores);
-    this.jogadores.set(id, { id, apelido, cores, anfitriao: false, estado: novoEstado(), temEstado: false });
+    this.jogadores.set(id, {
+      id, apelido, cores, anfitriao: false, estado: novoEstado(), temEstado: false, aparencia: null,
+    });
     if (!this.ligado) return;
     this.remotos.adicionar(id, apelido, cores);
     this.ui.mostrarMensagem(apelido + ' entrou no mundo!');
     this._avisarListaMudou();
+  }
+
+  /** A aparência de outro jogador mudou (o anfitrião repassou) */
+  _aparenciaDoAnfitriao(msg) {
+    const id = msg.id;
+    if (typeof id !== 'string' || id === this.meuId) return;
+    const j = this.jogadores.get(id);
+    const ap = limparAparencia(msg.ap);
+    if (!j || !ap) return;
+    j.aparencia = ap;
+    if (this.ligado) this._aplicarAparenciaRemota(id, ap);
+  }
+
+  /** Mostra a aparência no boneco de outro jogador (se o boneco souber fazer isso) */
+  _aplicarAparenciaRemota(id, ap) {
+    const r = this.remotos;
+    if (!r || typeof r.definirAparencia !== 'function') return;
+    try {
+      r.definirAparencia(id, ap);
+    } catch (e) {
+      console.warn('Hackraft: não deu para mostrar a aparência de', id, e);
+    }
+  }
+
+  /** O anfitrião pôs um item no chão */
+  _itemNovoDoAnfitriao(msg) {
+    const d = lerItemNovo(msg);
+    if (!d) return;
+    if (!this.ligado || !this.itensChao) {
+      // O mundo ainda está sendo montado: cria depois, em ligar()
+      if (this._itensPendentes.size < 2000) this._itensPendentes.set(d.id, d);
+      return;
+    }
+    this.itensChao.criar(d.id, d.item, d.qtd, d.x, d.y, d.z, d.vx, d.vy, d.vz, d.de === this.meuId);
+  }
+
+  /** O anfitrião tirou um item do chão (alguém pegou ou o tempo acabou) */
+  _itemRemovidoDoAnfitriao(msg) {
+    if (!idItemValido(msg.id)) return;
+    if (!this.ligado || !this.itensChao) this._itensPendentes.delete(msg.id);
+    else this.itensChao.remover(msg.id);
   }
 
   _alguemSaiu(msg) {
@@ -1130,6 +1405,7 @@ export class Rede {
       yaw: s.yaw,
       pitch: s.pitch,
       inventario: this.inventario.serializar(),
+      equipamento: this.equipamento ? this.equipamento.serializar() : null,
     });
   }
 
@@ -1137,14 +1413,32 @@ export class Rede {
   // Começar a sincronizar (depois que o mundo existe)
   // ------------------------------------------------------------------
 
-  ligar({ mundo, ceu, jogador, inventario, remotos, ui }) {
+  /**
+   * @param pecas { mundo, ceu, jogador, inventario, remotos, ui,
+   *                equipamento, itensChao, aoPegarItem }
+   *   `aoPegarItem(item, qtd)` (opcional) é chamada quando o jogador local
+   *   ganha um item do chão (o main toca um som).
+   */
+  ligar({ mundo, ceu, jogador, inventario, remotos, ui, equipamento = null, itensChao = null, aoPegarItem = null }) {
     this.mundo = mundo;
     this.ceu = ceu;
     this.jogador = jogador;
     this.inventario = inventario;
     this.remotos = remotos;
     this.ui = ui;
+    this.equipamento = equipamento;
+    this.itensChao = itensChao;
+    this._aoPegarItem = aoPegarItem;
     this.ligado = true;
+
+    // Itens no chão: quem manda é o anfitrião (ou quem joga sozinho).
+    // O cliente só mostra; os itens somem quando o anfitrião avisa.
+    if (itensChao) {
+      itensChao.autoridade = this.modo !== 'cliente';
+      itensChao.aoSumir = this.modo === 'anfitriao'
+        ? (id) => this._avisarTodos({ tipo: 'itemRemovido', id })
+        : null;
+    }
     if (this.modo === 'sozinho' || this.encerrado) return;
 
     // Toda mudança de bloco feita AQUI (origem 'local') vai para a rede.
@@ -1162,19 +1456,28 @@ export class Rede {
         }
       }
     } else {
-      // Cliente: cria os bonecos de quem já está na sala
+      // Cliente: cria os bonecos de quem já está na sala (com a roupa de cada um)
       for (const j of this.jogadores.values()) {
         if (j.id === this.meuId) continue;
         remotos.adicionar(j.id, j.apelido, j.cores);
+        if (j.aparencia) this._aplicarAparenciaRemota(j.id, j.aparencia);
         if (j.temEstado) remotos.receberEstado(j.id, j.estado);
       }
-      // Blocos e hora que chegaram durante a montagem do mundo
+      // Blocos, itens e hora que chegaram durante a montagem do mundo
       for (const b of this._blocosAntesDeLigar) this._blocoDoAnfitriao({ x: b[0], y: b[1], z: b[2], id: b[3], de: b[4] });
       this._blocosAntesDeLigar.length = 0;
+      if (itensChao) {
+        for (const d of this._itensPendentes.values()) {
+          itensChao.criar(d.id, d.item, d.qtd, d.x, d.y, d.z, d.vx, d.vy, d.vz, d.de === this.meuId);
+        }
+      }
+      this._itensPendentes.clear();
       if (this._horaPendente !== null) {
         this._sincronizarHora(this._horaPendente);
         this._horaPendente = null;
       }
+      // A minha aparência vai para os outros no primeiro atualizar()
+      if (this.aparencia) this._aparenciaPendente = true;
 
       // Aba escondida: manda o estado (no celular a aba pode ser fechada depois sem aviso)
       this._aoMudarVisibilidade = () => {
@@ -1234,6 +1537,135 @@ export class Rede {
   }
 
   // ------------------------------------------------------------------
+  // Aparência (Fase 3)
+  // ------------------------------------------------------------------
+
+  /**
+   * Guarda a minha aparência completa ({ cores, ...equipamento.aparencia() })
+   * e manda para os outros. O envio sai no próximo atualizar(), no máximo
+   * ~4 vezes por segundo (se mudar várias vezes seguidas, vai só a última).
+   */
+  enviarAparencia(ap) {
+    const limpa = limparAparencia(ap);
+    if (!limpa) return;
+    this.aparencia = limpa;
+    this._aparenciaPendente = true;
+    // Cliente: o equipamento novo vai logo para o anfitrião guardar
+    if (this.modo === 'cliente' && this.ligado) this._estadoLogo = true;
+  }
+
+  _mandarAparencia() {
+    if (!this.aparencia) return;
+    if (this.modo === 'anfitriao') {
+      this._avisarTodos({ tipo: 'aparencia', id: this.meuId, ap: this.aparencia });
+    } else if (this.modo === 'cliente') {
+      this._enviar(this.conexaoAnfitriao, { tipo: 'aparencia', ap: this.aparencia });
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Itens no chão (Fase 3)
+  // ------------------------------------------------------------------
+
+  /** Meu id para marcar "fui eu que soltei" (no modo sozinho não há id do PeerJS) */
+  _idLocal() {
+    return this.meuId || 'local';
+  }
+
+  /**
+   * Solta um item no mundo (ele já deve ter saído do inventário).
+   * Sozinho/anfitrião: cria na hora. Cliente: pede ao anfitrião, que cria
+   * e avisa todos. Pilhas maiores que 64 vão em pedaços.
+   * Devolve false se não deu para soltar (dados inválidos ou sem conexão):
+   * nesse caso quem chamou deve devolver o item ao inventário.
+   */
+  soltarItem(item, qtd, x, y, z, vx = 0, vy = 0, vz = 0) {
+    if (!this.itensChao || !itemValido(item) || !Number.isInteger(qtd) || qtd < 1 || !posicaoValida(x, y, z)) {
+      return false;
+    }
+    vx = velocidadeItem(vx);
+    vy = velocidadeItem(vy);
+    vz = velocidadeItem(vz);
+    if (this.modo === 'cliente') {
+      const conn = this.conexaoAnfitriao;
+      if (this._caiu || this.encerrado || !conn || !conn.open) return false;
+      for (let resto = qtd; resto > 0; resto -= MAX_QTD_ITEM) {
+        this._enviar(conn, { tipo: 'soltar', item, qtd: Math.min(resto, MAX_QTD_ITEM), x, y, z, vx, vy, vz });
+      }
+      this._estadoLogo = true; // o anfitrião guarda o inventário novo logo
+      return true;
+    }
+    for (let resto = qtd; resto > 0; resto -= MAX_QTD_ITEM) {
+      this._criarItem(item, Math.min(resto, MAX_QTD_ITEM), x, y, z, vx, vy, vz, this._idLocal());
+    }
+    return true;
+  }
+
+  /**
+   * O jogador local encostou num item (chamado pelo ItensNoChao).
+   * Sozinho/anfitrião: pega na hora. Cliente: pede ao anfitrião.
+   */
+  pegarItem(entrada) {
+    if (!this.itensChao || !entrada || !this.inventario) return;
+    const cabe = Math.min(entrada.qtd, quantoCabe(this.inventario, entrada.item), MAX_QTD_ITEM);
+    if (cabe < 1) return;
+    if (this.modo === 'cliente') {
+      if (!this._caiu && !this.encerrado) {
+        this._enviar(this.conexaoAnfitriao, { tipo: 'pegar', id: entrada.id, qtd: cabe });
+      }
+      return;
+    }
+    const r = this._entregarItem(entrada.id, cabe);
+    if (r) this._receberItem(r.item, r.qtd);
+  }
+
+  /**
+   * (Só quem manda) Cria um item no chão e avisa os clientes.
+   * `de` = id de quem soltou ('' = ninguém em especial).
+   */
+  _criarItem(item, qtd, x, y, z, vx, vy, vz, de) {
+    const itens = this.itensChao;
+    if (!itens) return null;
+    const id = itens.novoId();
+    const e = itens.criar(id, item, qtd, x, y, z, vx, vy, vz, de === this._idLocal());
+    if (!e) return null;
+    this._avisarTodos({ tipo: 'itemNovo', id, item, qtd, x, y, z, vx: e.vx, vy: e.vy, vz: e.vz, de });
+    return e;
+  }
+
+  /**
+   * (Só quem manda) Tira até `maximo` unidades do item do chão. Se sobrar
+   * (o inventário de quem pegou encheu), o resto continua no chão, no
+   * mesmo lugar, como um item novo. Devolve { item, qtd } ou null.
+   */
+  _entregarItem(id, maximo) {
+    const itens = this.itensChao;
+    const e = itens && itens.obter(id);
+    if (!e) return null;
+    const dar = Math.min(e.qtd, maximo);
+    if (!(dar >= 1)) return null;
+    const { item, qtd, x, y, z } = e;
+    itens.remover(id);
+    this._avisarTodos({ tipo: 'itemRemovido', id });
+    if (qtd > dar) this._criarItem(item, qtd - dar, x, y, z, 0, 0, 0, '');
+    return { item, qtd: dar };
+  }
+
+  /** O jogador local ganhou um item do chão. O que não couber volta para o chão. */
+  _receberItem(item, qtd) {
+    if (!this.inventario) return;
+    const sobra = this.inventario.adicionar(item, qtd);
+    if (sobra > 0 && this.jogador) {
+      const p = this.jogador.posicao;
+      this.soltarItem(item, sobra, p.x, p.y + 0.5, p.z, 0, 1, 0);
+    }
+    if (this.modo === 'cliente') this._estadoLogo = true;
+    if (qtd > sobra && this._aoPegarItem) {
+      try { this._aoPegarItem(item, qtd - sobra); } catch (e) { console.error(e); }
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Blocos
   // ------------------------------------------------------------------
 
@@ -1254,20 +1686,13 @@ export class Rede {
 
   /**
    * Aplica um bloco que veio da rede e devolve o valor que ficou.
-   * Detalhe importante: se o bloco fica num chunk que NÃO está carregado
-   * aqui (o outro jogador está longe), o mundo não sabe qual era o bloco
-   * original e poderia ignorar a mudança (por exemplo, quebrar pedra = pôr
-   * ar, e "ar" é o que ele acha que já tem lá). Por isso geramos os dados
-   * desse chunk antes (sem malha, é rápido); ele é descartado sozinho
-   * quando ficar longe.
+   * (Se o chunk não estiver carregado aqui, o definirBloco gera os dados
+   * dele antes, então o obterBloco logo depois já sabe o valor certo.)
    */
   _aplicarBlocoDaRede(x, y, z, id) {
     const m = this.mundo;
-    const tam = CONFIG.TAMANHO_CHUNK;
-    const gera = typeof m._garantirDados === 'function';
-    if (gera) m._garantirDados(Math.floor(x / tam), Math.floor(z / tam));
     m.definirBloco(x, y, z, id, 'rede');
-    return gera ? m.obterBloco(x, y, z) : id;
+    return m.obterBloco(x, y, z);
   }
 
   // ------------------------------------------------------------------
@@ -1289,6 +1714,13 @@ export class Rede {
       this._enviarPosicao(false);
     }
 
+    // Aparência mudou: manda (no máximo ~4 vezes por segundo)
+    if (this._aparenciaPendente && agora - this._tempoAparencia >= 250) {
+      this._aparenciaPendente = false;
+      this._tempoAparencia = agora;
+      this._mandarAparencia();
+    }
+
     if (this.modo === 'anfitriao') {
       if (agora - this._tempoHora >= CONFIG.INTERVALO_HORA_S * 1000) {
         this._tempoHora = agora;
@@ -1297,9 +1729,15 @@ export class Rede {
           if (c.pronto) this._enviar(c.conn, this._msgHora);
         }
       }
-    } else if (agora - this._tempoEstado >= CONFIG.INTERVALO_ESTADO_S * 1000) {
-      this._tempoEstado = agora;
-      this._enviarMeuEstado();
+    } else {
+      // Normalmente a cada 10 s; depois de pegar/soltar um item, em ~1 s
+      // (para o anfitrião não ficar com um inventário velho guardado).
+      const intervalo = this._estadoLogo ? 1000 : CONFIG.INTERVALO_ESTADO_S * 1000;
+      if (agora - this._tempoEstado >= intervalo) {
+        this._tempoEstado = agora;
+        this._estadoLogo = false;
+        this._enviarMeuEstado();
+      }
     }
   }
 
