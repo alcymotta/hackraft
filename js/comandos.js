@@ -2,7 +2,7 @@
 // Hackraft - Comandos do chat (Fase 4)
 // ---------------------------------------------------------------------
 // registrarComandos(chat, ctx) cadastra: /ajuda /dia /noite /voar /tp
-// /casa /setcasa /dar /spawn /armageddon /hacker.
+// /casa /setcasa /criativo /dar /spawn /armageddon /hacker.
 // ctx = { jogador, ceu, rede, remotos, inventario, equipamento, hacker,
 //         mundo, meteoro, mudarHora(segundos), obterCasa(), definirCasa(pos) }
 // =====================================================================
@@ -88,6 +88,35 @@ export function registrarComandos(chat, ctx) {
       j.voando = !j.voando;
       if (j.voando) ok('Modo voo ligado (Espaço sobe, Shift desce)');
       else ok('Modo voo desligado');
+    },
+  });
+
+  // ----- /criativo -----
+  chat.registrarComando('criativo', {
+    uso: '/criativo',
+    ajuda: 'Liga ou desliga o modo criativo (blocos infinitos, voo e sem dano).',
+    executar() {
+      if (ctx.jogador.definirCriativo(!ctx.jogador.criativo)) {
+        ok('Modo criativo ligado: blocos infinitos, voo (Espaço/Shift) e sem dano');
+      } else {
+        ok('Modo criativo desligado');
+      }
+    },
+  });
+
+  // ----- /luavermelha -----
+  chat.registrarComando('luavermelha', {
+    uso: '/luavermelha',
+    ajuda: 'Chama (ou manda embora) a Lua Vermelha: noite com mais monstros e chance de chefão.',
+    executar() {
+      const rede = ctx.rede;
+      if (!rede || typeof rede.definirLuaVermelha !== 'function') { erro('A Lua Vermelha não está disponível.'); return; }
+      if (rede.modo === 'cliente') { erro('Só quem criou a sala pode chamar a Lua Vermelha.'); return; }
+      const ligar = !rede.luaVermelha;
+      // A Lua Vermelha só existe de noite: se for dia, vira noite primeiro
+      if (ligar && !ctx.ceu.ehNoite) ctx.mudarHora(CONFIG.DIA_SEGUNDOS + 10);
+      rede.definirLuaVermelha(ligar);
+      if (!ligar) ok('A Lua Vermelha foi embora.');
     },
   });
 

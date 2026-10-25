@@ -45,7 +45,12 @@ js/comandos.js      os comandos /dia, /noite, /voar, /tp, /casa, /setcasa, /dar,
 js/hacker.js        ModoHacker: efeitos de tela, letras Matrix, raio-X (Fase 4)
 js/powers.js        Poderes: cristais, HUD de poderes ativos, ataques de fogo/raio/gelo (Fase 5)
 js/particulas.js    Particulas: pedacinhos de bloco, brilhos, fogo, raio, gelo (Fase 5)
-js/mobs.js          (Fase 7) animais e monstros
+js/mobs.js          Mobs: animais, monstros, chefões, áreas especiais (Fases 7 e 8)
+js/modelos_mobs.js  modelos em blocos de todos os mobs e montarias
+js/forja.js         forja: fundir, forjar, melhorar, especiais (Fase 9)
+js/alfaiate.js      mesa do alfaiate: costurar e loja (Fase 10)
+js/minimapa.js      minimapa (tecla N)
+js/meteoro.js       /armageddon
 assets/textures/    PNGs opcionais que substituem as texturas geradas (ver texturas.json)
 assets/sounds/      sons opcionais (ver sons.json)
 CONTRATOS.md        APIs entre módulos, mensagens de rede e formato do save (por fase)
@@ -76,9 +81,9 @@ Os contratos (APIs de cada módulo, mensagens de rede, formato do save, decisõe
 - [x] Fase 5: minérios de poder
 - [x] Fase 6: baús e construção
 - [x] Fase 7: mobs
-- [ ] Fase 8: monstros estilo RPG
-- [ ] Fase 9: armas, armaduras, minérios e forja (em andamento: minérios, armas e forja prontos; falta ligar no jogo)
-- [ ] Fase 10: roupas como itens e camadas de equipamento
+- [x] Fase 8: monstros estilo RPG
+- [x] Fase 9: armas, armaduras, minérios e forja
+- [x] Fase 10: roupas como itens e camadas de equipamento (alfaiate)
 - [ ] Fase 11: montarias
 
 ## Pendências técnicas

@@ -186,20 +186,22 @@ function criarPincel(canvas, semente) {
 // ---------------------------------------------------------------------
 const recursos = new Map();
 
-function recursosDe(tipo) {
-  let r = recursos.get(tipo);
+// variante = qual pelagem/cor (só para tipos com def.variantes); cada uma tem a sua textura
+function recursosDe(tipo, variante = 0) {
+  const chave = variante ? tipo + '|' + variante : tipo;
+  let r = recursos.get(chave);
   if (r) return r;
   const def = MODELOS[tipo];
   const emp = empacotar(def.partes, def.largura || 64);
   const canvas = criarCanvas(emp.tw, emp.th);
-  def.pintar(criarPincel(canvas, def.semente || 1234), emp.regs);
+  def.pintar(criarPincel(canvas, (def.semente || 1234) + variante * 101), emp.regs, variante);
   const textura = new THREE.CanvasTexture(canvas);
   textura.magFilter = THREE.NearestFilter;
   textura.minFilter = THREE.NearestFilter;
   textura.generateMipmaps = false;
   textura.colorSpace = THREE.SRGBColorSpace;
   r = { def, canvas, textura, tw: emp.tw, th: emp.th, caixas: emp.caixas, geos: {} };
-  recursos.set(tipo, r);
+  recursos.set(chave, r);
   return r;
 }
 
@@ -215,8 +217,10 @@ const BARRA_W = 34, BARRA_H = 6;
 // ModeloMob: o objeto devolvido por criarModeloMob
 // ---------------------------------------------------------------------
 class ModeloMob {
-  constructor(tipo, def, rec) {
+  constructor(tipo, def, rec, opcoes = {}, variante = 0) {
     this.tipo = tipo;
+    this.opcoes = opcoes;
+    this.variante = variante;   // pelagem escolhida (0 nos tipos sem variantes)
     this._def = def;
     this._rec = rec;
     this._esc = def.esc;
@@ -227,6 +231,11 @@ class ModeloMob {
     this.grupo = new THREE.Group();
     this.raiz = new THREE.Group();
     this.grupo.add(this.raiz);
+
+    // Onde o jogador senta (só faz sentido nas montarias; as montarias reposicionam)
+    this.assento = new THREE.Object3D();
+    this.assento.position.set(0, def.altura * 0.7, 0);
+    this.raiz.add(this.assento);
 
     // Materiais da instância (a textura é compartilhada)
     // emissiveMap = a própria skin: o brilho extra da luz (tochas) mantém as cores do mob.
@@ -359,6 +368,58 @@ class ModeloMob {
     return m;
   }
 
+  /**
+   * Caixas só de cor (cada uma com a sua), unidas numa malha que RECEBE luz.
+   * Usado nos equipamentos (sela, armadura). itens = [[hex, w, h, d, x, y, z, rotX, rotY, rotZ], ...]
+   * em pixels do modelo. A geometria fica no cache do tipo.
+   */
+  mesclarCor(chave, pai, itens) {
+    const rec = this._rec;
+    const k = '$' + chave;
+    let geo = rec.geos[k];
+    if (!geo) {
+      const e = new THREE.Euler(), q = new THREE.Quaternion(), pos = new THREE.Vector3();
+      const um = new THREE.Vector3(1, 1, 1), mat4 = new THREE.Matrix4(), cor = new THREE.Color();
+      const lista = [];
+      for (const [hex, w, h, d, x, y, z, rx = 0, ry = 0, rz = 0] of itens) {
+        const g = new THREE.BoxGeometry(w * this._esc, h * this._esc, d * this._esc);
+        q.setFromEuler(e.set(rx, ry, rz));
+        pos.set(x * this._esc, y * this._esc, z * this._esc);
+        g.applyMatrix4(mat4.compose(pos, q, um));
+        cor.set(hex);
+        const n = g.attributes.position.count;
+        const cores = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) { cores[i * 3] = cor.r; cores[i * 3 + 1] = cor.g; cores[i * 3 + 2] = cor.b; }
+        g.setAttribute('color', new THREE.BufferAttribute(cores, 3));
+        lista.push(g);
+      }
+      geo = mergeGeometries(lista);
+      for (const g of lista) g.dispose();
+      rec.geos[k] = geo;
+    }
+    if (!this._matEquip) {
+      const mat = new THREE.MeshLambertMaterial({ vertexColors: true, emissive: 0x000000 });
+      mat.onBeforeCompile = (sh) => {
+        sh.uniforms.uFlash = this._uFlash;
+        // a emissão acompanha a cor de cada vértice (como a skin faz nos outros materiais)
+        sh.fragmentShader = 'uniform vec3 uFlash;\n' + sh.fragmentShader.replace(
+          '#include <emissivemap_fragment>',
+          '#include <emissivemap_fragment>\n  totalEmissiveRadiance *= diffuseColor.rgb;\n  totalEmissiveRadiance += uFlash;');
+      };
+      this._matEquip = mat;
+      this._materiais.push(mat);
+      this.definirLuz(this._luz);
+    }
+    const m = new THREE.Mesh(geo, this._matEquip);
+    pai.add(m);
+    return m;
+  }
+
+  /** Sela visível ou não (só as montarias têm; nos outros não faz nada) */
+  definirSela(_ligada) {}
+  /** Armadura de montaria: 'ferro' | 'ouro' | 'diamante' | null (só as montarias) */
+  definirArmaduraMontaria(_material) {}
+
   // --- animação -------------------------------------------------------
   /** Avança a animação. vel = velocidade horizontal (blocos/s). */
   animar(dt, vel = 0, estado = null) {
@@ -487,10 +548,9 @@ export const MODELOS = {};
 /** Registra um tipo novo (a Fase 8 usa isto para esqueleto, orcs, dragão, hidra...) */
 export function registrarModelo(tipo, def) {
   MODELOS[tipo] = def;
-  const antigo = recursos.get(tipo);
-  // Só esquece o cache: instâncias vivas guardam a referência e continuam com a textura
-  // e as geometrias antigas (não descartamos nada que ainda possa estar em uso).
-  if (antigo) recursos.delete(tipo);
+  // Só esquece o cache (todas as variantes): instâncias vivas guardam a referência e
+  // continuam com a textura e as geometrias antigas (não descartamos nada em uso).
+  for (const k of [...recursos.keys()]) if (k === tipo || k.startsWith(tipo + '|')) recursos.delete(k);
 }
 
 // ---------------------------------------------------------------------
@@ -724,11 +784,12 @@ function construirAranha(m) {
     m.mesclar('corpo', raiz, [['abdomen', 0, 9, 6], ['cabeca', 0, 8.5, -4]]);
     // 8 olhos que brilham (e, na gigante, manchas no dorso): uma malha só, cada caixa com sua cor
     const luzes = [];
+    const [olhoG, olhoP] = m._def.olhos || [0xff1a1a, 0xc01010];   // cores dos olhos (grande, pequeno)
     for (const s of [-1, 1]) {
-      luzes.push([0xff1a1a, 2, 2, 0.8, s * 1.6, 10.2, -8.3]);   // grandes
-      luzes.push([0xc01010, 1, 1, 0.8, s * 3.3, 10.4, -8.3]);
-      luzes.push([0xc01010, 1, 1, 0.8, s * 1.0, 8.2, -8.3]);
-      luzes.push([0xc01010, 1, 1, 0.8, s * 2.7, 8.2, -8.3]);
+      luzes.push([olhoG, 2, 2, 0.8, s * 1.6, 10.2, -8.3]);   // grandes
+      luzes.push([olhoP, 1, 1, 0.8, s * 3.3, 10.4, -8.3]);
+      luzes.push([olhoP, 1, 1, 0.8, s * 1.0, 8.2, -8.3]);
+      luzes.push([olhoP, 1, 1, 0.8, s * 2.7, 8.2, -8.3]);
     }
     if (m._def.gigante) {
       luzes.push([0xff2a4a, 3, 0.6, 3, 0, 14.2, 3]);
@@ -1551,16 +1612,653 @@ registrarModelo('hidra', {
   },
 });
 
+// =====================================================================
+// FASE 11: montarias (cavalo, lobo gigante, aranha montaria, filhote de
+// dragão) e o cachorro (pet). Todas têm sela e armadura visíveis.
+// =====================================================================
+
+// Cores da armadura de montaria por material: base, filete (brilho) e escura (faixas)
+const PALETA_ARMADURA = {
+  ferro: { base: '#9aa1aa', filete: '#d2d8df', escura: '#5d636b' },
+  ouro: { base: '#e6b422', filete: '#fff1a0', escura: '#a8780f' },
+  diamante: { base: '#3cd6d0', filete: '#b8fff7', escura: '#1b8c96' },
+};
+
+// Sela de couro com manta, encosto, pomo, abas e estribos de metal.
+// s = { y: topo do dorso, z: centro da sela, w: largura do corpo, d: comprimento da sela, ey: altura dos estribos }
+function itensSela(s) {
+  const { y, z, w, d, ey } = s;
+  const COURO = '#82522b', COURO2 = '#5a371b', MANTA = '#a33434', METAL = '#bcbcc4';
+  const L = [
+    [MANTA, w + 0.8, 0.8, d + 2.4, 0, y + 0.4, z],              // manta vermelha por baixo
+    [COURO, w * 0.7, 1.0, d, 0, y + 1.0, z],                     // assento
+    [COURO2, w * 0.7, 2.0, 1.2, 0, y + 1.6, z + d / 2],          // encosto
+    [COURO2, w * 0.28, 1.8, 1.2, 0, y + 1.5, z - d / 2],         // pomo da frente
+  ];
+  const ex = w / 2 + 0.9;
+  for (const sg of [-1, 1]) {
+    L.push([COURO2, 0.8, 3.2, d * 0.9, sg * (w / 2 + 0.4), y - 1.2, z]);   // aba lateral
+    const topo = y - 1.0, comp = topo - (ey + 0.6);
+    L.push([COURO, 0.5, comp, 0.7, sg * ex, topo - comp / 2, z]);          // correia
+    L.push([METAL, 1.4, 0.6, 2.4, sg * ex, ey + 0.3, z]);                  // base do estribo
+    L.push([METAL, 1.4, 2.0, 0.4, sg * ex, ey + 1.2, z - 1.1]);            // aro da frente
+    L.push([METAL, 1.4, 2.0, 0.4, sg * ex, ey + 1.2, z + 1.1]);            // aro de trás
+  }
+  return L;
+}
+
+// Manta de metal sobre o corpo: dorso, laterais com faixa e rebites, peitoral e traseira
+function itensArmaduraCorpo(c, pal) {
+  const { w, h, d, y, z } = c;
+  const xs = w / 2 + 0.4, topo = y + h / 2, cy = topo - h * 0.425;
+  const L = [[pal.base, w + 1.2, 0.5, d * 0.8, 0, topo + 0.25, z]];
+  for (const sg of [-1, 1]) {
+    L.push([pal.base, 0.8, h * 0.85, d * 0.92, sg * xs, cy, z]);                       // painel
+    L.push([pal.escura, 0.95, h * 0.18, d * 0.82, sg * (xs + 0.05), cy - h * 0.1, z]); // faixa
+    L.push([pal.filete, 1.0, 0.7, d * 0.92, sg * (xs + 0.05), topo - h * 0.85, z]);    // borda de baixo
+    L.push([pal.filete, 1.0, 0.6, d * 0.92, sg * (xs + 0.05), topo - 0.3, z]);         // borda de cima
+    for (let k = 0; k < 3; k++) L.push([pal.filete, 0.5, 0.5, 0.5, sg * (xs + 0.55), cy + h * 0.12, z + (k - 1) * d * 0.3]); // rebites
+  }
+  L.push([pal.base, w + 0.8, h * 0.8, 0.9, 0, topo - h * 0.4, z - d / 2 - 0.45]);      // peitoral
+  L.push([pal.filete, w * 0.3, h * 0.3, 0.5, 0, y + h * 0.1, z - d / 2 - 1.0]);        // brasão
+  L.push([pal.base, w + 0.8, h * 0.8, 0.9, 0, topo - h * 0.4, z + d / 2 + 0.45]);      // traseira
+  return L;
+}
+
+// Chanfro (proteção da cabeça): c = caixa da cabeça (centro x, y, z relativo ao pai)
+function itensArmaduraCabeca(c, pal) {
+  const { w, h, d, x, y, z } = c;
+  const L = [
+    [pal.base, w + 0.8, 0.8, d * 0.7, x, y + h / 2 + 0.4, z - d * 0.05],
+    [pal.filete, w * 0.3, 0.6, d * 0.72, x, y + h / 2 + 0.95, z - d * 0.05],
+  ];
+  for (const sg of [-1, 1]) {
+    L.push([pal.base, 0.7, h * 0.7, d * 0.62, x + sg * (w / 2 + 0.35), y + h * 0.1, z]);
+    L.push([pal.filete, 0.8, 0.5, d * 0.62, x + sg * (w / 2 + 0.4), y - h * 0.25, z]);
+    L.push([pal.filete, 0.5, 0.5, 0.5, x + sg * (w / 2 + 0.8), y + h * 0.15, z]);
+  }
+  return L;
+}
+
+// Bandas de metal empilhadas no pescoço (cavalo)
+function itensArmaduraPescoco(c, pal) {
+  const { w, h, d, x, y, z } = c;
+  const L = [];
+  for (let k = 0; k < 3; k++) {
+    const yy = y - h / 2 + (k + 0.5) * h / 3;
+    L.push([pal.base, w + 0.8, h / 3 - 0.5, d + 0.8, x, yy, z]);
+    L.push([pal.filete, w + 1.0, 0.4, d + 1.0, x, yy + h / 6 - 0.1, z]);
+  }
+  return L;
+}
+
+/**
+ * Liga a sela, a armadura e o assento ao modelo de uma montaria.
+ * cfg = { sela: {pai, y, z, w, d, ey}, corpo: {pai, w, h, d, y, z},
+ *         cabeca: {pai, w, h, d, x, y, z}, pescoco?: {pai, w, h, d, x, y, z} }
+ * Tudo em pixels do modelo. As peças só são criadas na primeira vez que são pedidas.
+ */
+function instalarEquipamento(m, cfg) {
+  const s = cfg.sela;
+  // o assento acompanha o pai da sela (balança junto com o tronco)
+  s.pai.add(m.assento);
+  m.assento.position.set(0, (s.y + 1.6) * m._esc, s.z * m._esc);
+  let sela = null;
+  m.definirSela = (ligada) => {
+    if (ligada && !sela) sela = m.mesclarCor('sela', s.pai, itensSela(s));
+    if (sela) sela.visible = !!ligada;
+  };
+  const feitas = {};       // material -> lista de malhas
+  let atual = null;
+  m.definirArmaduraMontaria = (material) => {
+    if (atual) for (const x of atual) x.visible = false;
+    atual = null;
+    const pal = PALETA_ARMADURA[material];
+    if (!pal) return;
+    if (!feitas[material]) {
+      const l = [m.mesclarCor('arm_' + material + '_corpo', cfg.corpo.pai, itensArmaduraCorpo(cfg.corpo, pal)),
+        m.mesclarCor('arm_' + material + '_cabeca', cfg.cabeca.pai, itensArmaduraCabeca(cfg.cabeca, pal))];
+      if (cfg.pescoco) l.push(m.mesclarCor('arm_' + material + '_pescoco', cfg.pescoco.pai, itensArmaduraPescoco(cfg.pescoco, pal)));
+      feitas[material] = l;
+    }
+    atual = feitas[material];
+    for (const x of atual) x.visible = true;
+  };
+}
+
+// Posição (índice i) na borda da frente de um lado da cabeça: a frente fica na
+// borda direita do lado +x e na borda esquerda do lado -x (layout da skin)
+const bordaFrente = (reg, direita, k) => (direita ? reg[2] - 1 - k : k);
+
+// ---------------------------------------------------------------------
+// CAVALO (1 pixel = 1/16 de bloco; ~1.65 de altura até as orelhas, ~2.1 de comprimento)
+// ---------------------------------------------------------------------
+const PELAGENS_CAVALO = [
+  { pelo: '#8a5630', sombra: '#6b4024', luz: '#a26c40', crina: '#22150d', perna: '#2a1a12', casco: '#1f1816', foc: '#4a3226', estrela: true, meia: false },
+  { pelo: '#5a3826', sombra: '#42281a', luz: '#704a34', crina: '#1c120b', perna: '#5a3826', casco: '#1f1816', foc: '#2e1e16', estrela: true, meia: true },
+  { pelo: '#eceae4', sombra: '#cac8c2', luz: '#ffffff', crina: '#bdbab3', perna: '#eceae4', casco: '#8a8076', foc: '#d8b0ae', estrela: false, meia: false },
+  { pelo: '#28262d', sombra: '#18171c', luz: '#3d3b46', crina: '#0c0c10', perna: '#28262d', casco: '#101012', foc: '#4a4048', estrela: false, meia: false },
+];
+
+registrarModelo('cavalo', {
+  esc: 1 / 16, altura: 1.65, raio: 0.6, meiaLargura: 0.38, passo: 2.4, semente: 2024,
+  variantes: 4, largura: 128, montaria: true,
+  partes: {
+    corpo: [10, 9, 24], pescoco: [5, 9, 6], cabeca: [5, 5, 10], orelha: [1, 3, 1],
+    crina: [1, 9, 2], franja: [1, 3, 2], perna: [4, 11, 4], rabo1: [3, 7, 3], rabo2: [4, 9, 4],
+  },
+  pintar(p, r, v) {
+    const c = PELAGENS_CAVALO[v % PELAGENS_CAVALO.length];
+    const BRANCO = '#ece8de';
+    // corpo: pelo com sombra na barriga e brilho no dorso
+    p.todas(r.corpo).forEach((g) => p.enche(g, c.pelo, 6));
+    p.enche(r.corpo.baixo, c.sombra, 4);
+    p.lados(r.corpo).forEach((g) => {
+      p.sombra(g, 0, 10); p.sombra(g, g[3] - 2, -8); p.sombra(g, g[3] - 1, -16);
+      p.pontos(g, 9, c.luz); p.pontos(g, 7, c.sombra);
+    });
+    // pescoço e cabeça
+    p.todas(r.pescoco).forEach((g) => p.enche(g, c.pelo, 6));
+    p.lados(r.pescoco).forEach((g) => p.pontos(g, 4, c.luz));
+    const h = r.cabeca;
+    p.todas(h).forEach((g) => p.enche(g, c.pelo, 5));
+    for (const [g, dir] of [[h.direita, true], [h.esquerda, false]]) {
+      for (let k = 0; k < 3; k++) for (let j = 1; j < g[3]; j++) p.pix(g, bordaFrente(g, dir, k), j, c.foc);   // focinho
+      p.pix(g, bordaFrente(g, dir, 5), 1, '#0b0708');                                                         // olho
+      p.pix(g, bordaFrente(g, dir, 5), 0, c.luz);
+      p.pix(g, bordaFrente(g, dir, 6), 1, c.sombra);
+    }
+    p.ret(h.frente, 0, 3, 5, 2, c.foc);
+    p.pix(h.frente, 1, 3, '#16100f'); p.pix(h.frente, 3, 3, '#16100f');                                      // narinas
+    if (c.estrela) {                                                                                         // listra branca no rosto
+      p.ret(h.topo, 2, 0, 1, h.topo[3], BRANCO);
+      p.ret(h.frente, 2, 0, 1, 3, BRANCO);
+    }
+    p.sombra(h.frente, 4, -12);
+    p.todas(r.orelha).forEach((g) => p.enche(g, c.pelo, 4));
+    p.pix(r.orelha.frente, 0, 1, c.foc);
+    // crina, franja e rabo
+    for (const nome of ['crina', 'franja', 'rabo1', 'rabo2']) {
+      p.todas(r[nome]).forEach((g) => { p.enche(g, c.crina, 7); p.pontos(g, 4, tom(c.crina, 1.5)); });
+    }
+    // pernas: pelagem, parte de baixo (variante), meia branca e casco escuro
+    p.todas(r.perna).forEach((g) => p.enche(g, c.pelo, 5));
+    p.lados(r.perna).forEach((g) => {
+      p.enche(g, c.perna, 5, 6, 8);
+      if (c.meia) p.enche(g, BRANCO, 4, 5, 8);
+      p.enche(g, c.casco, 3, 9, 10);
+      p.sombra(g, 0, -6); p.sombra(g, 5, -6);
+    });
+    p.enche(r.perna.baixo, c.casco, 3);
+    p.enche(r.perna.topo, c.sombra, 4);
+  },
+  construir(m) {
+    const raiz = m.raiz;
+    const tronco = m.pivo(raiz, 0, 0, 0);
+    m.parte('corpo', tronco, 0, 15.5, 0);
+    // pescoço inclinado para frente, com crina; cabeça presa na ponta
+    const pesc = m.pivo(tronco, 0, 18, -11);
+    pesc.rotation.x = -0.85;
+    m.mesclar('pescoco', pesc, [['pescoco', 0, 4.5, 0], ['crina', 0, 5, 4]]);
+    const cab = m.pivo(pesc, 0, 9, -0.5);
+    cab.rotation.x = -0.05;
+    m.mesclar('cabeca', cab, [
+      ['cabeca', 0, -0.5, -4], ['orelha', -1.8, 3.5, -0.5, 0, 0, 0.15], ['orelha', 1.8, 3.5, -0.5, 0, 0, -0.15],
+      ['franja', 0, 2.6, -1.8, 0.35, 0, 0],
+    ]);
+    // rabo (duas peças, balança)
+    const rabo = m.pivo(tronco, 0, 19, 12);
+    rabo.rotation.x = 0.35;
+    m.mesclar('rabo', rabo, [['rabo1', 0, -3, 1.5], ['rabo2', 0, -10, 2]]);
+    // 4 pernas: pivô no quadril
+    const patas = [];   // frente esq., frente dir., trás esq., trás dir.
+    for (const [x, z] of [[-3, -8], [3, -8], [-3, 8], [3, 8]]) {
+      const pv = m.pivo(raiz, x, 11, z);
+      m.parte('perna', pv, 0, -5.5, 0);
+      patas.push(pv);
+    }
+    instalarEquipamento(m, {
+      sela: { pai: tronco, y: 20, z: -1, w: 10, d: 8, ey: 9 },
+      corpo: { pai: tronco, w: 10, h: 9, d: 24, y: 15.5, z: 0 },
+      cabeca: { pai: cab, w: 5, h: 5, d: 10, x: 0, y: -0.5, z: -4 },
+      pescoco: { pai: pesc, w: 5, h: 9, d: 6, x: 0, y: 4.5, z: 0 },
+    });
+    // fases das pernas: trote (pares em diagonal) e galope (pares da frente e de trás juntos)
+    const TROTE = [0, Math.PI, Math.PI, 0], GALOPE = [0, 0.45, 2.7, 3.15];
+    return (dt, vel, est) => {
+      const gal = limitar((vel - 4.5) / 4, 0, 1);       // 0 = anda/trota, 1 = galope
+      const A = (0.5 + 0.45 * gal) * m.amp;
+      for (let i = 0; i < 4; i++) patas[i].rotation.x = Math.sin(m.fase + lerp(TROTE[i], GALOPE[i], gal)) * A;
+      tronco.position.y = Math.abs(Math.sin(m.fase)) * (0.012 + 0.03 * gal) * m.amp;
+      tronco.rotation.x = Math.sin(m.fase + 0.6) * 0.05 * gal;
+      pesc.rotation.x = -0.85 + Math.sin(m.fase * 2 + 1) * 0.05 * m.amp * (1 + gal) + Math.sin(m.tempo * 0.9) * 0.025 - (est.atacando ? 0.2 : 0);
+      cab.rotation.x = -0.05 + Math.sin(m.fase * 2) * 0.06 * m.amp;
+      rabo.rotation.x = 0.35 - gal * 0.7 * m.amp;
+      rabo.rotation.z = Math.sin(m.tempo * 2.6) * 0.18 + Math.sin(m.fase) * 0.1 * m.amp;
+    };
+  },
+});
+
+// ---------------------------------------------------------------------
+// LOBO GIGANTE (1 pixel = 1/16 de bloco; ~1.3 de altura, ~2.1 de comprimento)
+// ---------------------------------------------------------------------
+registrarModelo('lobo_gigante', {
+  esc: 1 / 16, altura: 1.32, raio: 0.55, meiaLargura: 0.3, passo: 2.2, semente: 8081, montaria: true,
+  partes: {
+    corpo: [9, 9, 14], pescoco: [8, 8, 5], cabeca: [7, 6, 5], focinho: [4, 3, 4], mandibula: [3, 1, 4],
+    orelha: [2, 3, 1], perna: [3, 9, 3], cola1: [3, 3, 6], cola2: [3, 3, 5],
+  },
+  pintar(p, r) {
+    const BASE = '#4b4e57', ESCURO = '#2f3138', CLARO = '#8a8d96', FELPA = '#6a6e78';
+    // corpo: cinza-escuro, faixa escura no dorso e barriga clara
+    p.todas(r.corpo).forEach((g) => { p.enche(g, BASE, 9); p.pontos(g, 12, FELPA); p.pontos(g, 8, ESCURO); });
+    p.ret(r.corpo.topo, 3, 0, 3, r.corpo.topo[3], ESCURO);
+    p.enche(r.corpo.baixo, CLARO, 6);
+    p.lados(r.corpo).forEach((g) => { p.enche(g, CLARO, 7, g[3] - 3); p.sombra(g, g[3] - 4, 8); p.sombra(g, 0, -8); });
+    // peitoral peludo (mais claro)
+    p.todas(r.pescoco).forEach((g) => { p.enche(g, FELPA, 9); p.pontos(g, 8, CLARO); });
+    p.enche(r.pescoco.frente, CLARO, 8, 3); p.enche(r.pescoco.baixo, CLARO, 6);
+    // cabeça: olhos amarelos pintados (e mais brilho por cima, em caixas)
+    const h = r.cabeca;
+    p.todas(h).forEach((g) => { p.enche(g, BASE, 8); p.pontos(g, 6, FELPA); });
+    p.ret(h.frente, 0, 0, 7, 1, ESCURO);
+    p.ret(h.frente, 1, 1, 2, 2, '#ffd820'); p.ret(h.frente, 4, 1, 2, 2, '#ffd820');
+    p.pix(h.frente, 2, 2, '#1a1408'); p.pix(h.frente, 4, 2, '#1a1408');
+    p.pontos(h.topo, 6, ESCURO);
+    p.todas(r.focinho).forEach((g) => p.enche(g, '#9a9da6', 6));
+    p.enche(r.focinho.topo, BASE, 6);
+    p.ret(r.focinho.frente, 1, 0, 2, 1, '#101012');                       // nariz
+    p.lados(r.focinho).forEach((g) => { p.pix(g, 0, 2, '#f0eee6'); p.pix(g, g[2] - 1, 2, '#f0eee6'); p.pix(g, 1, 2, '#f0eee6'); });  // dentes
+    p.pix(r.focinho.frente, 0, 2, '#f0eee6'); p.pix(r.focinho.frente, 2, 2, '#f0eee6');
+    p.todas(r.mandibula).forEach((g) => p.enche(g, '#8a8d96', 5));
+    p.enche(r.mandibula.topo, '#6a2a30', 3);                               // boca por dentro
+    p.todas(r.orelha).forEach((g) => p.enche(g, BASE, 6));
+    p.ret(r.orelha.frente, 0, 1, 2, 2, '#5a4048');                         // dentro da orelha
+    // pernas escuras com patinhas mais claras
+    p.todas(r.perna).forEach((g) => { p.enche(g, '#3a3c44', 7); });
+    p.lados(r.perna).forEach((g) => { p.enche(g, FELPA, 6, 0, 2); p.enche(g, '#2a2b31', 5, 7, 8); p.sombra(g, 6, -8); });
+    // cauda peluda, ponta mais escura
+    p.todas(r.cola1).forEach((g) => { p.enche(g, FELPA, 9); p.pontos(g, 6, CLARO); });
+    p.todas(r.cola2).forEach((g) => { p.enche(g, '#34363e', 8); p.pontos(g, 5, FELPA); });
+  },
+  construir(m) {
+    const raiz = m.raiz;
+    const tronco = m.pivo(raiz, 0, 0, 0);
+    m.mesclar('corpo', tronco, [['corpo', 0, 13.5, 0], ['pescoco', 0, 14.5, -8.5]]);
+    // cabeça: orelhas em pé, focinho e olhos que brilham; a mandíbula abre ao morder
+    const cab = m.pivo(tronco, 0, 15.5, -10.5);
+    m.mesclar('cabeca', cab, [
+      ['cabeca', 0, 1, -3.5], ['focinho', 0, -0.5, -7.5],
+      ['orelha', -2.4, 5, -1.8, 0, 0, 0.12], ['orelha', 2.4, 5, -1.8, 0, 0, -0.12],
+    ]);
+    m.mesclarBrilho('olhos', cab, [
+      [0xffd820, 1.8, 1.2, 0.6, -2, 2.6, -6.15], [0xffd820, 1.8, 1.2, 0.6, 2, 2.6, -6.15],
+      [0xfff7b0, 0.8, 0.6, 0.7, -2.3, 2.9, -6.2], [0xfff7b0, 0.8, 0.6, 0.7, 1.7, 2.9, -6.2],
+    ]);
+    const maxilar = m.pivo(cab, 0, -2, -5.5);
+    m.parte('mandibula', maxilar, 0, -0.5, -2);
+    // cauda: duas partes que balançam
+    const cauda = m.pivo(tronco, 0, 16.5, 7);
+    cauda.rotation.x = 0.8;
+    m.parte('cola1', cauda, 0, 0, 3);
+    const cauda2 = m.pivo(cauda, 0, 0, 6);
+    cauda2.rotation.x = 0.15;
+    m.parte('cola2', cauda2, 0, 0, 2.5);
+    const patas = [];
+    for (const [x, z] of [[-3, -5], [3, -5], [-3, 5], [3, 5]]) {
+      const pv = m.pivo(raiz, x, 9, z);
+      m.parte('perna', pv, 0, -4.5, 0);
+      patas.push(pv);
+    }
+    instalarEquipamento(m, {
+      sela: { pai: tronco, y: 18, z: -0.5, w: 9, d: 6, ey: 7 },
+      corpo: { pai: tronco, w: 9, h: 9, d: 14, y: 13.5, z: 0 },
+      cabeca: { pai: cab, w: 7, h: 6, d: 5, x: 0, y: 1, z: -3.5 },
+    });
+    const TROTE = [0, Math.PI, Math.PI, 0], GALOPE = [0, 0.5, 2.8, 3.3];
+    return (dt, vel, est) => {
+      const gal = limitar((vel - 4.5) / 4, 0, 1);
+      const A = (0.55 + 0.5 * gal) * m.amp;
+      for (let i = 0; i < 4; i++) patas[i].rotation.x = Math.sin(m.fase + lerp(TROTE[i], GALOPE[i], gal)) * A;
+      tronco.position.y = Math.abs(Math.sin(m.fase)) * (0.012 + 0.035 * gal) * m.amp;
+      tronco.rotation.x = Math.sin(m.fase + 0.6) * 0.07 * gal;
+      // mordida: a cabeça avança e a boca abre e fecha
+      const mordida = est.atacando ? 0.5 + 0.5 * Math.sin(m.tempo * 16) : 0;
+      cab.position.z = (-10.5 - 3.5 * mordida) * m._esc;
+      cab.rotation.x = Math.sin(m.fase * 2) * 0.05 * m.amp - 0.15 * mordida + Math.sin(m.tempo * 1.1) * 0.02;
+      maxilar.rotation.x = -0.75 * mordida - 0.04;
+      // cauda: pendurada parado, esticada para trás correndo
+      cauda.rotation.x = lerp(0.8, 0.25, gal * m.amp) + Math.sin(m.tempo * 3) * 0.05;
+      cauda.rotation.y = Math.sin(m.tempo * 2.4) * 0.15 + Math.sin(m.fase) * 0.2 * m.amp;
+      cauda2.rotation.y = Math.sin(m.tempo * 2.4 - 0.8) * 0.2;
+    };
+  },
+});
+
+// ---------------------------------------------------------------------
+// ARANHA MONTARIA (a aranha gigante domada: tom mais claro, sem manchas vermelhas,
+// olhos âmbar). Mesmo esqueleto e animação da aranha gigante.
+// ---------------------------------------------------------------------
+registrarModelo('aranha_montaria', {
+  esc: 1 / 8, altura: 1.8, raio: 1.4, meiaLargura: 0.62, passo: 4, semente: 779, montaria: true,
+  olhos: [0xffc030, 0xd88a10],
+  partes: MODELOS.aranha.partes,
+  pintar(p, r) {
+    const ESC = '#5c4b52', PELO = '#7e6c6a', FAIXA = '#c9a566';
+    // abdômen: marrom-acinzentado com listras de areia e pintinhas claras
+    p.todas(r.abdomen).forEach((g) => { p.enche(g, ESC, 9); p.pontos(g, 28, PELO); });
+    const t = r.abdomen.topo;
+    for (let j = 1; j < t[3]; j += 3) p.ret(t, 2, j, t[2] - 4, 1, FAIXA);
+    p.ret(t, 4, 0, 2, t[3], '#8a6c48');
+    p.enche(r.abdomen.baixo, '#8a7a76', 6);
+    p.lados(r.abdomen).forEach((g) => {
+      for (let i = 1; i < g[2]; i += 3) p.ret(g, i, 1, 1, g[3] - 3, '#6e5a56');
+      p.pontos(g, 6, FAIXA); p.sombra(g, g[3] - 1, -14);
+    });
+    // cabeça com presas
+    p.todas(r.cabeca).forEach((g) => { p.enche(g, '#6a585e', 8); p.pontos(g, 12, PELO); });
+    const f = r.cabeca.frente;
+    p.ret(f, 1, 5, 6, 2, '#2a1c20');
+    p.ret(f, 1, 5, 1, 3, '#efe6cf'); p.ret(f, 6, 5, 1, 3, '#efe6cf');
+    p.pix(f, 3, 0, FAIXA); p.pix(f, 4, 0, FAIXA);
+    // pernas com faixas de areia
+    p.todas(r.perna_sup).forEach((g) => { p.enche(g, '#51424a', 7); p.pontos(g, 3, PELO); });
+    p.todas(r.perna_inf).forEach((g) => { p.enche(g, '#5a4a52', 7); p.pontos(g, 4, PELO); });
+    p.lados(r.perna_inf).forEach((g) => { p.ret(g, 0, 3, g[2], 1, FAIXA); p.ret(g, 0, 7, g[2], 1, FAIXA); p.ret(g, 0, 10, g[2], 1, '#efe6cf'); });
+    p.lados(r.perna_sup).forEach((g) => p.ret(g, 3, 0, 1, g[3], FAIXA));
+  },
+  construir(m) {
+    const anim = construirAranha(m);
+    // cabeça e abdômen ficam fixos na raiz: a armadura vai direto nela
+    instalarEquipamento(m, {
+      sela: { pai: m.raiz, y: 14, z: 6, w: 10, d: 8, ey: 8 },
+      corpo: { pai: m.raiz, w: 10, h: 10, d: 12, y: 9, z: 6 },
+      cabeca: { pai: m.raiz, w: 8, h: 7, d: 8, x: 0, y: 8.5, z: -4 },
+    });
+    return anim;
+  },
+});
+
+// ---------------------------------------------------------------------
+// FILHOTE DE DRAGÃO (1 pixel = 1/16 de bloco; ~1.45 de altura, ~2.5 de comprimento)
+// Cabeça grande, olhos grandes, asinhas que batem quando está voando.
+// ---------------------------------------------------------------------
+// Escamas "macias" (para o filhote): o desenho é mais suave que o de p.escamas
+function suave(p, reg, cor, v = 6) {
+  p.enche(reg, cor, v);
+  const escura = tom(cor, 0.88), clara = tom(cor, 1.1);
+  for (let j = 0; j < reg[3]; j++) {
+    const lin = Math.floor(j / 3), off = (lin % 2) * 2;
+    if (j % 3 === 2) for (let i = 0; i < reg[2]; i++) p.pix(reg, i, j, escura);
+    else for (let i = off; i < reg[2]; i += 4) p.pix(reg, i, j, escura);
+    if (j % 3 === 0) for (let i = off + 1; i < reg[2]; i += 4) p.pix(reg, i, j, clara);
+  }
+}
+registrarModelo('filhote_dragao', {
+  esc: 1 / 16, altura: 1.45, raio: 0.65, meiaLargura: 0.4, passo: 2.8, semente: 5150, montaria: true,
+  largura: 128,
+  partes: {
+    corpo: [9, 9, 16], pescoco: [6, 6, 5], cabeca: [10, 9, 9], focinho: [6, 4, 3], chifre: [2, 4, 2],
+    pata: [4, 6, 4], rabo1: [5, 5, 8], rabo2: [3, 3, 8], asa: [10, 1, 9], osso: [10, 2, 2], espinho: [1, 2, 2],
+  },
+  pintar(p, r) {
+    const VERM = '#d8532a', VERM2 = '#b8401f', OURO = '#f0c040', OURO2 = '#d29a20', MEMB = '#f08a3a';
+    // corpo: escamas vermelho-alaranjadas, barriga dourada com faixas
+    p.todas(r.corpo).forEach((g) => suave(p, g, VERM, 7, 4, 3));
+    p.enche(r.corpo.baixo, OURO, 6);
+    p.lados(r.corpo).forEach((g) => {
+      p.enche(g, OURO, 6, g[3] - 4);
+      for (let j = g[3] - 4; j < g[3]; j += 2) p.ret(g, 0, j, g[2], 1, OURO2);
+      p.sombra(g, g[3] - 5, -14);
+    });
+    p.ret(r.corpo.frente, 0, 4, r.corpo.frente[2], 5, OURO);
+    // pescoço: dourado na frente
+    p.todas(r.pescoco).forEach((g) => suave(p, g, VERM, 6, 3, 3));
+    p.enche(r.pescoco.frente, OURO, 5); p.enche(r.pescoco.baixo, OURO, 5);
+    for (let j = 1; j < 6; j += 2) p.ret(r.pescoco.frente, 0, j, 6, 1, OURO2);
+    // cabeça grande e fofa
+    const h = r.cabeca;
+    p.todas(h).forEach((g) => suave(p, g, VERM, 6, 4, 3));
+    const f = h.frente;
+    // olhos grandes: âmbar com pupila e brilhinho
+    for (const x0 of [1, 6]) {
+      p.ret(f, x0, 2, 3, 3, '#f2b81c');
+      p.ret(f, x0 + 1, 2, 1, 3, '#1a0a10');
+      p.pix(f, x0, 2, '#ffffff');
+      p.pix(f, x0 + 2, 4, '#c27a10');
+    }
+    p.pix(f, 0, 6, '#ee7a74'); p.pix(f, 9, 6, '#ee7a74');                     // bochechas coradas
+    p.ret(f, 1, 1, 3, 1, VERM2); p.ret(f, 6, 1, 3, 1, VERM2);                 // sobrancelhas
+    for (const [g, dir] of [[h.direita, true], [h.esquerda, false]]) {
+      p.ret(g, bordaFrente(g, dir, 4), 2, 1, 3, '#f2b81c');                   // olho de lado
+      p.pix(g, bordaFrente(g, dir, 4), 3, '#1a0a10');
+    }
+    p.enche(h.baixo, OURO, 5);
+    p.todas(r.focinho).forEach((g) => suave(p, g, '#e0643a', 5, 3, 2));
+    const fo = r.focinho.frente;
+    p.pix(fo, 1, 1, '#7a2a18'); p.pix(fo, 4, 1, '#7a2a18');                   // narinas
+    p.ret(fo, 1, 3, 4, 1, '#8a2a1a'); p.pix(fo, 0, 2, '#8a2a1a'); p.pix(fo, 5, 2, '#8a2a1a'); // sorriso
+    p.pix(fo, 1, 3, '#fff6dc'); p.pix(fo, 4, 3, '#fff6dc');                   // dentinhos
+    p.enche(r.focinho.baixo, OURO, 5);
+    p.todas(r.chifre).forEach((g) => p.enche(g, '#f4e6b0', 6));
+    p.lados(r.chifre).forEach((g) => p.sombra(g, 0, -12));
+    // patas com garrinhas claras
+    p.todas(r.pata).forEach((g) => suave(p, g, VERM, 6, 3, 3));
+    p.lados(r.pata).forEach((g) => p.ret(g, 0, g[3] - 1, g[2], 1, '#f4e6b0'));
+    p.enche(r.pata.baixo, OURO2, 5);
+    // cauda: vermelha em cima e dourada embaixo
+    p.todas(r.rabo1).forEach((g) => suave(p, g, VERM, 6, 4, 3));
+    p.enche(r.rabo1.baixo, OURO, 5);
+    p.todas(r.rabo2).forEach((g) => suave(p, g, '#e0643a', 6, 3, 3));
+    p.enche(r.rabo2.baixo, OURO, 5);
+    // asas: membrana alaranjada com "dedos" mais escuros e osso vermelho
+    const t = r.asa.topo, b = r.asa.baixo;
+    for (const reg of [t, b]) {
+      p.enche(reg, MEMB, 8);
+      for (const x of [2, 5, 8]) p.linha(reg, 0, 0, x, reg[3] - 1, '#b04a20');
+      p.ret(reg, 0, reg[3] - 1, reg[2], 1, '#f5b04a');
+    }
+    p.lados(r.asa).forEach((g) => p.enche(g, '#c8602a', 6));
+    p.todas(r.osso).forEach((g) => p.enche(g, VERM2, 6));
+    p.todas(r.espinho).forEach((g) => p.enche(g, '#f4d070', 5));
+  },
+  construir(m) {
+    const raiz = m.raiz;
+    const tronco = m.pivo(raiz, 0, 0, 0);
+    // corpo, pescoço e espinhos do dorso (menos no lugar da sela) numa malha só
+    m.mesclar('tronco', tronco, [
+      ['corpo', 0, 10.5, 0], ['pescoco', 0, 13.5, -9.5],
+      ['espinho', 0, 16, 5.5], ['espinho', 0, 16, -6.8], ['espinho', 0, 15.5, 3.2, 0.3, 0, 0],
+    ]);
+    // cabeça grande: chifrinhos para trás e focinho com narinas
+    const cab = m.pivo(tronco, 0, 15, -10.5);
+    m.mesclar('cabeca', cab, [
+      ['cabeca', 0, 1.5, -3.5], ['focinho', 0, -0.5, -9.5],
+      ['chifre', -3, 8, -1, 0.5, 0, 0.25], ['chifre', 3, 8, -1, 0.5, 0, -0.25],
+    ]);
+    // cauda em duas partes, com uma chamininha na ponta
+    const rabo1 = m.pivo(tronco, 0, 11, 8);
+    rabo1.rotation.x = 0.15;
+    m.parte('rabo1', rabo1, 0, 0, 4);
+    m.parte('espinho', rabo1, 0, 3.5, 3);
+    const rabo2 = m.pivo(rabo1, 0, 0, 8);
+    rabo2.rotation.x = -0.4;
+    m.parte('rabo2', rabo2, 0, 0, 4);
+    m.parte('espinho', rabo2, 0, 2.5, 4);
+    const chama = m.caixaBrilho(rabo2, 0xffa820, 3, 3, 3, 0, 0, 9.5);
+    // asas: pivô no ombro, a membrana vai para trás e para o lado
+    const asas = [];
+    for (const s of [-1, 1]) {
+      const pv = m.pivo(tronco, s * 4.5, 14.8, -2);
+      m.mesclar(s < 0 ? 'asa_e' : 'asa_d', pv, [['asa', s * 5.5, 0, 3.5], ['osso', s * 5.5, 0.5, -0.8]]);
+      asas.push(pv);
+    }
+    // 4 patas curtinhas
+    const patas = [];
+    for (const [x, z] of [[-3.5, -5], [3.5, -5], [-3.5, 5.5], [3.5, 5.5]]) {
+      const pv = m.pivo(raiz, x, 6, z);
+      m.parte('pata', pv, 0, -3, 0);
+      patas.push(pv);
+    }
+    instalarEquipamento(m, {
+      sela: { pai: tronco, y: 15, z: 0, w: 9, d: 7, ey: 5 },
+      corpo: { pai: tronco, w: 9, h: 9, d: 16, y: 10.5, z: 0 },
+      cabeca: { pai: cab, w: 10, h: 9, d: 9, x: 0, y: 1.5, z: -3.5 },
+    });
+    const TROTE = [0, Math.PI, Math.PI, 0];
+    return (dt, vel, est) => {
+      const voando = !!est.voando;
+      // patas: andam em diagonal; voando ficam recolhidas
+      for (let i = 0; i < 4; i++) {
+        const ando = Math.sin(m.fase + TROTE[i]) * 0.7 * m.amp;
+        patas[i].rotation.x = voando ? (i < 2 ? 0.6 : -0.6) + Math.sin(m.tempo * 6 + i) * 0.08 : ando;
+      }
+      // asas: batem forte voando; paradas, balançam de leve (e mais ao andar)
+      const ang = voando
+        ? 0.25 + 0.85 * Math.sin(m.tempo * 13)
+        : 0.95 + Math.sin(m.tempo * 1.6) * 0.04 + m.amp * 0.1 * Math.sin(m.tempo * 9);
+      asas[0].rotation.z = -ang; asas[1].rotation.z = ang;
+      // asas dobradas (menores) quando está no chão; abertas por inteiro voando
+      m._abre = aproximar(m._abre === undefined ? 0 : m._abre, voando ? 1 : 0, dt * 8);
+      const aberta = m._abre;
+      for (const a of asas) a.scale.set(0.8 + 0.2 * aberta, 1, 0.55 + 0.45 * aberta);
+      // corpo: sobe e desce voando, balança ao andar
+      tronco.position.y = voando ? Math.sin(m.tempo * 6.5) * 0.06 + 0.1 : Math.abs(Math.sin(m.fase)) * 0.015 * m.amp;
+      tronco.rotation.x = voando ? 0.1 + Math.sin(m.tempo * 6.5 + 1) * 0.04 : 0;
+      cab.rotation.x = Math.sin(m.fase * 2 + 1) * 0.05 * m.amp + Math.sin(m.tempo * 1.3) * 0.03 + (est.atacando ? 0.3 * Math.sin(m.tempo * 14) : 0);
+      // cauda ondula; chama pisca
+      rabo1.rotation.y = Math.sin(m.tempo * 2.5) * 0.25;
+      rabo2.rotation.y = Math.sin(m.tempo * 2.5 - 1) * 0.4;
+      rabo1.rotation.x = voando ? -0.1 : 0.15;
+      chama.scale.setScalar((0.9 + 0.3 * Math.sin(m.tempo * 21)) * m._esc * 3);
+    };
+  },
+});
+
+// ---------------------------------------------------------------------
+// CACHORRO (pet; 1 pixel = 1/16 de bloco; ~0.72 de altura)
+// ---------------------------------------------------------------------
+const PELAGENS_CACHORRO = [
+  { pelo: '#c4843e', claro: '#ecd2a2', orelha: '#8e5a26', sombra: '#a46a2c', manchas: null },       // caramelo
+  { pelo: '#f2f0ea', claro: '#ffffff', orelha: '#5a3a24', sombra: '#d8d6d0', manchas: '#6a4428' },  // branco com manchas
+  { pelo: '#26262c', claro: '#b27a46', orelha: '#16161a', sombra: '#18181c', manchas: null },         // preto e fogo
+];
+
+registrarModelo('cachorro', {
+  esc: 1 / 16, altura: 0.72, raio: 0.32, meiaLargura: 0.22, passo: 4, semente: 303,
+  variantes: 3,
+  partes: {
+    corpo: [5, 5, 8], cabeca: [5, 5, 5], focinho: [3, 2, 2], orelha: [2, 3, 1], perna: [2, 4, 2],
+    rabo: [2, 2, 4], lingua: [1, 1, 3], coleira: [6, 2, 2],
+  },
+  pintar(p, r, v) {
+    const c = PELAGENS_CACHORRO[v % PELAGENS_CACHORRO.length];
+    // corpo com barriga e peito claros
+    p.todas(r.corpo).forEach((g) => p.enche(g, c.pelo, 7));
+    p.enche(r.corpo.baixo, c.claro, 5);
+    p.lados(r.corpo).forEach((g) => { p.enche(g, c.claro, 5, g[3] - 1); p.pontos(g, 4, c.sombra); });
+    p.enche(r.corpo.frente, c.pelo, 6); p.ret(r.corpo.frente, 1, 2, 3, 3, c.claro);
+    if (c.manchas) {
+      p.ret(r.corpo.topo, 1, 1, 3, 3, c.manchas); p.ret(r.corpo.topo, 2, 5, 3, 2, '#2e2a28');
+      p.lados(r.corpo).forEach((g) => p.ret(g, 2, 0, 3, 3, c.manchas));
+    }
+    // cabeça: olhos escuros, sobrancelhas claras (no cachorro preto, "de fogo")
+    const h = r.cabeca;
+    p.todas(h).forEach((g) => p.enche(g, c.pelo, 6));
+    p.pix(h.frente, 1, 2, '#17100e'); p.pix(h.frente, 3, 2, '#17100e');
+    for (const [g, dir] of [[h.direita, true], [h.esquerda, false]]) p.pix(g, bordaFrente(g, dir, 1), 2, '#17100e');   // olho de lado
+    p.pix(h.frente, 1, 1, v === 2 ? c.claro : c.pelo); p.pix(h.frente, 3, 1, v === 2 ? c.claro : c.pelo);
+    p.ret(h.frente, 1, 3, 3, 2, c.claro);
+    if (c.manchas) { p.ret(h.frente, 3, 0, 2, 3, c.manchas); p.pix(h.frente, 3, 2, '#17100e'); p.ret(h.topo, 3, 0, 2, 3, c.manchas); }
+    p.todas(r.focinho).forEach((g) => p.enche(g, c.claro, 5));
+    p.ret(r.focinho.frente, 1, 0, 1, 1, '#141012');                           // nariz
+    p.pix(r.focinho.frente, 0, 0, '#141012'); p.pix(r.focinho.frente, 2, 0, '#141012');
+    p.pix(r.focinho.topo, 1, 0, '#141012');
+    p.todas(r.orelha).forEach((g) => p.enche(g, c.orelha, 5));
+    // patas com pezinhos claros
+    p.todas(r.perna).forEach((g) => p.enche(g, c.pelo, 6));
+    p.lados(r.perna).forEach((g) => p.ret(g, 0, 3, g[2], 1, c.claro));
+    p.todas(r.rabo).forEach((g) => p.enche(g, c.pelo, 6));
+    p.enche(r.rabo.frente, c.claro, 4);
+    p.todas(r.lingua).forEach((g) => p.enche(g, '#e66a7a', 6));
+    // coleira vermelha com plaquinha dourada
+    p.todas(r.coleira).forEach((g) => p.enche(g, '#c42a2a', 6));
+    p.pix(r.coleira.frente, 2, 1, '#f2c830'); p.pix(r.coleira.frente, 3, 1, '#f2c830');
+  },
+  construir(m) {
+    const raiz = m.raiz;
+    const tronco = m.pivo(raiz, 0, 0, 0);
+    m.parte('corpo', tronco, 0, 6.5, 0);
+    // cabeça (pescoço no pivô): orelhas caídas, focinho e coleira juntos
+    const cab = m.pivo(tronco, 0, 9, -5);
+    m.mesclar('cabeca', cab, [
+      ['cabeca', 0, 0, -2], ['focinho', 0, -1.2, -5.5],
+      ['orelha', -3.2, 0.8, -1.2, 0, 0, -0.3], ['orelha', 3.2, 0.8, -1.2, 0, 0, 0.3],
+      ['coleira', 0, -1.7, 0.6],
+    ]);
+    const lingua = m.parte('lingua', cab, 0, -2.6, -5.8);
+    lingua.visible = false;
+    // rabinho levantado, abana de um lado para o outro
+    const rabo = m.pivo(tronco, 0, 8.5, 4);
+    rabo.rotation.x = -0.9;
+    m.parte('rabo', rabo, 0, 0, 2);
+    const patas = [];
+    for (const [x, z] of [[-1.5, -3], [1.5, -3], [-1.5, 3], [1.5, 3]]) {
+      const pv = m.pivo(raiz, x, 4, z);
+      m.parte('perna', pv, 0, -2, 0);
+      patas.push(pv);
+    }
+    const TROTE = [0, Math.PI, Math.PI, 0], GALOPE = [0, 0.5, 2.8, 3.3];
+    return (dt, vel, est) => {
+      const gal = limitar((vel - 2.5) / 3, 0, 1);
+      const A = (0.6 + 0.4 * gal) * m.amp;
+      for (let i = 0; i < 4; i++) patas[i].rotation.x = Math.sin(m.fase + lerp(TROTE[i], GALOPE[i], gal)) * A;
+      // bote: salta para frente com as patas da frente esticadas
+      if (est.atacando) {
+        const s = 0.5 + 0.5 * Math.sin(m.tempo * 12);
+        tronco.position.y = s * 0.12;
+        tronco.position.z = -s * 2.5 * m._esc;
+        tronco.rotation.x = s * 0.3;
+        patas[0].rotation.x = patas[1].rotation.x = -0.9 * s;
+        cab.rotation.x = -0.25 * s;
+      } else {
+        tronco.position.y = Math.abs(Math.sin(m.fase)) * (0.01 + 0.03 * gal) * m.amp;
+        tronco.position.z = 0;
+        tronco.rotation.x = Math.sin(m.fase + 0.6) * 0.06 * gal;
+        cab.rotation.x = Math.sin(m.fase * 2) * 0.05 * m.amp + Math.sin(m.tempo * 1.4) * 0.02;
+      }
+      // rabo: abana rápido parado (alegre) e mais curto correndo
+      const parado = 1 - m.amp;
+      rabo.rotation.y = Math.sin(m.tempo * (14 + 6 * m.amp)) * (0.2 + 0.55 * parado);
+      rabo.rotation.x = -0.9 + gal * 0.35;
+      // língua de fora ao correr, ofegando
+      lingua.visible = m.amp > 0.55 && vel > 2.5;
+      if (lingua.visible) lingua.scale.z = 0.8 + 0.3 * Math.sin(m.tempo * 18);
+    };
+  },
+});
+
 // ---------------------------------------------------------------------
 // API pública
 // ---------------------------------------------------------------------
 /**
  * Cria o modelo de um mob.
- * Devolve { grupo, altura, raio, animar(dt, vel, estado), piscarDano(),
- *           morrer(t0a1), definirLuz(v), definirVida(frac), dispose() }.
+ * opcoes (opcional): { variante } escolhe a pelagem dos tipos que têm variantes
+ * (cavalo: 0 marrom, 1 castanho escuro, 2 branco, 3 preto; cachorro: 0 caramelo,
+ * 1 branco com manchas, 2 preto). Sem `variante`, é sorteada.
+ * Devolve { grupo, altura, raio, variante, assento, animar(dt, vel, estado), piscarDano(),
+ *           morrer(t0a1), definirLuz(v), definirVida(frac), definirSela(bool),
+ *           definirArmaduraMontaria('ferro'|'ouro'|'diamante'|null), dispose() }.
+ * definirSela, definirArmaduraMontaria e assento só têm efeito nas montarias.
  */
-export function criarModeloMob(tipo) {
+export function criarModeloMob(tipo, opcoes = {}) {
   const def = MODELOS[tipo];
   if (!def) throw new Error('Modelo de mob desconhecido: ' + tipo);
-  return new ModeloMob(tipo, def, recursosDe(tipo));
+  opcoes = opcoes || {};
+  let variante = 0;
+  if (def.variantes) {
+    const v = Number.isFinite(opcoes.variante) ? Math.floor(opcoes.variante) : Math.floor(Math.random() * def.variantes);
+    variante = ((v % def.variantes) + def.variantes) % def.variantes;
+  }
+  return new ModeloMob(tipo, def, recursosDe(tipo, variante), opcoes, variante);
 }

@@ -26,6 +26,8 @@
 //   e salvar), o baú ganha o bit 4 no estado (a frente do baú usa só os bits
 //   0 e 1). Isso vira uma modificação do mundo: vai no save e para os outros
 //   jogadores. Baú com modificação nunca mais vira tesouro.
+//   Se alguém QUEBRAR o baú de tesouro antes de abrir, o tesouro sorteado cai
+//   no chão do mesmo jeito (o evento do mundo diz que era o baú `original`).
 // =====================================================================
 
 import { CONFIG } from './config.js';
@@ -388,11 +390,35 @@ export class Baus {
 
   /** Ouvinte do mundo: algum bloco virou outra coisa? Se era um baú com registro, solta o conteúdo. */
   _aoAlterarBloco(ev) {
-    if (this.ehCliente || this.dados.size === 0) return;
+    if (this.ehCliente) return;
     if (ev.lote && Array.isArray(ev.lista)) {
+      if (this.dados.size === 0) return;
       for (const b of ev.lista) this._verificarBau(b[0], b[1], b[2], b[3]);
     } else {
+      // Baú de tesouro quebrado SEM ter sido aberto (Fase 8): o conteúdo
+      // ainda não existia; sorteia agora e solta no chão, como se estivesse dentro
+      if (ev.anterior === B.BAU && ev.id !== B.BAU && ev.original === true) this._tesouroQuebrado(ev);
+      if (this.dados.size === 0) return;
       this._verificarBau(ev.x, ev.y, ev.z, ev.id);
+    }
+  }
+
+  /**
+   * (Anfitrião/sozinho) O baú original de uma área especial foi quebrado
+   * antes de alguém abrir: cria o registro com o tesouro sorteado (o mesmo
+   * que sairia ao abrir) para o _verificarBau soltar tudo no chão.
+   */
+  _tesouroQuebrado(ev) {
+    const m = this.mundo;
+    if (typeof m.bauDeTesouro !== 'function' || (ev.estadoAnterior & BIT_TESOURO_ABERTO)) return;
+    const chave = chaveDe(ev.x, ev.y, ev.z);
+    if (this.dados.has(chave)) return; // já tem conteúdo de verdade
+    const area = m.bauDeTesouro(ev.x, ev.y, ev.z);
+    if (!area) return;
+    try {
+      this.dados.set(chave, sortearTesouro(m.semente, ev.x | 0, ev.y | 0, ev.z | 0, area.tipo));
+    } catch (e) {
+      console.warn('Hackraft: não deu para sortear o tesouro', e);
     }
   }
 

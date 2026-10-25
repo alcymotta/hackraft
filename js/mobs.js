@@ -72,7 +72,9 @@
 //   Aparecem quando alguém chega a menos de 40 blocos de um Ninho do Dragão
 //   ou de um Covil da Hidra (world.js), no máximo uma vez por dia de jogo
 //   (e não de novo enquanto estiver vivo). Na Lua Vermelha, 30% de chance de
-//   um chefão surgir perto de um jogador. Não contam nos limites, não somem
+//   um chefão surgir perto de um jogador; esse vai embora quando a lua acaba
+//   (de manhã), assim que ninguém estiver a menos de 32 blocos dele (a hidra
+//   não anda: ficaria para sempre do lado da casa). Não contam nos limites, não somem
 //   por distância (só se todos ficarem a mais de 128 blocos por 30 s) e não
 //   queimam no sol. A barra grande no topo (ui.mostrarBarraChefao) aparece
 //   para quem está a até 64 blocos. XP do chefão: todos a até 64 blocos.
@@ -164,6 +166,8 @@ const INTERVALO_SOM_DANO_PERIODICO = 3000; // ms: queimando/envenenado, no máxi
 const MODELOS_NO_POOL = 12;           // modelos guardados para reaproveitar, por tipo
 const RAIO_JOGADOR = (CONFIG.LARGURA_JOGADOR ?? 0.6) / 2;
 const ALTURA_JOGADOR = CONFIG.ALTURA_JOGADOR ?? 1.8;
+const ALTURA_OLHOS = CONFIG.ALTURA_OLHOS ?? 1.62;
+const DIST_PARTICULA_OLHOS = 1.6;     // partículas de projétil mais perto que isso dos meus olhos não são criadas
 const GRAVIDADE = CONFIG.GRAVIDADE;
 
 // Chefões (Fase 8)
@@ -173,6 +177,7 @@ const DIST_XP_CHEFAO = 64;            // todos até aqui ganham o XP do chefão
 const DIST_SUMIR_CHEFAO = 128;        // longe assim de todos por TEMPO_SUMIR_CHEFAO, o chefão vai embora
 const TEMPO_SUMIR_CHEFAO = 30;
 const CHANCE_CHEFAO_LUA = 0.3;        // chance de um chefão surgir numa noite de Lua Vermelha
+const DIST_LUTA_CHEFAO = 32;          // o chefão da Lua Vermelha só vai embora (de manhã) sem ninguém até aqui
 const RECUO_CHEFAO = 0.15;            // os chefões quase não são empurrados
 
 // Rede
@@ -423,8 +428,8 @@ const CURA_XAMA = 12;                 // vida devolvida pela cura do xamã
 
 // Partículas dos projéteis (reaproveitadas)
 const EF_RASTRO = {
-  orbe: { x: 0, y: 0, z: 0, qtd: 1, cores: ['#c070ff', '#e8b0ff', '#8a30ff'], velocidade: 0.3, espalhar: 0.15, gravidade: 0, vida: 0.45, tamanho: 0.16, aditivo: true },
-  bola_fogo: { x: 0, y: 0, z: 0, qtd: 2, cores: ['#ff9a2a', '#ffd23f', '#ff5a1a'], velocidade: 0.6, espalhar: 0.3, gravidade: -1, vida: 0.4, tamanho: 0.2, aditivo: true },
+  orbe: { x: 0, y: 0, z: 0, qtd: 1, cores: ['#a040ff', '#c070ff', '#7a20e0'], velocidade: 0.3, espalhar: 0.15, gravidade: 0, vida: 0.45, tamanho: 0.14, aditivo: false },
+  bola_fogo: { x: 0, y: 0, z: 0, qtd: 2, cores: ['#ff7a1a', '#ffb02a', '#e8401a'], velocidade: 0.6, espalhar: 0.3, gravidade: -1, vida: 0.4, tamanho: 0.18, aditivo: false },
   gelo: { x: 0, y: 0, z: 0, qtd: 1, cores: ['#ffffff', '#c8f4ff', '#8fe0ff'], velocidade: 0.3, espalhar: 0.15, gravidade: 1, vida: 0.5, tamanho: 0.1, aditivo: true },
   veneno: { x: 0, y: 0, z: 0, qtd: 1, cores: ['#5dd23a', '#8ae05a', '#3fa82a'], velocidade: 0.3, espalhar: 0.2, gravidade: 4, vida: 0.6, tamanho: 0.13, aditivo: false },
   cura: { x: 0, y: 0, z: 0, qtd: 1, cores: ['#9aff9a', '#e8ffe0', '#3fff7a'], velocidade: 0.3, espalhar: 0.15, gravidade: -0.5, vida: 0.5, tamanho: 0.12, aditivo: true },
@@ -439,26 +444,34 @@ const EF_IMPACTO = {
   cura: { x: 0, y: 0, z: 0, qtd: 20, cores: ['#9aff9a', '#e8ffe0', '#3fff7a'], velocidade: 1.4, vy: 1.2, espalhar: 0.8, gravidade: -0.5, vida: 0.9, tamanho: 0.14, aditivo: true },
 };
 const EF_FUMACA_FOGO = { x: 0, y: 0, z: 0, qtd: 6, cores: ['#5a5a5a', '#7a7a7a'], velocidade: 0.8, vy: 0.8, espalhar: 0.6, gravidade: -0.5, vida: 1.2, tamanho: 0.35, arrasto: 1 };
-const EF_SOPRO = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, qtd: 5, cores: ['#ff9a2a', '#ffd23f', '#ff5a1a', '#ffe8a0'], velocidade: 2.6, espalhar: 0.35, gravidade: -1.5, vida: 0.75, tamanho: 0.38, aditivo: true, arrasto: 0.4 };
+// O fogo do sopro tem duas partes: o "corpo" (cores normais, aparece bem até de
+// dia, contra o céu claro) e o brilho (aditivo, que acende de noite)
+const EF_SOPRO = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, qtd: 4, cores: ['#ff7a1a', '#ffb02a', '#e8401a', '#ffd23f'], velocidade: 2.6, espalhar: 0.35, gravidade: -1.5, vida: 0.75, tamanho: 0.34, aditivo: false, arrasto: 0.4 };
+const EF_SOPRO_BRILHO = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, qtd: 2, cores: ['#ffd23f', '#ffe8a0', '#ff9a2a'], velocidade: 2, espalhar: 0.25, gravidade: -1.5, vida: 0.6, tamanho: 0.3, aditivo: true, arrasto: 0.4 };
 const EF_NUVEM = { x: 0, y: 0, z: 0, qtd: 3, cores: ['#5dd23a', '#3fa82a', '#8ae05a', '#2f7a22'], velocidade: 0.3, vy: 0.35, espalhar: 0.4, gravidade: -0.3, vida: 1.3, tamanho: 0.5, aditivo: false, arrasto: 1 };
 
 // Malhas dos projéteis: geometrias e materiais criados uma vez só
 let RECURSOS_PROJ = null;
 function recursosProjeteis() {
   if (RECURSOS_PROJ) return RECURSOS_PROJ;
+  // A casca das bolas usa cor normal (aparece de dia, contra o céu claro); o
+  // miolo é aditivo (brilha de noite)
   const brilho = (cor, opacidade = 1) => new THREE.MeshBasicMaterial({
     color: cor, transparent: true, opacity: opacidade, blending: THREE.AdditiveBlending, depthWrite: false,
   });
+  const casca = (cor, opacidade = 0.9) => new THREE.MeshBasicMaterial({ color: cor, transparent: true, opacity: opacidade });
   RECURSOS_PROJ = {
     caixa: new THREE.BoxGeometry(1, 1, 1),
     bola: new THREE.IcosahedronGeometry(1, 1),
     cristal: new THREE.OctahedronGeometry(1, 0),
-    madeira: new THREE.MeshLambertMaterial({ color: 0x8a6a3a }),
-    ponta: new THREE.MeshLambertMaterial({ color: 0xa0a0a8 }),
-    pena: new THREE.MeshLambertMaterial({ color: 0xf0f0f0 }),
-    orbe: brilho(0xa040ff, 0.85), orbeNucleo: brilho(0xffe0ff),
-    fogo: brilho(0xff6a1a, 0.9), fogoNucleo: brilho(0xffe27a),
-    gelo: brilho(0x9aeaff, 0.85),
+    // A flecha tem um brilho próprio fraco (emissive): de noite, só com a luz
+    // da lua, ela ficaria preta contra o céu e ninguém conseguiria desviar
+    madeira: new THREE.MeshLambertMaterial({ color: 0xa07a44, emissive: 0x3a2a16 }),
+    ponta: new THREE.MeshLambertMaterial({ color: 0xb0b0b8, emissive: 0x4a4a52 }),
+    pena: new THREE.MeshLambertMaterial({ color: 0xf0f0f0, emissive: 0x8a8a8a }),
+    orbe: casca(0x8a2ae0, 0.8), orbeNucleo: brilho(0xffe0ff),
+    fogo: casca(0xff5a14, 0.92), fogoNucleo: brilho(0xffe27a),
+    gelo: casca(0x8fe4ff, 0.9),
     veneno: new THREE.MeshBasicMaterial({ color: 0x4fc22a, transparent: true, opacity: 0.85 }),
     cura: brilho(0x7aff9a, 0.9),
   };
@@ -478,18 +491,18 @@ function criarMalhaProjetil(tipo) {
   };
   switch (tipo) {
     case 'flecha':
-      peca(R.caixa, R.madeira, 0.05, 0.05, 0.7);
-      peca(R.caixa, R.ponta, 0.09, 0.09, 0.13, 0, 0, 0.4);
-      peca(R.caixa, R.pena, 0.02, 0.14, 0.15, 0, 0, -0.3);
-      peca(R.caixa, R.pena, 0.14, 0.02, 0.15, 0, 0, -0.3);
+      peca(R.caixa, R.madeira, 0.07, 0.07, 0.75);
+      peca(R.caixa, R.ponta, 0.11, 0.11, 0.14, 0, 0, 0.42);
+      peca(R.caixa, R.pena, 0.03, 0.18, 0.2, 0, 0, -0.32);
+      peca(R.caixa, R.pena, 0.18, 0.03, 0.2, 0, 0, -0.32);
       break;
     case 'orbe':
+      peca(R.bola, R.orbeNucleo, 0.16, 0.16, 0.16);
       peca(R.bola, R.orbe, 0.3, 0.3, 0.3);
-      peca(R.bola, R.orbeNucleo, 0.14, 0.14, 0.14);
       break;
     case 'bola_fogo':
+      peca(R.bola, R.fogoNucleo, 0.26, 0.26, 0.26);
       peca(R.bola, R.fogo, 0.42, 0.42, 0.42);
-      peca(R.bola, R.fogoNucleo, 0.22, 0.22, 0.22);
       break;
     case 'gelo':
       peca(R.cristal, R.gelo, 0.12, 0.12, 0.38);
@@ -1276,7 +1289,7 @@ export class Mobs {
       estado: 'passear', tEstado: 0,
       querX: 0, querZ: 0, querVel: 0, querVy: 0,
       alvoId: null, fugirX: 0, fugirZ: 0, tVisao: 0, tDesvio: 0, desvioLado: 1, proxLado: 1, tPreso: 0,
-      tDesvioTotal: 0, nDesvios: 0,
+      tDesvioTotal: 0, nDesvios: 0, eixoParede: 0, eixoDesvio: 0,
       noChao: false, naAgua: false, bateuParede: false, tSubindo: 0, tAtacando: 0,
       recarga: 0, queimar: 0, tQueimar: 0, queimadoPor: null, lento: 0, sol: 0, tSol: 0,
       veneno: 0, tVeneno: 0, envenenadoPor: null, tSemChunk: 0,
@@ -1285,7 +1298,7 @@ export class Mobs {
       // Fase 8: atirador, orc, xamã, dragão e hidra
       tMira: 0, tLado: 0, ladoAtirador: 0, tInvestida: 0, recargaInvestida: 0, recargaCura: 0,
       fase: 'circular', tFase: 0, tAtaqueEsp: 0, tPousar: 0, tDuracao: 0, angCirculo: 0,
-      casaX: 0, casaY: 0, casaZ: 0, areaChave: null, tLonge: 0,
+      casaX: 0, casaY: 0, casaZ: 0, areaChave: null, tLonge: 0, daLua: false,
       alvoX: 0, alvoY: 0, alvoZ: 0, acertou: false, pousoX: 0, pousoY: 0, pousoZ: 0, soprouNoChao: false,
       soproId: 0, tCab: new Float32Array(3), tCabAnim: new Float32Array(3),
       // desenho
@@ -1318,7 +1331,7 @@ export class Mobs {
     m.querX = 0; m.querZ = 0; m.querVel = 0; m.querVy = 0;
     m.alvoId = null; m.fugirX = x; m.fugirZ = z; m.tVisao = Math.random() * 0.5;
     m.tDesvio = 0; m.desvioLado = 1; m.proxLado = Math.random() < 0.5 ? 1 : -1; m.tPreso = 0;
-    m.tDesvioTotal = 0; m.nDesvios = 0;
+    m.tDesvioTotal = 0; m.nDesvios = 0; m.eixoParede = 0; m.eixoDesvio = 0;
     m.noChao = false; m.naAgua = false; m.bateuParede = false; m.tSubindo = 0; m.tAtacando = 0;
     m.recarga = 0; m.queimar = 0; m.tQueimar = 0; m.queimadoPor = null; m.lento = 0; m.sol = 0;
     m.veneno = 0; m.tVeneno = 0; m.envenenadoPor = null; m.tSemChunk = 0;
@@ -1330,7 +1343,7 @@ export class Mobs {
     m.recargaInvestida = 2 + Math.random() * 3; m.recargaCura = 2 + Math.random() * 3;
     m.fase = 'circular'; m.tFase = 0; m.tAtaqueEsp = 4 + Math.random() * 3; m.tPousar = 20 + Math.random() * 10;
     m.tDuracao = 0; m.angCirculo = Math.random() * Math.PI * 2;
-    m.casaX = x; m.casaY = this._topo(x, z); m.casaZ = z; m.areaChave = null; m.tLonge = 0;
+    m.casaX = x; m.casaY = this._topo(x, z); m.casaZ = z; m.areaChave = null; m.tLonge = 0; m.daLua = false;
     m.alvoX = x; m.alvoY = y; m.alvoZ = z; m.acertou = false;
     m.pousoX = x; m.pousoY = y; m.pousoZ = z; m.soprouNoChao = false; m.soproId = 0;
     m.tCab[0] = 1.2; m.tCab[1] = 2.4; m.tCab[2] = 3.6;
@@ -1804,6 +1817,30 @@ export class Mobs {
       this._chefaoLuaTentativas--;
       if (!lua || this._criarChefaoPerto(Math.random() < 0.5 ? 'dragao' : 'hidra')) this._chefaoLuaTentativas = 0;
     }
+    // Acabou a Lua Vermelha: o chefão que veio com ela vai embora (senão a
+    // hidra, que não anda, ficaria para sempre do lado da casa). Se alguém
+    // estiver lutando com ele (até 32 blocos), espera a luta acabar.
+    if (!lua) {
+      for (let i = 0; i < this.lista.length; i++) {
+        const m = this.lista[i];
+        if (!m.daLua || m.morrendo || m.descartar || this._jogadorVivoPerto(m.x, m.z, DIST_LUTA_CHEFAO)) continue;
+        this._removerMob(m, false);
+        this._avisar(m.def.nome + ' foi embora com a Lua Vermelha.');
+      }
+    }
+  }
+
+  /** Algum jogador vivo a menos de `dist` blocos (na horizontal) de (x, z)? */
+  _jogadorVivoPerto(x, z, dist) {
+    const d2 = dist * dist;
+    const jog = this._jogadores;
+    for (let i = 0; i < jog.length; i++) {
+      const j = jog[i];
+      if (!j || !j.posicao || j.morto) continue;
+      const dx = j.posicao.x - x, dz = j.posicao.z - z;
+      if (dx * dx + dz * dz < d2) return true;
+    }
+    return false;
   }
 
   /** (Lua Vermelha) Cria um chefão perto de um jogador vivo sorteado. Devolve o id ou null. */
@@ -1831,6 +1868,7 @@ export class Mobs {
       if (id) {
         const m = this.porId.get(id);
         m.casaX = x + 0.5; m.casaY = topo; m.casaZ = z + 0.5;
+        m.daLua = true; // vai embora quando a Lua Vermelha acabar
       }
       return id;
     }
@@ -2120,25 +2158,32 @@ export class Mobs {
    */
   _andarPara(m, dx, dz, vel, dt, quedaMax = QUEDA_MAX_PERSEGUIR) {
     let qx = dx, qz = dz;
-    if (m.tDesvio > 0) {
-      m.tDesvio -= dt;
-      m.tDesvioTotal += dt;
-      // Acabou o tempo, mas a parede continua na frente: mais um pouco de lado
-      if (m.tDesvio <= 0 && m.tDesvioTotal < 6 && this._paredeAlta(m, dx, dz)) m.tDesvio = 0.5;
-      const t = qx; qx = -qz * m.desvioLado; qz = t * m.desvioLado;
-      if (m.tPreso > 0.35) { // este lado também está fechado
-        m.desvioLado = -m.desvioLado;
-        m.proxLado = m.desvioLado;
-        m.tPreso = 0;
-      }
-    } else if (m.tPreso > 0.5) {
+    if (m.tPreso > 0.5 && m.tDesvio <= 0) {
+      // Começa a dar a volta. O lado é o mesmo da última vez (se deu certo);
+      // depois de 3 tentativas sem chegar, tenta o outro.
       m.nDesvios++;
       if (m.nDesvios > 3) { m.proxLado = -m.proxLado; m.nDesvios = 1; }
       m.tDesvio = TEMPO_DESVIO;
       m.tDesvioTotal = 0;
       m.desvioLado = m.proxLado;
+      m.eixoDesvio = m.eixoParede || (Math.abs(dx) > Math.abs(dz) ? EIXO_X : EIXO_Z);
       m.tPreso = 0;
-      const t = qx; qx = -qz * m.desvioLado; qz = t * m.desvioLado;
+    }
+    if (m.tDesvio > 0) {
+      m.tDesvio -= dt;
+      m.tDesvioTotal += dt;
+      // Anda reto ao longo da parede (as paredes de blocos são sempre retas em X ou em Z)
+      const emX = m.eixoDesvio === EIXO_Z; // a parede barrou o Z: anda em X
+      // Acabou o tempo, mas a parede continua na frente: mais um pouco de lado (até 6 s)
+      if (m.tDesvio <= 0 && m.tDesvioTotal < 6 &&
+          this._paredeAlta(m, emX ? 0 : Math.sign(dx), emX ? Math.sign(dz) : 0)) m.tDesvio = 0.5;
+      qx = emX ? m.desvioLado : 0;
+      qz = emX ? 0 : m.desvioLado;
+      if (m.tPreso > 0.35) { // este lado também está fechado: o outro
+        m.desvioLado = -m.desvioLado;
+        m.proxLado = m.desvioLado;
+        m.tPreso = 0;
+      }
     }
     if (!this._caminhoLivre(m, qx, qz, quedaMax)) {
       if (m.tDesvio > 0) m.desvioLado = -m.desvioLado; // buraco do lado: tenta o outro
@@ -2263,7 +2308,8 @@ export class Mobs {
       } else if ((m.noChao || m.naAgua) && this._degrauLivre(m)) {
         m.vy = m.naAgua ? 5.5 : VEL_PULO_MOB;
         m.noChao = false;
-      } else {
+      } else if (m.vx * m.vx + m.vz * m.vz < m.querVel * m.querVel * 0.12) {
+        // Só conta como "preso" se quase não andou (escorregar ao longo da parede não é estar preso)
         m.tPreso += dt;
       }
     } else if (m.tPreso > 0) {
@@ -2291,6 +2337,7 @@ export class Mobs {
   _mover(m, dt) {
     const r = m.def.raio, h = m.def.altura;
     m.bateuParede = false;
+    let eixo = 0; // em que eixo bateu na parede neste quadro (para "dar a volta" ao longo dela)
     const dx = m.vx * dt, dz = m.vz * dt, dy = m.vy * dt;
     if (dx !== 0) {
       const nx = m.x + dx;
@@ -2300,6 +2347,7 @@ export class Mobs {
         if (f === f) m.x = f; // (f === f é false só para NaN)
         m.vx = 0;
         m.bateuParede = true;
+        eixo = EIXO_X;
       }
     }
     if (dz !== 0) {
@@ -2310,8 +2358,10 @@ export class Mobs {
         if (f === f) m.z = f;
         m.vz = 0;
         m.bateuParede = true;
+        if (!eixo || Math.abs(m.querZ) > Math.abs(m.querX)) eixo = EIXO_Z;
       }
     }
+    if (eixo) m.eixoParede = eixo;
     m.noChao = false;
     if (dy !== 0) {
       const ny = m.y + dy;
@@ -2814,7 +2864,7 @@ export class Mobs {
     p.alvo = alvoJogador || null;
     p.alvoMob = alvoMob || 0;
     if (dano > 0) p.dano = dano;
-    if (this.rede && typeof this.rede.enviarProjetilMob === 'function') {
+    if (this.rede && this.rede.temClientes && typeof this.rede.enviarProjetilMob === 'function') {
       this.rede.enviarProjetilMob(id, tipo, [x, y, z], [vx, vy, vz],
         p.alvo || p.alvoMob ? { alvo: p.alvo, alvoMob: p.alvoMob } : null);
     }
@@ -3011,7 +3061,7 @@ export class Mobs {
       y = this._chaoEm(x, y, z);
       this._criarNuvem(x, y, z);
     }
-    if (this.rede && typeof this.rede.enviarProjetilFim === 'function') this.rede.enviarProjetilFim(p.id, [x, y, z]);
+    if (this.rede && this.rede.temClientes && typeof this.rede.enviarProjetilFim === 'function') this.rede.enviarProjetilFim(p.id, [x, y, z]);
     if (!def.sopro) this._efeitoFim(p.tipo, x, y, z);
     // o dragão deixa de soprar
     if (def.sopro && p.dono) {
@@ -3034,6 +3084,10 @@ export class Mobs {
   _efeitoFim(tipo, x, y, z) {
     const part = this.particulas;
     if (!part || typeof part.emitir !== 'function' || !this._pertoDeMim(x, y, z, 64)) return;
+    // Acertou a MIM (o ponto está colado nos meus olhos): as partículas
+    // nasceriam dentro da câmera e virariam quadrados enormes na tela. Os
+    // efeitos de tela (fogo, lento, veneno) e o piscar de dano já mostram o golpe.
+    if (this._pertoDosOlhos(x, y, z, DIST_PARTICULA_OLHOS)) return;
     const ef = EF_IMPACTO[tipo];
     if (!ef) return;
     ef.x = x; ef.y = y + (tipo === 'veneno' ? 0.3 : 0); ef.z = z;
@@ -3057,7 +3111,7 @@ export class Mobs {
     p.tRastro -= dt;
     if (p.tRastro > 0) return;
     p.tRastro = INTERVALO_RASTRO[p.tipo] || 0.05;
-    if (!this._pertoDeMim(p.x, p.y, p.z, 64)) return;
+    if (!this._pertoDeMim(p.x, p.y, p.z, 64) || this._pertoDosOlhos(p.x, p.y, p.z, DIST_PARTICULA_OLHOS)) return;
     ef.x = p.x; ef.y = p.y; ef.z = p.z;
     part.emitir(ef);
   }
@@ -3075,10 +3129,11 @@ export class Mobs {
     if (p.tRastro <= 0 && part && typeof part.emitir === 'function') {
       p.tRastro = 1 / 30;
       if (this._pertoDeMim(p.x, p.y, p.z, 80)) {
-        const e = EF_SOPRO;
-        e.x = p.x; e.y = p.y; e.z = p.z;
-        e.vx = p.vx * 12; e.vy = p.vy * 12; e.vz = p.vz * 12;
+        const e = EF_SOPRO, b = EF_SOPRO_BRILHO;
+        e.x = b.x = p.x; e.y = b.y = p.y; e.z = b.z = p.z;
+        e.vx = b.vx = p.vx * 12; e.vy = b.vy = p.vy * 12; e.vz = b.vz = p.vz * 12;
         part.emitir(e);
+        part.emitir(b);
       }
     }
     if (!this.autoridade) return;
@@ -3151,6 +3206,14 @@ export class Mobs {
         this._danoEmJogador(j, 1, c.x, c.y, c.z, 'veneno', 3);
       }
     }
+  }
+
+  /** O ponto está a até `dist` blocos dos olhos do meu jogador? (sem jogador local: não) */
+  _pertoDosOlhos(x, y, z, dist) {
+    const loc = this._local;
+    if (!loc) return false;
+    const dx = x - loc.posicao.x, dy = y - (loc.posicao.y + ALTURA_OLHOS), dz = z - loc.posicao.z;
+    return dx * dx + dy * dy + dz * dz <= dist * dist;
   }
 
   /** O ponto está a até `dist` blocos do meu jogador? (sem jogador local: sim) */
@@ -3289,6 +3352,9 @@ export class Mobs {
       if (m.modelo) m.modelo.definirVida(0);
       this._tocar(m, 'morte');
     } else {
+      // Chefão perto de mim sumiu sem morrer (ex.: a Lua Vermelha acabou): avisa,
+      // senão parece que ele desapareceu do nada
+      if (m.def.chefao && !m.descartar && m.distLocal < DIST_BARRA_CHEFAO) this._avisar(m.def.nome + ' foi embora.');
       m.descartar = true;
     }
   }

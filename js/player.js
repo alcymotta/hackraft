@@ -115,6 +115,8 @@ export class Jogador {
     this.naAgua = false;
     this.modoCamera = 'primeira';
     this.voando = false;               // modo voo (comando /voar): sem gravidade
+    this.criativo = false;             // modo criativo (comando /criativo): blocos infinitos, voo e sem dano
+    this._seloCriativo = null;         // selo "CRIATIVO" em cima da hotbar (criado na primeira vez)
 
     // Entrada
     this.teclas = {};                  // event.code → true se apertada
@@ -263,8 +265,13 @@ export class Jogador {
     // Já no teto de 40 de vida? Então este nível só deu força
     const teto = CONFIG.VIDA_MAX + CONFIG.VIDA_POR_NIVEL * (this._nivel - 1) > CONFIG.VIDA_MAX_NIVEIS;
     if (this.particulas && typeof this.particulas.emitir === 'function') {
+      // Em 1ª pessoa, a festa sai 1.8 bloco à frente dos olhos (no corpo, cobriria a tela)
+      const frente = this.modoCamera === 'primeira';
       this.particulas.emitir({
-        x: p.x, y: p.y + 1, z: p.z, qtd: 50, cores: ['#ffd23a', '#fff2a0', '#ffb300'],
+        x: frente ? p.x - Math.sin(this.yaw) * 1.8 : p.x,
+        y: frente ? p.y + CONFIG.ALTURA_OLHOS : p.y + 1,
+        z: frente ? p.z - Math.cos(this.yaw) * 1.8 : p.z,
+        qtd: 50, cores: ['#ffd23a', '#fff2a0', '#ffb300'],
         velocidade: 3.5, espalhar: 0.6, gravidade: -2, vida: 1.2, tamanho: 0.12, aditivo: true,
       });
     }
@@ -317,7 +324,8 @@ export class Jogador {
     // Entrar na água apaga o fogo
     if (e.fogo > 0 && this.naAgua) {
       e.fogo = 0;
-      if (this.particulas) {
+      // Em 1ª pessoa o vapor nasceria dentro da câmera (vira um quadrado cinza na tela)
+      if (this.particulas && this.modoCamera !== 'primeira') {
         this.particulas.emitir({
           x: this.posicao.x, y: this.posicao.y + 1, z: this.posicao.z, qtd: 12, cor: '#cccccc',
           velocidade: 1, espalhar: 0.4, gravidade: -1, vida: 0.8, tamanho: 0.12, aditivo: false,
@@ -343,7 +351,8 @@ export class Jogador {
 
     // Partículas: ~6 vezes por segundo
     this._tempoParticulasEfeito += dt;
-    if (this._tempoParticulasEfeito >= 0.16 && this.particulas) {
+    // Em 1ª pessoa não solta partículas no corpo (subiriam até a câmera); a tela já mostra o efeito
+    if (this._tempoParticulasEfeito >= 0.16 && this.particulas && this.modoCamera !== 'primeira') {
       this._tempoParticulasEfeito = 0;
       const p = this.posicao;
       if (e.veneno > 0) {
@@ -386,6 +395,7 @@ export class Jogador {
    * Devolve a vida que restou.
    */
   machucar(qtd, causa = null) {
+    if (this.criativo) return this.vida; // criativo: sem dano
     if (this.morto || !Number.isFinite(qtd) || qtd <= 0) return this.vida;
     this.vida = Math.max(0, this.vida - qtd);
     if (this.ui.sinalizarDano) this.ui.sinalizarDano();
@@ -986,7 +996,7 @@ export class Jogador {
         this.rachadura.visible = false;
       } else {
         // Poder roxo: quebra na hora (progresso = 1)
-        if (mods.quebraInstantanea) this.progresso = 1;
+        if (mods.quebraInstantanea || this.criativo) this.progresso = 1;
         else this.progresso += dt / Math.max(bloco.dureza, 0.01);
         // Som de golpe
         this.tempoGolpe -= dt;
@@ -1262,6 +1272,14 @@ export class Jogador {
     } else {
       this.mundo.definirBloco(alvo.x, alvo.y, alvo.z, B.AR);
     }
+    if (this.criativo) {
+      // Criativo: quebra sem dar o item (nem presente, nem drop extra)
+      if (bloco.som) this.som.quebrar(bloco.som);
+      if (this.particulas) this.particulas.explosaoBloco(alvo.x, alvo.y, alvo.z, idAnterior, this.texturas);
+      this._limparQuebra();
+      this.espera = CONFIG.ESPERA_APOS_QUEBRAR;
+      return;
+    }
     if (bloco.item !== null) {
       const sobrou = this.inventario.adicionar(bloco.item, 1);
       if (sobrou > 0) this.ui.mostrarMensagem('Inventário cheio!');
@@ -1386,7 +1404,7 @@ export class Jogador {
     }
 
     if (colocou) {
-      this.inventario.remover(this.inventario.selecionado, 1);
+      if (!this.criativo) this.inventario.remover(this.inventario.selecionado, 1); // criativo: blocos infinitos
       const tipo = BLOCOS[def.bloco].som;
       if (tipo) this.som.colocar(tipo);
       this.tempoColocar = CONFIG.INTERVALO_COLOCAR;
@@ -1405,6 +1423,39 @@ export class Jogador {
     this._yTopo = y;
   }
 
+  /** Liga ou desliga o modo criativo (comando /criativo). Devolve o novo estado. */
+  definirCriativo(ligado) {
+    this.criativo = !!ligado;
+    this.voando = this.criativo;       // ligar = voa; desligar = volta a andar
+    if (this.criativo) this._limparQuebra();
+    this._mostrarSeloCriativo(this.criativo);
+    return this.criativo;
+  }
+
+  /** Mostra ou esconde o selo "CRIATIVO" acima da hotbar (DOM próprio, só visual) */
+  _mostrarSeloCriativo(ver) {
+    if (typeof document === 'undefined') return;
+    if (!this._seloCriativo) {
+      if (!ver) return;
+      const estilo = document.createElement('style');
+      estilo.textContent = `
+        #selo-criativo {
+          position: fixed; left: 50%; transform: translateX(-50%); bottom: 142px;
+          padding: 2px 10px; background: rgba(0,0,0,0.55); border: 2px solid #000;
+          color: #ffd84a; font-family: var(--fonte-pixel, monospace); font-size: 10px;
+          letter-spacing: 2px; text-shadow: 2px 2px 0 #3f3f3f;
+          pointer-events: none; z-index: 6;
+        }`;
+      document.head.appendChild(estilo);
+      const el = document.createElement('div');
+      el.id = 'selo-criativo';
+      el.textContent = 'CRIATIVO';
+      document.body.appendChild(el);
+      this._seloCriativo = el;
+    }
+    this._seloCriativo.style.display = ver ? 'block' : 'none';
+  }
+
   serializar() {
     // Morto: salva a casa (ou nascimento) com a vida cheia, para não reabrir no lugar da morte
     if (this.morto && this.obterPosRenascer) {
@@ -1419,6 +1470,7 @@ export class Jogador {
       pitch: this.pitch,
       vida: this.vida,
       xpTotal: this.xpTotal,
+      criativo: this.criativo || undefined, // só entra no save quando ligado
     };
   }
 
@@ -1440,5 +1492,7 @@ export class Jogador {
       this.vida = this.vidaMax;
     }
     this.atualizarHud();
+    // Criativo salvo (saves antigos não têm: ficam desligados)
+    if (dados.criativo === true) this.definirCriativo(true);
   }
 }

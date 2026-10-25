@@ -92,6 +92,7 @@ export const CONFIG = {
   TEMPO_SEM_RESPOSTA_S: 20,      // sem nenhuma mensagem por esse tempo = a conexão caiu (aba travada, internet caiu)
   MODS_POR_LOTE: 1000,           // blocos mudados por mensagem ao mandar o mundo para quem entra (1000 = ~20 KB (5 inteiros por bloco), cabe numa mensagem só)
   ESPERA_AO_CAIR_S: 3,           // segundos mostrando o aviso antes de voltar ao início (cliente)
+  CHANCE_LUA_VERMELHA: 1 / 8,    // chance de cada noite ser de Lua Vermelha (Fase 8)
 
   // ----- Chat (Fase 4) -----
   CHAT_MAX_CARACTERES: 200,      // tamanho máximo de uma mensagem de chat (o resto é cortado)

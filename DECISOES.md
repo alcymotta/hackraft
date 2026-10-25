@@ -79,3 +79,13 @@ Desde a Fase 3, o Claude segue direto até a Fase 11 sem parar a cada fase, como
 - **Sela obrigatória:** toda montaria precisa de sela para montar, e a sela é feita de couro de orc.
 - **Veneno não mata:** o veneno para em 1 coração, como no Minecraft. O fogo e os ataques podem matar.
 - **XP e níveis antes dos chefões:** cada nível dá +1 coração (até 20) e +1 de força no golpe.
+
+## Extras (pedidos no fim)
+- **Pet:** um cachorrinho raro aparece de dia nas planícies. Ele é domado com 3 ossos, segue o dono e morde os monstros que atacarem o dono. Shift + botão direito faz ele sentar.
+- **/criativo:** blocos infinitos, quebra instantânea, voo e sem dano. A rocha-matriz continua inquebrável. Cada jogador tem o seu modo.
+- **Minimapa:** fica no canto superior direito e liga/desliga com a tecla **N**. Mostra você, o outro jogador e a sua casa.
+## Fase 8 (ajustes finais)
+- **Baú de tesouro:** quebrar o baú sem abrir solta o tesouro, para a criança não perder nada.
+- **Chefão da Lua Vermelha:** vai embora de manhã, para a hidra não ficar para sempre do lado da casa.
+- **Criativo:** no modo criativo, os monstros não deixam veneno, lentidão nem fogo.
+- **/luavermelha:** só quem criou a sala pode usar. Se for dia, vira noite.

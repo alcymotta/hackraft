@@ -638,3 +638,51 @@ Nomes: `espada_<material>`, `capacete_<material>` etc. Itens existentes continua
 ## Meteoro (/armageddon)
 - `js/meteoro.js`: `new Meteoro({ scene, mundo, particulas, jogador, rede, som, ui, obterAlvos })`; `invocar()` (comando), `cair(x, y, z, dono, yaw, hx, hz)`, `atualizar(dt)`.
 - Rede: efeito `{ tipo: 'meteoro', origem: [x, y, z do impacto], direcao: [dx, 0, dz] }`. Os outros jogadores só veem o cometa e sentem o impacto; quem usou o comando abre a cratera (blocos vão pela rede como qualquer `definirBlocos`) e machuca os mobs.
+
+**Fase 11, motor das montarias e do pet (mobs.js + rede + player + main):**
+- Tipos novos em `TIPOS_MOB`: `cavalo` (planícies de dia, grupos de 2–4, pacífico), `lobo_gigante` (florestas à noite, neutro: só ataca se apanhar, até ser domado), `aranha_montaria` (vem da aranha gigante domada), `filhote_dragao` (do ovo), `cachorro` (pet).
+- Cada mob tem os campos `dono` (apelido ou null), `nomeDono`, `sela`, `armaduraMontaria`, `vidaMontaria` e `domado`. Mob domado não some longe, não queima no sol e não é alvo dos outros mobs (exceto quando o lobo ou o cachorro estão atacando).
+- **Domar:**
+  - O jogador segura o item certo (`ITENS_DOMAR`) e clica com o botão direito no mob; o cliente pede ao anfitrião (`domar { id }`).
+  - Começa uma barra de "confiança" de 5 s, mostrada pela UI acima do mob ou perto da mira.
+  - Falha (e o item é gasto) se o mob levar dano ou o jogador se afastar mais de 4 blocos.
+  - A aranha gigante só pode ser domada abaixo de 30% de vida.
+  - Ao completar: `dono = apelido`, mensagem "Cavalo domado! Use uma sela e aperte R para montar", partículas de coração e `som.domar(1)`.
+- **Cachorro (pet):**
+  - Nasce como animal raro de dia nas planícies (1 a cada ~3 grupos de animais).
+  - Doma com 3 ossos (`osso`): a cada osso dado, a confiança sobe 1/3.
+  - Domado, segue o dono (fica a 2–4 blocos, teleporta se passar de 24), senta quando o dono para, ataca os monstros que atacarem o dono (dano 4) e tem vida própria.
+  - Clicar com o botão direito no próprio cachorro com Shift faz ele sentar/levantar.
+- **Montar:**
+  - R monta a montaria SUA mais próxima (até 3 blocos), se ela tiver sela. Montado, o jogador controla: WASD move a montaria na velocidade dela e Espaço pula (o cavalo pula 2.5 blocos).
+  - Filhote de dragão: Espaço segurado voa por até 10 s, com recarga de 20 s e uma barra.
+  - Lobo: ataca os mobs perto. Aranha: sobe paredes.
+  - R de novo desmonta. A câmera fica um pouco mais alta. O personagem fica sentado no `modelo.assento`.
+  - O dono controla a própria montaria: manda a posição pela rede (como a dele), e o anfitrião aceita.
+- **Sela e armadura:** botão direito na sua montaria com a `sela` ou com uma `armadura_montaria_*` na mão coloca o item (consome; se já tinha, devolve o anterior). A armadura reduz o dano da montaria (`defesaMontaria`). O modelo mostra com `definirSela` / `definirArmaduraMontaria`.
+- **Vida da montaria:** com 0, ela desmaia (deita) e reaparece na casa do dono depois de 60 s. Montado, a barra de vida da montaria aparece acima da hotbar.
+- **Apito:** botão direito com o `apito` traz todas as suas montarias e o pet para perto (se estiverem a mais de 30 blocos, teleportam), com `som.apito()`.
+- **Ovo de dragão:**
+  - Colocado como bloco `OVO_DRAGAO`, com uma `FOGUEIRA` a até 3 blocos, conta 300 s (1 dia de jogo), com balanço, partículas e o som `som.chocar()` perto do fim.
+  - Ao terminar: o bloco some e nasce um `filhote_dragao` com `dono` = quem colocou o ovo (guarde quem colocou no estado do bloco ou num registro do anfitrião).
+- **Salvamento:** as montarias e pets domados ficam no save do anfitrião (`montarias: [{ tipo, dono, variante, sela, armadura, vida, pos }]`), num save versão 9. Os ovos chocando também (`ovos: [{ x, y, z, dono, tempo }]`).
+- **Rede (protocolo versão 8):**
+  - `domar`, `montar { id }`, `desmontar`, `equiparMontaria { id, item }`, `apito`;
+  - o estado dos mobs passa a incluir o dono/montado (nos flags ou numa mensagem `donoMob { id, dono, sela, armadura }`);
+  - todos veem quem está montado em quê.
+- **UI:**
+  - barra de confiança;
+  - barra de vida da montaria;
+  - barra de voo do filhote;
+  - nome do dono acima da montaria/pet ("Cavalo de Pai").- **Modelos prontos (modelos_mobs.js):**
+  - `criarModeloMob(tipo, opcoes = {})`, com `opcoes.variante` (cavalo 0–3; cachorro 0–2; sorteada se faltar). A variante escolhida fica em `modelo.variante`, e o mobs.js deve guardá-la e mandá-la pela rede para o cliente ver a mesma cor.
+  - Todo modelo tem `assento` (Object3D no `grupo`; use `getWorldPosition`), `definirSela(bool)` e `definirArmaduraMontaria('ferro' | 'ouro' | 'diamante' | null)` (funções vazias nos que não são montaria).
+  - Medidas (altura/raio): cavalo 1.65/0.6, lobo_gigante 1.32/0.55, aranha_montaria 1.8/1.4, filhote_dragao 1.45/0.65 (`estado.voando` bate as asas), cachorro 0.72/0.32 (`atacando` = bote).
+**Como ficou a Fase 8:**
+- O evento do `definirBloco` ganhou `original` (true se a posição nunca tinha sido mexida).
+- O chefão da Lua Vermelha (`m.daLua`) vai embora de manhã, quando ninguém está a menos de 32 blocos.
+- Quebrar um baú de tesouro sem abrir solta o mesmo tesouro sorteado.
+- `window.jogo.minimapa`. O `/criativo` ignora o dano e os efeitos dos mobs.
+- `rede.definirLuaVermelha(bool)` (só no anfitrião), `rede.luaVermelha`; `CONFIG.CHANCE_LUA_VERMELHA`; comando `/luavermelha`.
+- As áreas especiais ficam a pelo menos 128 blocos do início.
+- Partículas no corpo do jogador não são emitidas em 1ª pessoa.

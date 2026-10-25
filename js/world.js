@@ -38,7 +38,9 @@
 // FORMATOS (o que a rede e o save usam):
 //   modificação:   [x, y, z, id, estado]  (listas antigas com 4 números valem estado 0)
 //   lote:          definirBlocos([[x, y, z, id, estado?], ...], origem)
-//   evento simples (aoAlterarBloco): { x, y, z, id, estado, anterior, estadoAnterior, origem }
+//   evento simples (aoAlterarBloco): { x, y, z, id, estado, anterior, estadoAnterior, origem, original }
+//                  (original = true: ninguém tinha mexido nesta posição antes; o
+//                  bloco anterior era o que o gerador criou)
 //   evento de lote (aoAlterarBloco): { lote: true, lista, origem }, com
 //                  lista[i] = [x, y, z, id, estado, anterior, estadoAnterior]
 //                  (os 5 primeiros números são o formato da rede; só vêm os
@@ -158,7 +160,7 @@ const REGIAO_CHUNKS = 12;
 const REGIAO = REGIAO_CHUNKS * TAM;      // em blocos (192)
 const MARGEM_REGIAO = 40;                // o centro fica a pelo menos 40 blocos da borda da região
 const ALCANCE_AREA = 18;                 // nada de uma área passa desta distância do centro
-const LONGE_DO_INICIO = 96;              // nenhuma área a menos disso de (0, 0), onde o jogador nasce
+const LONGE_DO_INICIO = 128;             // nenhuma área a menos disso de (0, 0), onde o jogador nasce (e costuma construir)
 const DIST_NINHO_COVIL = 72;             // o covil fica pelo menos isso longe do ninho
 const NINHO_RAIO = 7;                    // raio da plataforma do ninho
 const LAGO_RAIO = 10;                    // raio médio do lago do covil
@@ -179,6 +181,11 @@ const BL_DRACONIO = B.MINERIO_DRACONIO ?? B.PEDRA;
 const DIR_BAU_X = [0, 1, 0, -1];
 const DIR_BAU_Z = [-1, 0, 1, 0];
 const VIZINHOS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+
+/** O centro da coluna (x, z) fica longe o bastante de (0, 0), onde o jogador nasce? */
+function longeDoInicio(x, z) {
+  return (x + 0.5) * (x + 0.5) + (z + 0.5) * (z + 0.5) >= LONGE_DO_INICIO * LONGE_DO_INICIO;
+}
 
 /** Sorteador de números em [0, 1) (mulberry32) que começa em `estado`. Mesma semente = mesma sequência. */
 function sorteador(estado) {
@@ -734,7 +741,7 @@ export class GeradorMundo {
     const vao = REGIAO - 2 * MARGEM_REGIAO;
     const N = 6;
     const dentro = (x, z) => x >= x0 + MARGEM_REGIAO && x < x0 + REGIAO - MARGEM_REGIAO &&
-      z >= z0 + MARGEM_REGIAO && z < z0 + REGIAO - MARGEM_REGIAO && x * x + z * z >= LONGE_DO_INICIO * LONGE_DO_INICIO;
+      z >= z0 + MARGEM_REGIAO && z < z0 + REGIAO - MARGEM_REGIAO && longeDoInicio(x, z);
     // 1) 36 pontos sorteados numa grade: fica com o mais alto
     let bx = x0 + (REGIAO >> 1), bz = z0 + (REGIAO >> 1), melhor = -1;
     for (let j = 0; j < N; j++) {
@@ -830,11 +837,11 @@ export class GeradorMundo {
         const x = x0 + MARGEM_REGIAO + Math.floor((i + hash2D(s, rx * N + i, rz * N + j)) * vao / N);
         const z = z0 + MARGEM_REGIAO + Math.floor((j + hash2D(s ^ 0x33333333, rx * N + i, rz * N + j)) * vao / N);
         const dn = Math.hypot(x - ninho.bx, z - ninho.bz);
-        const longeDoInicio = x * x + z * z >= LONGE_DO_INICIO * LONGE_DO_INICIO;
+        const longe = longeDoInicio(x, z);
         // Se nada servir: o mais longe do ninho (sempre longe do início, se der)
-        const pesoReserva = dn + (longeDoInicio ? 10000 : 0);
+        const pesoReserva = dn + (longe ? 10000 : 0);
         if (pesoReserva > reservaD) { reservaD = pesoReserva; rbx = x; rbz = z; }
-        if (dn < DIST_NINHO_COVIL || !longeDoInicio) continue;
+        if (dn < DIST_NINHO_COVIL || !longe) continue;
         // Nota: quanto o chão sobe e desce em volta + quanto foge de "um pouco acima do mar"
         const h = this.alturaEm(x, z);
         let hMin = h, hMax = h;
@@ -1774,14 +1781,19 @@ export class Mundo {
 
     this._lote++;
     let mudou;
-    let anterior = 0, estadoAnterior = 0;
+    let anterior = 0, estadoAnterior = 0, original = false;
     try {
       const ch = this._garantirDados(x >> BITS, z >> BITS);
       const iLocal = (x & MASCARA) + (z & MASCARA) * TAM + y * AREA;
       anterior = ch.dados[iLocal];
       estadoAnterior = ch.estados[iLocal];
       mudou = anterior !== id || estadoAnterior !== estado;
-      if (mudou) this._aplicarMudanca(ch, x, y, z, iLocal, id, estado, anterior);
+      if (mudou) {
+        // Era o bloco que o gerador criou (ninguém tinha mexido aqui antes)?
+        // O baú de tesouro (baus.js) usa: quebrado sem abrir, ainda solta o tesouro.
+        original = !this.modificacoes.has(x + ',' + y + ',' + z);
+        this._aplicarMudanca(ch, x, y, z, iLocal, id, estado, anterior);
+      }
     } finally {
       this._lote--;
     }
@@ -1789,7 +1801,7 @@ export class Mundo {
     this.luz.coletarSujos(this._aoSujar);
     if (this._lote === 0) this._remontarPendentes();
 
-    const evento = { x, y, z, id, estado, anterior, estadoAnterior, origem };
+    const evento = { x, y, z, id, estado, anterior, estadoAnterior, origem, original };
     for (let i = 0; i < this.ouvintes.length; i++) {
       try { this.ouvintes[i](evento); } catch (e) { console.error('Erro num ouvinte de bloco:', e); }
     }

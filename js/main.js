@@ -59,6 +59,7 @@ import { Meteoro } from './meteoro.js';
 import { Baus } from './baus.js';
 import { TelaForja } from './forja.js';
 import { TelaAlfaiate } from './alfaiate.js';
+import { Minimapa } from './minimapa.js';
 import { som } from './audio.js';
 import { B, BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { salvarJogo, carregarJogo, apagarJogo } from './save.js';
@@ -399,6 +400,7 @@ async function iniciar() {
       poderes.registrarAlvos(() => mobs.alvosParaPoderes());
       // O dano chega do anfitrião; a armadura reduz (cada ponto de defesa tira 4%)
       mobs.aoDanoJogador(({ qtd, de, efeito }) => {
+        if (jogador.criativo) return; // /criativo: sem dano e sem veneno/lento/fogo
         const reducao = Math.min(CONFIG.DEFESA_MAX_REDUCAO, (jogador.bonus.defesa || 0) * CONFIG.DEFESA_POR_PONTO);
         jogador.machucar(qtd * (1 - reducao), { direcao: direcaoDoGolpe(jogador, de) });
         // O golpe pode trazer um efeito: 'veneno' | 'lento' | 'fogo' (texto) ou { tipo, segundos }
@@ -528,9 +530,19 @@ async function iniciar() {
       },
     });
 
+    // ----- Minimapa (tecla N; o DOM e o CSS ficam no próprio módulo) -----
+    // Se der erro ao criar, o jogo continua sem minimapa.
+    let minimapa = null;
+    try {
+      minimapa = new Minimapa({ mundo, jogador, remotos, rede, mobs });
+    } catch (erro) {
+      console.warn('Hackraft: minimapa indisponível.', erro);
+    }
+
     window.jogo = {
       mundo, ceu, jogador, inventario, equipamento, itensChao, ui, som, salvar, rede, remotos,
       renderer, scene, camera, texturas, chat, hacker, particulas, poderes, baus, mobs, telaForja, telaAlfaiate,
+      minimapa,
     };
 
     // Música e boas-vindas
@@ -707,6 +719,7 @@ async function iniciar() {
       if (typeof mundo.definirTempo === 'function') mundo.definirTempo(tempoShader);
       if (typeof mundo.luzEm !== 'function') itensChao.definirLuz(ceu.luzDoDia); // com luzEm, quem define é fogoDasTochas
       hacker.atualizar(dt, jogador.posicao);
+      if (minimapa) minimapa.atualizar(dt);
       // Música: 'chefao' enquanto houver um chefão vivo perto (até 64 blocos); senão dia/noite
       const clima = mobs && mobs.chefaoPerto ? 'chefao' : (ceu.ehNoite ? 'noite' : 'dia');
       if (clima !== climaAtual) {
