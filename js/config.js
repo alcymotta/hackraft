@@ -33,6 +33,12 @@ export const CONFIG = {
   VEL_ANDAR: 4.3,           // blocos por segundo
   VEL_CORRER: 6.5,          // segurando Shift
   VEL_NADAR: 2.5,           // dentro da água
+  PLANAR_VEL_INICIO: 6,     // só abre a capa se estiver caindo mais rápido que isto (blocos/s)
+  PLANAR_QUEDA: 2.5,        // velocidade máxima de queda planando
+  PLANAR_VEL: 9,            // velocidade para frente planando
+  PLANAR_GANHO_PITCH: 0.8,  // olhar para baixo aumenta a velocidade (multiplicador por radiano)
+  PLANAR_FREIO: 45,         // quanto a capa freia a queda ao abrir (blocos/s por segundo)
+  PLANAR_ACEL: 14,          // quão rápido chega na velocidade de planar
   VEL_PULO: 9,              // velocidade para cima ao pular
   ALCANCE: 5,               // distância máxima para quebrar e colocar blocos
   LARGURA_JOGADOR: 0.6,
@@ -156,6 +162,12 @@ export const CONFIG = {
   PET_DIST_TELEPORTE: 24,        // ...e teleporta se ficar mais longe que isso
   PET_DANO: 4,                   // mordida do cachorro
   LOBO_DANO: 6,                  // mordida do lobo gigante domado
+
+  // ----- Tipos de mundo e Hardcore -----
+  REANIMAR_DIST: 2,              // distância (blocos) até o corpo para reanimar
+  REANIMAR_TOLERANCIA: 1.5,      // folga extra que o anfitrião aceita (atraso da rede)
+  REANIMAR_TEMPO_S: 4,           // segundos segurando o botão direito
+  REANIMAR_VIDA: 0.5,            // fração da vida máxima com que o jogador volta
 };
 
 // Duração total de um dia completo (dia + noite), em segundos

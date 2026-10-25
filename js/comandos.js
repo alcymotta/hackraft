@@ -96,6 +96,11 @@ export function registrarComandos(chat, ctx) {
     uso: '/criativo',
     ajuda: 'Liga ou desliga o modo criativo (blocos infinitos, voo e sem dano).',
     executar() {
+      // Mundo Criativo: todos já são criativos e não dá para desligar
+      if (ctx.jogador.criativoTravado) {
+        ok('Este mundo é Criativo: o modo criativo vale para todos e não dá para desligar.');
+        return;
+      }
       if (ctx.jogador.definirCriativo(!ctx.jogador.criativo)) {
         ok('Modo criativo ligado: blocos infinitos, voo (Espaço/Shift) e sem dano');
       } else {
@@ -227,11 +232,19 @@ export function registrarComandos(chat, ctx) {
         qtd = Math.max(1, Math.min(10, parseInt(args[args.length - 1], 10)));
         partes = args.slice(0, -1);
       }
-      const alvo = normalizar(partes.join(' '));
+      // (apelidos: "dragao fogo" = o dragão de fogo, que se chama só 'dragao')
+      const APELIDOS = { dragao_fogo: 'dragao', dragao_de_fogo: 'dragao' };
+      let alvo = normalizar(partes.join(' '));
+      if (APELIDOS[alvo]) alvo = APELIDOS[alvo];
       let tipo = tipos.find((t) => normalizar(t) === alvo || normalizar(TIPOS_MOB[t].nome || t) === alvo);
       if (!tipo) {
         const comeca = tipos.filter((t) => normalizar(t).startsWith(alvo));
         if (comeca.length === 1) tipo = comeca[0];
+      }
+      if (!tipo) {
+        // o começo do nome bonito também vale ("dragao de gelo" → Dragão de Gelo Ancestral)
+        const pelo = tipos.filter((t) => normalizar(TIPOS_MOB[t].nome || t).startsWith(alvo));
+        if (pelo.length === 1) tipo = pelo[0];
       }
       if (!tipo) {
         erro("Não conheço o mob '" + partes.join(' ') + "'. Mobs que existem: " + tipos.join(', '));

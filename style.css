@@ -689,3 +689,36 @@ img { image-rendering: pixelated; }
   color: #ffe0e0;
   text-shadow: 2px 2px 0 #3a0000;
 }
+
+/* ---------- Tipo de mundo (tela inicial) ---------- */
+.linha-modos { display: flex; gap: 6px; width: 100%; }
+.linha-modos .botao { flex: 1; width: auto; padding: 8px 4px; font-size: 8px; }
+.linha-modos .botao.ativo { background: #4c8f3a; color: #ffff80; }
+.linha-modos.travado .botao { opacity: 0.6; pointer-events: none; }
+#nota-modo { min-height: 30px; }
+.frase-modo { margin: 0; font-family: var(--fonte-pixel); font-size: 11px; color: #ffff80; text-shadow: 2px 2px 0 #3f3f3f; }
+
+/* ---------- Limpar inventário e lixeira do baú ---------- */
+.inv-rodape { display: flex; justify-content: flex-end; margin-top: 10px; }
+.botao-perigo { background: #a63a2a; }
+.botao-perigo:hover { background: #d0503a; color: #fff; }
+.botao-perigo.confirmando { background: #e02020; color: #fff; }
+.bau-cabecalho { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.lixeira {
+  padding: 6px 12px; margin-bottom: 8px;
+  font-family: var(--fonte-pixel); font-size: 10px; color: #fff;
+  background: #7a2a22; border: 3px solid; border-color: #cfcfcf #373737 #373737 #cfcfcf;
+  cursor: pointer; user-select: none;
+}
+.lixeira:hover { background: #b0402f; }
+
+/* ---------- Caído (Hardcore) ---------- */
+#tela-caido { background: rgba(40, 0, 0, 0.45); z-index: 28; }
+#tela-fim { background: rgba(0, 0, 0, 0.85); z-index: 30; }
+#barra-reanimar {
+  position: fixed; left: 50%; top: calc(50% + 40px); transform: translateX(-50%);
+  width: 200px; text-align: center; z-index: 7; pointer-events: none;
+  font-family: var(--fonte-pixel); font-size: 10px; color: #fff; text-shadow: 2px 2px 0 #000;
+}
+#barra-reanimar .trilho { margin-top: 6px; height: 12px; background: rgba(0,0,0,0.6); border: 2px solid #000; }
+#barra-reanimar .enchimento { height: 100%; width: 0%; background: #5bd13a; }

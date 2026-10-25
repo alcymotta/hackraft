@@ -65,7 +65,12 @@ const DESCRICOES_BLOCOS = {
   mesa_alfaiate: 'Costure roupas e capas, ou compre com moedas. Botão direito para usar.',
   fogueira: 'Aquece e ilumina. Um ovo de dragão choca perto dela.',
   ovo_dragao: 'Coloque perto de uma fogueira e espere um dia: nasce um filhote de dragão!',
-  forja: 'Funde metais, forja espadas e armaduras e melhora equipamentos. Botão direito para usar.',
+  ovo_dragao_gelo: 'Frio como neve. Perto de uma fogueira, em um dia nasce um filhote de dragão de gelo!',
+  ovo_dragao_veneno: 'Verde e borbulhante. Perto de uma fogueira, em um dia nasce um filhote de dragão venenoso!',
+  ovo_dragao_raio: 'Dá choquinhos! Perto de uma fogueira, em um dia nasce um filhote de dragão de raio!',
+  neve: 'Branquinha e fofa. Vem dos ninhos do dragão de gelo.',
+  musgo_toxico: 'Brilha em verde no escuro. Vem dos ninhos do dragão venenoso.',
+  forja:'Funde metais, forja espadas e armaduras e melhora equipamentos. Botão direito para usar.',
 };
 
 // Todo bloco que solta item vira automaticamente um item do tipo 'bloco'
@@ -137,6 +142,10 @@ const LISTA_METAIS = [
   // Chefões da Fase 8 (já registrados aqui para a forja funcionar)
   ['escama_dragao', 'Escama de dragão', 'Escama quente e vermelha. Vale uma armadura!'],
   ['escama_hidra', 'Escama de hidra', 'Escama verde-azulada e viscosa. Vale uma armadura!'],
+  // Dragões elementais
+  ['escama_dragao_gelo', 'Escama de dragão de gelo', 'Escama gelada e azul-clara. Vale uma armadura que protege do frio!'],
+  ['escama_dragao_veneno', 'Escama de dragão venenoso', 'Escama verde-ácida. Vale uma armadura que protege do veneno!'],
+  ['escama_dragao_raio', 'Escama de dragão de raio', 'Escama amarela que solta faíscas. Vale uma armadura!'],
 ];
 for (const [nome, rotulo, descricao] of LISTA_METAIS) {
   registrarItem({ nome, rotulo, tipo: 'material', pilha: 64, descricao });
@@ -168,6 +177,11 @@ export const MATERIAIS_EQUIP = {
   draconio: { rotulo: 'de dracônio', dano: 12, defesa: [4, 9, 7, 4], item: 'barra_draconio', cor: [192, 44, 104], descricao: 'forjada com o metal dos dragões.' },
   escama_dragao: { rotulo: 'de escamas de dragão', dano: null, defesa: [4, 10, 8, 4], item: 'escama_dragao', cor: [214, 58, 40], descricao: 'feita com escamas de dragão.' },
   escama_hidra: { rotulo: 'de escamas de hidra', dano: null, defesa: [4, 9, 8, 4], item: 'escama_hidra', cor: [40, 176, 156], descricao: 'feita com escamas de hidra. Protege do veneno.', resistencia: 'veneno' },
+  // Dragões elementais (mesma defesa da de fogo). A de gelo protege da lentidão
+  // (o player.js precisa conhecer resistencia: 'lento'), a venenosa do veneno.
+  escama_dragao_gelo: { rotulo: 'de escamas de dragão de gelo', dano: null, defesa: [4, 10, 8, 4], item: 'escama_dragao_gelo', cor: [150, 214, 240], descricao: 'feita com escamas de dragão de gelo. Protege da lentidão.', resistencia: 'lento' },
+  escama_dragao_veneno: { rotulo: 'de escamas de dragão venenoso', dano: null, defesa: [4, 10, 8, 4], item: 'escama_dragao_veneno', cor: [104, 196, 58], descricao: 'feita com escamas de dragão venenoso. Protege do veneno.', resistencia: 'veneno' },
+  escama_dragao_raio: { rotulo: 'de escamas de dragão de raio', dano: null, defesa: [4, 10, 8, 4], item: 'escama_dragao_raio', cor: [236, 206, 64], descricao: 'feita com escamas de dragão de raio. Estala de energia!' },
 };
 
 // ---------------------------------------------------------------------
@@ -253,6 +267,21 @@ registrarItem({
   nome: 'espada_hidra', rotulo: 'Espada da hidra', tipo: 'arma', pilha: 1,
   descricao: 'Lâmina venenosa: o golpe envenena o inimigo.', visual: 'espada_hidra', dano: 12, efeitoArma: 'veneno',
 });
+// Espadas dos dragões elementais. `material` diz o que a forja gasta para
+// melhorar (as escamas do mesmo dragão). efeitoArma: 'gelo' deixa o inimigo
+// lento; 'raio' dá um choque (dano extra); 'veneno' envenena.
+registrarItem({
+  nome: 'espada_gelo', rotulo: 'Espada de gelo', tipo: 'arma', pilha: 1, material: 'escama_dragao_gelo',
+  descricao: 'Lâmina de gelo eterno: o golpe deixa o inimigo lento.', visual: 'espada_gelo', dano: 13, efeitoArma: 'gelo',
+});
+registrarItem({
+  nome: 'espada_veneno', rotulo: 'Espada venenosa', tipo: 'arma', pilha: 1, material: 'escama_dragao_veneno',
+  descricao: 'Lâmina verde-ácida: o golpe envenena o inimigo.', visual: 'espada_veneno', dano: 13, efeitoArma: 'veneno',
+});
+registrarItem({
+  nome: 'espada_raio', rotulo: 'Espada de raio', tipo: 'arma', pilha: 1, material: 'escama_dragao_raio',
+  descricao: 'Lâmina elétrica: cada golpe dá um choque (dano extra).', visual: 'espada_raio', dano: 12, efeitoArma: 'raio',
+});
 
 registrarItem({
   nome: 'capa_vermelha', rotulo: 'Capa vermelha', tipo: 'acessorio', pilha: 1,
@@ -308,8 +337,10 @@ const LISTA_NOVOS_MATERIAIS = [
 for (const [nome, rotulo, pilha, descricao] of LISTA_NOVOS_MATERIAIS) {
   registrarItem({ nome, rotulo, tipo: 'material', pilha, descricao });
 }
-// O ovo de dragão já virou item de bloco (bloco 35): só a pilha muda
-ITENS.get('ovo_dragao').pilha = 1;
+// Os ovos de dragão já viraram itens de bloco (blocos 35 a 38): só a pilha muda
+for (const nome of ['ovo_dragao', 'ovo_dragao_gelo', 'ovo_dragao_veneno', 'ovo_dragao_raio']) {
+  if (ITENS.has(nome)) ITENS.get(nome).pilha = 1;
+}
 
 registrarItem({
   nome: 'maca_dourada', rotulo: 'Maçã dourada', tipo: 'comida', pilha: 16, cura: 10,

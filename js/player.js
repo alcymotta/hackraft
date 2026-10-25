@@ -30,6 +30,7 @@ import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { B, BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { obterItem, TABELA_PRESENTE } from './items.js';
+import { MaoPrimeiraPessoa } from './character.js';
 
 const METADE_LARGURA = CONFIG.LARGURA_JOGADOR / 2;
 const ALTURA = CONFIG.ALTURA_JOGADOR;
@@ -91,10 +92,11 @@ export class Jogador {
     // Bônus do equipamento, guardados aqui (o loop não pede um objeto
     // novo ao equipamento a cada quadro). Atualizados quando ele muda.
     // pulo, queda segura, nado e duração dos poderes vêm das roupas (Fase 10);
-    // `resistenciaVeneno` vem da armadura de escamas de hidra (Fase 9).
+    // `resistenciaVeneno` vem da armadura de escamas de hidra (Fase 9) ou de
+    // dragão venenoso; `resistenciaLento`, da armadura de escamas de dragão de gelo.
     this.bonus = {
       velocidade: 0, defesa: 0, silencioso: false,
-      pulo: 0, quedaSegura: 0, nado: 0, duracaoPoderes: 0, resistenciaVeneno: false,
+      pulo: 0, quedaSegura: 0, nado: 0, duracaoPoderes: 0, resistenciaVeneno: false, resistenciaLento: false,
     };
 
     // XP e nível (Fase 8): o nível sai do XP total
@@ -121,9 +123,15 @@ export class Jogador {
     this.pitch = 0;
     this.noChao = false;
     this.naAgua = false;
+    this.planando = false;             // planando com a capa (segurando Espaço na queda)
+    this.nadando = false;              // nadando deitado (boneco na horizontal)
+    this._aguaNoMeio = false;
     this.modoCamera = 'primeira';
     this.voando = false;               // modo voo (comando /voar): sem gravidade
     this.criativo = false;             // modo criativo (comando /criativo): blocos infinitos, voo e sem dano
+    this.criativoTravado = false;      // mundo Criativo: o /criativo não consegue desligar
+    this.caido = false;                // Hardcore: morreu e espera ser reanimado (o main desenha o corpo e a câmera)
+    this.bloqueioDireito = false;      // o main liga enquanto reanima alguém (o botão direito não faz mais nada)
     this._seloCriativo = null;         // selo "CRIATIVO" em cima da hotbar (criado na primeira vez)
 
     // Entrada
@@ -169,6 +177,9 @@ export class Jogador {
     this.personagem.grupo.visible = false;
     scene.add(this.personagem.grupo);
 
+    // Mãozinha da 1ª pessoa (braço direito no canto da tela)
+    this.mao = new MaoPrimeiraPessoa({ scene, camera, personagem: this.personagem, texturas });
+
     // Contorno do bloco mirado
     this.contorno = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(1.004, 1.004, 1.004)),
@@ -209,18 +220,22 @@ export class Jogador {
     this.bonus.quedaSegura = rb ? num(rb.quedaSegura) : 0;
     this.bonus.nado = rb ? num(rb.nado) : 0;
     this.bonus.duracaoPoderes = rb ? num(rb.duracaoPoderes) : 0;
-    // Resistência a veneno: qualquer peça de armadura com `resistencia: 'veneno'`
-    let resiste = false;
+    // Resistências: qualquer peça de armadura com `resistencia: 'veneno'` (hidra,
+    // dragão venenoso) ou `resistencia: 'lento'` (dragão de gelo) basta
+    let resiste = false, resisteLento = false;
     if (eq) {
       for (const parte of ['capacete', 'peitoral', 'calca', 'botas']) {
-        if (obterItem(eq.espacos[parte])?.resistencia === 'veneno') resiste = true;
+        const r = obterItem(eq.espacos[parte])?.resistencia;
+        if (r === 'veneno') resiste = true;
+        else if (r === 'lento') resisteLento = true;
       }
     }
     this.bonus.resistenciaVeneno = resiste;
-    if (resiste && this.efeitos && this.efeitos.veneno > 0) {
-      this.efeitos.veneno = 0;
-      this._atualizarMascaraEfeitos();
-    }
+    this.bonus.resistenciaLento = resisteLento;
+    let mudou = false;
+    if (resiste && this.efeitos && this.efeitos.veneno > 0) { this.efeitos.veneno = 0; mudou = true; }
+    if (resisteLento && this.efeitos && this.efeitos.lento > 0) { this.efeitos.lento = 0; mudou = true; }
+    if (mudou) this._atualizarMascaraEfeitos();
   }
 
   // ------------------------------------------------------------------
@@ -305,13 +320,15 @@ export class Jogador {
   /**
    * Aplica um efeito por `segundos` (fica com o maior tempo entre o que já
    * tinha e o novo). Devolve true se o efeito pegou. O veneno não pega com a
-   * armadura de escamas de hidra, e o fogo não pega dentro da água.
+   * armadura de escamas de hidra (ou de dragão venenoso), a lentidão não pega
+   * com a de dragão de gelo, e o fogo não pega dentro da água.
    */
   aplicarEfeito(tipo, segundos) {
     if (this.morto || !(tipo in this.efeitos)) return false;
     const padrao = { veneno: CONFIG.EFEITO_VENENO_PADRAO_S, lento: CONFIG.EFEITO_LENTO_PADRAO_S, fogo: CONFIG.EFEITO_FOGO_PADRAO_S };
     const seg = Number.isFinite(segundos) && segundos > 0 ? Math.min(segundos, 60) : padrao[tipo];
     if (tipo === 'veneno' && this.bonus.resistenciaVeneno) return false;
+    if (tipo === 'lento' && this.bonus.resistenciaLento) return false;
     if (tipo === 'fogo' && this.naAgua) return false;
     if (this.efeitos[tipo] <= 0 && tipo !== 'lento') this._tickEfeito[tipo] = 0;
     this.efeitos[tipo] = Math.max(this.efeitos[tipo], seg);
@@ -461,6 +478,7 @@ export class Jogador {
   /** Volta à vida com a vida cheia (o main chama depois de teletransportar para casa) */
   renascer() {
     this.morto = false;
+    this.caido = false;
     this.teclas = {};
     this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
     this.vida = this.vidaMax;
@@ -470,11 +488,28 @@ export class Jogador {
     if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, this.vidaMax);
   }
 
+  /**
+   * Hardcore: outro jogador me reanimou. Volta ao lugar onde caiu, com uma
+   * fração da vida máxima (padrão: metade). Devolve a vida nova.
+   */
+  reviver(fracao = CONFIG.REANIMAR_VIDA) {
+    this.morto = false;
+    this.caido = false;
+    this.teclas = {};
+    this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
+    this.vida = Math.max(1, Math.round(this.vidaMax * fracao));
+    this._caindo = false;
+    this.velocidade.set(0, 0, 0);
+    this.limparEfeitos();
+    if (this.ui.atualizarVida) this.ui.atualizarVida(this.vida, this.vidaMax);
+    return this.vida;
+  }
+
   /** Controla o dano de queda: guarda o y mais alto e, ao pousar, aplica (queda - QUEDA_SEGURA) */
   _verificarQueda(voa, yAntes) {
     const p = this.posicao;
     // Voando, na água ou com o poder de superpulo: nada de dano (e recomeça a contagem)
-    if (voa || this.naAgua || this._mods.semDanoQueda || this._mods.pulo > 1) {
+    if (voa || this.naAgua || this.planando || this._mods.semDanoQueda || this._mods.pulo > 1) {
       this._caindo = false;
       this._yTopo = p.y;
       return;
@@ -498,6 +533,12 @@ export class Jogador {
   _digitando(e) {
     const t = e.target;
     return !!t && ((t.tagName === 'INPUT' && t.type !== 'range') || t.tagName === 'TEXTAREA');
+  }
+
+  /** true se está com a capa vermelha ou azul no acessório */
+  _temCapa() {
+    const a = this.equipamento && this.equipamento.espacos ? this.equipamento.espacos.acessorio : null;
+    return a === 'capa_vermelha' || a === 'capa_azul';
   }
 
   /** true enquanto o botão esquerdo está segurado com um alvo (para a rede animar o golpe) */
@@ -745,10 +786,22 @@ export class Jogador {
       this.contorno.visible = false;
     }
 
+    // Nadando deitado: dentro d'água (até o peito) e se mexendo ou boiando
+    this.nadando = !this.montaria && !this.voando && !this._mods.voar && this.naAgua && this._aguaNoMeio &&
+      (this.velHorizontal > 0.5 || !this.noChao);
+    if (!this.naAgua) this.nadando = false;
+
     // Personagem visível só na 3ª pessoa
     const terceira = this.modoCamera === 'terceira';
     this.personagem.grupo.visible = terceira;
+    // Mãozinha: só em 1ª pessoa, sem menu, sem morrer e sem montaria
+    const sel = this.inventario.itemSelecionado();
+    const itemSel = sel ? obterItem(sel.item) : null;
+    this.mao.atualizar(dt, !terceira && ativo && !this.morto && !this.montaria, this.velHorizontal, this.noChao,
+      itemSel && itemSel.tipo === 'bloco' ? itemSel.bloco : null);
     if (terceira) {
+      this.personagem.planando = this.planando;
+      this.personagem.nadando = this.nadando;
       this.personagem.grupo.position.copy(p);
       this.personagem.grupo.rotation.y = this.yaw;
       this.personagem.animar(dt, this.velHorizontal, !this.noChao);
@@ -766,6 +819,7 @@ export class Jogador {
     const idPes = mundo.obterBloco(p.x, p.y + 0.1, p.z);
     const idMeio = mundo.obterBloco(p.x, p.y + 0.9, p.z);
     this.naAgua = !!(LIQUIDO[idPes] || LIQUIDO[idMeio]);
+    this._aguaNoMeio = !!LIQUIDO[idMeio];
     const naAgua = this.naAgua;
 
     // Direção desejada, a partir do yaw
@@ -789,6 +843,12 @@ export class Jogador {
     // Montado (Fase 11): a velocidade, o pulo e a caixa são os da montaria
     const mont = this.montaria ? this.montaria.p : null;
 
+    // Planar com a capa: caindo rápido, segurando Espaço (sem montaria, fora d'água)
+    const eraPlanando = this.planando;
+    this.planando = !mont && !this.voando && !this._mods.voar && ativo && pulando && !naAgua && !this.noChao && this._temCapa() &&
+      (eraPlanando || v.y < -CONFIG.PLANAR_VEL_INICIO);
+    if (this.planando && !eraPlanando && this.som.asas) this.som.asas();
+
     // Modo voo: física própria (sem gravidade, sem passos)
     if (!mont && (this.voando || this._mods.voar)) {
       this._fisicaVoando(dt, ativo, dx, dz);
@@ -804,9 +864,16 @@ export class Jogador {
       ? mont.vel * (naAgua ? 0.45 : 1) * lento
       : (naAgua ? CONFIG.VEL_NADAR * (1 + this.bonus.nado) : (correndo ? CONFIG.VEL_CORRER : CONFIG.VEL_ANDAR)) *
         (1 + this.bonus.velocidade) * (this._mods.velocidade || 1) * lento;
-    const alvoX = dx * vel;
-    const alvoZ = dz * vel;
-    const acel = (naAgua ? CONFIG.ACEL_AGUA : (this.noChao ? CONFIG.ACEL_CHAO : CONFIG.ACEL_AR)) * dt * (mont ? 1.5 : 1);
+    let alvoX = dx * vel;
+    let alvoZ = dz * vel;
+    let acel = (naAgua ? CONFIG.ACEL_AGUA : (this.noChao ? CONFIG.ACEL_CHAO : CONFIG.ACEL_AR)) * dt * (mont ? 1.5 : 1);
+    if (this.planando) {
+      // Planando: avança para onde está olhando; olhar para baixo ganha velocidade
+      const vp = CONFIG.PLANAR_VEL * (1 + Math.max(0, -this.pitch) * CONFIG.PLANAR_GANHO_PITCH);
+      alvoX = -sen * vp;
+      alvoZ = -cos * vp;
+      acel = CONFIG.PLANAR_ACEL * dt;
+    }
 
     // Aproxima a velocidade horizontal da desejada, de forma suave
     const difX = alvoX - v.x;
@@ -832,6 +899,13 @@ export class Jogador {
         } else {
           v.y += (CONFIG.VEL_SUBIR_AGUA * (1 + this.bonus.nado) - v.y) * Math.min(1, 8 * dt);
         }
+      }
+    } else if (this.planando) {
+      // Queda lenta: a velocidade vertical é puxada para o limite da capa
+      if (v.y < -CONFIG.PLANAR_QUEDA) {
+        v.y = Math.min(-CONFIG.PLANAR_QUEDA, v.y + CONFIG.PLANAR_FREIO * dt); // a capa freia a queda
+      } else {
+        v.y = Math.max(-CONFIG.PLANAR_QUEDA, v.y - CONFIG.GRAVIDADE * dt);
       }
     } else if (mont && mont.sobeParede && this._bateuParede && frente > 0) {
       // Aranha montada andando contra a parede: sobe por ela
@@ -1063,6 +1137,13 @@ export class Jogador {
     }
 
     const shift = !!(this.teclas.ShiftLeft || this.teclas.ShiftRight);
+
+    // Reanimando alguém (Hardcore): o botão direito segurado só serve para isso
+    if (this.bloqueioDireito) {
+      this._cliqueDireito = false;
+      this._pararComer();
+      return;
+    }
 
     // ----- Montarias e pet (Fase 11): botão direito num bicho, ou o apito -----
     if (this._cliqueDireito && this.mobs && typeof this.mobs.interagir === 'function' && this._interagirComMob(alvo, shift)) {
@@ -1651,6 +1732,7 @@ export class Jogador {
 
   /** Liga ou desliga o modo criativo (comando /criativo). Devolve o novo estado. */
   definirCriativo(ligado) {
+    if (!ligado && this.criativoTravado) return this.criativo; // mundo Criativo: não desliga
     this.criativo = !!ligado;
     this.voando = this.criativo;       // ligar = voa; desligar = volta a andar
     if (this.criativo) this._limparQuebra();
@@ -1683,6 +1765,13 @@ export class Jogador {
   }
 
   serializar() {
+    // Hardcore caído: salva no lugar do corpo, já "reanimado" com metade da vida
+    if (this.morto && this.caido) {
+      return {
+        pos: [this.posicao.x, this.posicao.y, this.posicao.z], yaw: this.yaw, pitch: this.pitch,
+        vida: Math.max(1, Math.round(this.vidaMax * CONFIG.REANIMAR_VIDA)), xpTotal: this.xpTotal,
+      };
+    }
     // Morto: salva a casa (ou nascimento) com a vida cheia, para não reabrir no lugar da morte
     if (this.morto && this.obterPosRenascer) {
       const r = this.obterPosRenascer();

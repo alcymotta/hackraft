@@ -94,3 +94,12 @@ Desde a Fase 3, o Claude segue direto até a Fase 11 sem parar a cada fase, como
 - Montado não há dano de queda. Montarias e pets se curam 1 de vida a cada 10 s.
 - O lobo domado protege o dono mesmo sem estar montado.
 - Ao quebrar o ovo de dragão, ele volta como item e o tempo de chocar recomeça.
+
+## Dragões elementais e água (decisões tomadas)
+- **Água nos buracos:** só quem quebrou decide e manda a água pela rede (os outros só aplicam). A água escorre no máximo 3 blocos e nunca sobe acima do nível do mar; num lago mais alto (covil), só enche abaixo da superfície dele.
+- **Meteoro num lago:** a cratera enche de água (a água do lago entra), em vez de ficar uma bolha de ar.
+- **Ninhos:** cada ninho escolhe o elemento pelo terreno (gelo em picos muito altos, veneno perto de água, raio em platôs, fogo nos outros), mas 45% das vezes é sorteado entre os 4, para ter de todos em qualquer mundo. O ninho de fogo continua igual ao de antes.
+- **Ovos separados:** cada elemento tem o seu ovo (bloco e item próprios). Todos chocam perto de uma fogueira.
+- **Raio:** antes de cada raio cair saem faíscas no chão por 0,7 s, para dar tempo de fugir. O arco pula só para jogadores (não para mobs).
+- **Imunidades:** o dragão de gelo não fica lento e o venenoso não se envenena. O de fogo continua como era.
+- **Espada de raio:** +3 de dano em cada golpe (o "choque").

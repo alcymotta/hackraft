@@ -1061,6 +1061,54 @@ class Som {
         this._ruidoVarrido(t0, 'bandpass', 900, 200, d, 0.2 * v, 0.8);
         return true;
       }
+      // Dragões elementais: o mesmo rugido do dragão de fogo, com timbre próprio
+      case 'dragao_gelo': {
+        if (ataque) {
+          // rajada de gelo: sopro mais agudo + vento chiando + cristais tilintando
+          this._sopro(t0, 1.0, 0.45 * v);
+          this._ruidoVarrido(t0, 'highpass', 3000, 7000, 1.0, 0.12 * v, 0.7);
+          for (let k = 0; k < 5; k++) this._tomOnda(t0 + 0.1 + k * 0.13, 'triangle', 2400 + Math.random() * 1600, 2200, 0.25, 0.04 * v);
+          return true;
+        }
+        // rugido mais agudo e "de vidro": a mesma voz, um pouco mais alta, com brilho em cima
+        const d = 1.2 * (dano ? 0.7 : morte ? 1.7 : 1);
+        this._vozMob(t0, { onda: 'sawtooth', de: 170 * r * (dano ? 1.25 : 1), ate: 60 * r * queda, dur: d, forca: 0.2, filtro: 900, q: 4, ataque: 0.08, vib: [12, 10], v });
+        this._tomOnda(t0, 'sine', 90 * r, 40, d, 0.16 * v);
+        this._ruidoVarrido(t0, 'bandpass', 2600, 900, d, 0.14 * v, 1.2);
+        this._tomOnda(t0 + 0.1, 'triangle', 1800 * r, 1500, d * 0.8, 0.035 * v);
+        return true;
+      }
+      case 'dragao_veneno': {
+        if (ataque) {
+          // nuvem de veneno: sibilo comprido + borbulhas
+          this._chiado(t0, 2600 * r, 1.1, 0.32 * v, 18);
+          this._sopro(t0, 1.2, 0.3 * v);
+          for (let k = 0; k < 6; k++) this._tomOnda(t0 + k * 0.15, 'sine', 240 + Math.random() * 160, 600, 0.08, 0.05 * v);
+          return true;
+        }
+        // rugido grave e "molhado": vibrato lento e largo, com borbulhas
+        const d = 1.3 * (dano ? 0.7 : morte ? 1.7 : 1);
+        this._vozMob(t0, { onda: 'sawtooth', de: 115 * r * (dano ? 1.25 : 1), ate: 40 * r * queda, dur: d, forca: 0.24, filtro: 420, q: 5, ataque: 0.1, vib: [7, 14], v });
+        this._tomOnda(t0, 'sine', 62 * r, 30, d, 0.2 * v);
+        this._chiado(t0 + 0.1, 1800 * r, d * 0.8, 0.12 * v, 9);
+        for (let k = 0; k < 4; k++) this._tomOnda(t0 + 0.2 + k * 0.22, 'sine', 180 + Math.random() * 120, 420, 0.07, 0.04 * v);
+        return true;
+      }
+      case 'dragao_raio': {
+        if (ataque) {
+          // a tempestade se forma: zumbido elétrico subindo + estalos
+          this._vozMob(t0, { onda: 'square', de: 70, ate: 160, dur: 1.2, forca: 0.08, filtro: 1400, q: 2, ataque: 0.2, vib: [45, 12], v });
+          this._cliques(t0, 10, 0.1, 4200, 0.35 * v, 1);
+          return true;
+        }
+        // rugido com zumbido elétrico por cima
+        const d = 1.2 * (dano ? 0.7 : morte ? 1.7 : 1);
+        this._vozMob(t0, { onda: 'sawtooth', de: 140 * r * (dano ? 1.25 : 1), ate: 50 * r * queda, dur: d, forca: 0.22, filtro: 600, q: 3, ataque: 0.08, vib: [22, 9], v });
+        this._tomOnda(t0, 'sine', 72 * r, 34, d, 0.18 * v);
+        this._vozMob(t0, { onda: 'square', de: 110 * r, ate: 90 * r, dur: d * 0.9, forca: 0.05, filtro: 2500, q: 2, ataque: 0.05, vib: [60, 8], v });
+        this._cliques(t0 + 0.1, 5, 0.12, 3800, 0.25 * v, 1);
+        return true;
+      }
       case 'hidra': {
         // sibilo triplo: 3 chiados em alturas diferentes
         const alturas = morte ? [2400, 1800, 1200] : [2200, 3300, 2700];
@@ -1143,6 +1191,33 @@ class Som {
           this._tomOnda(ta, 'sine', 180, 100, 0.08, 0.2 * vol);
         });
       }
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /**
+   * Trovão do raio do dragão: estalo seco + ronco grave que vai sumindo.
+   * `vol` (0 a 1): longe, mais baixo.
+   */
+  trovao(vol = 1) {
+    if (!this._podeTocar()) return;
+    const v = Math.min(1, Math.max(0, Number(vol) || 0));
+    if (v <= 0.02) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      this._ruidoVarrido(t0, 'bandpass', 4200, 1200, 0.12, 0.55 * v, 1.5);     // o estalo
+      this._ruidoVarrido(t0 + 0.04, 'lowpass', 900, 70, 1.8, 0.45 * v, 0.7);  // o ronco
+      this._tomOnda(t0 + 0.02, 'sine', 70, 28, 1.4, 0.3 * v);
+      this._cliques(t0, 4, 0.03, 5000, 0.3 * v, 0.9);
+    } catch (e) { /* som é enfeite */ }
+  }
+
+  /** Choquinho da espada de raio */
+  choque() {
+    if (!this._podeTocar()) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      this._cliques(t0, 4, 0.025, 4600, 0.28, 1);
+      this._tomOnda(t0, 'square', 900, 300, 0.12, 0.04);
     } catch (e) { /* som é enfeite */ }
   }
 

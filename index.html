@@ -75,13 +75,20 @@
           <div id="criar-lista"></div>
         </section>
       </div>
+      <div class="inv-rodape">
+        <button id="btn-limpar-inv" class="botao botao-pequeno botao-perigo">Limpar inventário</button>
+      </div>
     </div>
   </div>
 
   <!-- Baú (botão direito num baú) -->
   <div id="tela-bau" class="fundo-tela oculto">
     <div class="painel painel-inventario">
-      <h2 id="bau-titulo" class="titulo-painel">Baú</h2>
+      <div class="bau-cabecalho">
+        <h2 id="bau-titulo" class="titulo-painel">Baú</h2>
+        <!-- Lixeira: soltar aqui o item da mão apaga o item -->
+        <div id="bau-lixeira" class="lixeira" title="Solte aqui um item da mão para apagar">Lixeira</div>
+      </div>
       <div id="bau-grade" class="grade-espacos"></div>
       <div class="separador"></div>
       <h2 class="titulo-painel">Inventário</h2>
@@ -119,6 +126,13 @@
       <div class="botoes caixa-sala">
         <label class="rotulo-campo" for="campo-apelido">Seu apelido</label>
         <input id="campo-apelido" class="campo" type="text" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Jogador">
+        <label class="rotulo-campo">Tipo de mundo</label>
+        <div id="escolha-modo" class="linha-modos">
+          <button type="button" class="botao botao-pequeno modo-opcao ativo" data-modo="sobrevivencia">Sobrevivência</button>
+          <button type="button" class="botao botao-pequeno modo-opcao" data-modo="criativo">Criativo</button>
+          <button type="button" class="botao botao-pequeno modo-opcao" data-modo="hardcore">Hardcore</button>
+        </div>
+        <p id="nota-modo" class="nota-pequena"></p>
         <button id="btn-criar-sala" class="botao">Criar sala</button>
         <p class="nota-pequena">Joga no seu mundo. O outro jogador entra com o código.</p>
         <div class="separador-ou"><span>ou</span></div>
@@ -144,6 +158,7 @@
   <div id="tela-pausa" class="fundo-tela oculto">
     <div class="conteudo-central">
       <h1 class="titulo-pausa">Jogo pausado</h1>
+      <p id="modo-mundo-pausa" class="frase-modo"></p>
       <div class="botoes">
         <button id="btn-continuar" class="botao">Continuar</button>
       </div>
@@ -183,6 +198,29 @@
       <p class="frase-morte">Seus itens estão a salvo.</p>
       <div class="botoes">
         <button id="btn-renascer" class="botao">Voltar para casa</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tela de quem caiu no mundo Hardcore (espera ser reanimado) -->
+  <div id="tela-caido" class="fundo-tela oculto">
+    <div class="conteudo-central">
+      <h1 class="titulo-morte">Você caiu!</h1>
+      <p class="frase-morte">Peça para alguém te reanimar</p>
+      <p id="contagem-caido" class="frase-morte">Caído há 0:00</p>
+      <div class="botoes">
+        <button id="btn-sair-caido" class="botao botao-pequeno">Sair para o menu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fim de jogo (Hardcore: todos caíram) -->
+  <div id="tela-fim" class="fundo-tela oculto">
+    <div class="conteudo-central">
+      <h1 class="titulo-morte">Fim de jogo</h1>
+      <p id="texto-fim" class="frase-morte"></p>
+      <div class="botoes">
+        <button id="btn-voltar-menu" class="botao">Voltar ao menu</button>
       </div>
     </div>
   </div>

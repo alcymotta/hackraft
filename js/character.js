@@ -8,9 +8,14 @@
 // =====================================================================
 
 import * as THREE from 'three';
+import { texturaDaFace } from './blocks.js';
 
 const ESCALA = 1.8 / 32; // tamanho de 1 pixel de skin, em blocos
 const DURACAO_GOLPE = 0.25; // segundos do balanço do braço ao golpear
+const POSE_NADO_ANGULO = 1.4;     // inclinação do corpo ao nadar (~80 graus)
+const POSE_PLANAR_ANGULO = 1.15;  // inclinação do corpo ao planar (~66 graus)
+const CENTRO_CORPO = 0.9;         // altura do centro do boneco (o corpo gira em volta dele)
+const DOIS_PI = Math.PI * 2;
 
 // Cores padrão (strings CSS)
 const CORES_PADRAO = {
@@ -850,6 +855,10 @@ registrarMaterialArmadura('diamante', { rotulo: 'Diamante', cor: '#4fe3e6', esti
 registrarMaterialArmadura('draconio', { rotulo: 'Dracônio', cor: '#4a1a3a', estilo: 'veios', veio: '#ff4a6a', brilho: '#ff3a6a' });
 registrarMaterialArmadura('escama_dragao', { rotulo: 'Escama de dragão', cor: '#8c1a1a', estilo: 'escamas', brilho: '#ff4a2a' });
 registrarMaterialArmadura('escama_hidra', { rotulo: 'Escama de hidra', cor: '#2a8f86', estilo: 'escamas', brilho: '#40ffe0' });
+// Dragões elementais
+registrarMaterialArmadura('escama_dragao_gelo', { rotulo: 'Escama de dragão de gelo', cor: '#7fc4e4', estilo: 'escamas', brilho: '#c8f6ff' });
+registrarMaterialArmadura('escama_dragao_veneno', { rotulo: 'Escama de dragão venenoso', cor: '#3f8a26', estilo: 'escamas', brilho: '#8aff3a' });
+registrarMaterialArmadura('escama_dragao_raio', { rotulo: 'Escama de dragão de raio', cor: '#d8b42a', estilo: 'escamas', brilho: '#fff6a0' });
 
 // ---------------------------------------------------------------------
 // Geometrias e materiais compartilhados (cache)
@@ -952,6 +961,10 @@ export const VISUAIS_ARMA = {
   espada_draconio: { rotulo: 'Espada de dracônio', ...CABO, guarda: '#2a1030', lamina: '#6a2a9a', fio: '#ff3040', sombra: '#b01828' },
   espada_dragao: { rotulo: 'Espada de dragão', ...CABO, guarda: '#5a1010', lamina: '#c42020', fio: '#ff7a1a', sombra: '#8a1010', emissive: { cor: '#ff7a1a', int: 0.55, vel: 5, amp: 0.4 } },
   espada_hidra: { rotulo: 'Espada de hidra', ...CABO, guarda: '#14504a', lamina: '#2fa59a', fio: '#7af0e0', sombra: '#1f7a72', reflexo: '#c8fff4' },
+  // Espadas dos dragões elementais
+  espada_gelo: { rotulo: 'Espada de gelo', ...CABO, guarda: '#3a6a8a', lamina: '#9fe0fa', fio: '#effcff', sombra: '#5fa8d0', reflexo: '#ffffff', emissive: { cor: '#8fe8ff', int: 0.35, vel: 2, amp: 0.3 } },
+  espada_veneno: { rotulo: 'Espada venenosa', ...CABO, guarda: '#2a5a1a', lamina: '#5fc83a', fio: '#c8ff7a', sombra: '#3a8a22', emissive: { cor: '#7aff3a', int: 0.3, vel: 3, amp: 0.3 } },
+  espada_raio: { rotulo: 'Espada de raio', ...CABO, guarda: '#3a3f6a', lamina: '#f0d440', fio: '#ffffff', sombra: '#c09c20', emissive: { cor: '#fff27a', int: 0.5, vel: 9, amp: 0.5 } },
 };
 
 // Material de uma peça da lâmina: Lambert na cor, com brilho pulsante se a
@@ -1016,7 +1029,9 @@ export class Personagem {
     });
 
     this.geometrias = [];
-    this.grupo = new THREE.Group();
+    this.grupo = new THREE.Group();   // grupo de fora (posição e giro): quem usa o boneco mexe nele
+    this.raiz = new THREE.Group();    // grupo de dentro (corpo todo): inclina ao nadar e planar
+    this.grupo.add(this.raiz);
 
     // Cria uma parte (caixa) com as UVs da skin; o centro fica em (0, -altura/2) do pivô
     const criarParte = (caixa, deslocY) => {
@@ -1039,15 +1054,15 @@ export class Personagem {
 
     // Corpo (fixo): de 12 a 24 px de altura
     this.corpo = criarParte(CAIXAS.corpo, 18);
-    this.grupo.add(this.corpo);
-    this.grupo.add(criarCamada2('corpo', CAIXAS_2.corpo, 9, 13, 5, 18));
+    this.raiz.add(this.corpo);
+    this.raiz.add(criarCamada2('corpo', CAIXAS_2.corpo, 9, 13, 5, 18));
 
     // Cabeça: pivô no pescoço (24 px)
     this.pivoCabeca = new THREE.Group();
     this.pivoCabeca.position.set(0, 24 * ESCALA, 0);
     this.pivoCabeca.add(criarParte(CAIXAS.cabeca, 4));
     this.pivoCabeca.add(criarCamada2('cabeca', CAIXAS_2.cabeca, 9, 9, 9, 4));
-    this.grupo.add(this.pivoCabeca);
+    this.raiz.add(this.pivoCabeca);
 
     // Braços: pivôs nos ombros (24 px). O braço direito fica em +X.
     this.pivoBracoD = new THREE.Group();
@@ -1058,7 +1073,7 @@ export class Personagem {
     this.pivoBracoE.position.set(-6 * ESCALA, 24 * ESCALA, 0);
     this.pivoBracoE.add(criarParte(CAIXAS.bracoE, -6));
     this.pivoBracoE.add(criarCamada2('bracoE', CAIXAS_2.bracoE, 5, 13, 5, -5.7));
-    this.grupo.add(this.pivoBracoD, this.pivoBracoE);
+    this.raiz.add(this.pivoBracoD, this.pivoBracoE);
 
     // Pernas: pivôs no quadril (12 px)
     this.pivoPernaD = new THREE.Group();
@@ -1069,13 +1084,13 @@ export class Personagem {
     this.pivoPernaE.position.set(-2 * ESCALA, 12 * ESCALA, 0);
     this.pivoPernaE.add(criarParte(CAIXAS.pernaE, -6));
     this.pivoPernaE.add(criarCamada2('pernaE', CAIXAS_2.pernaE, 5, 12.7, 5, -5.85));
-    this.grupo.add(this.pivoPernaD, this.pivoPernaE);
+    this.raiz.add(this.pivoPernaD, this.pivoPernaE);
 
     // Grupos fixos onde ficam as peças extras (esvaziados e refeitos quando muda)
     this.grupoChapeu = new THREE.Group();   // em cima da cabeça (gira com ela)
     this.pivoCabeca.add(this.grupoChapeu);
     this.grupoCostas = new THREE.Group();   // nas costas (mochila), coordenadas a partir dos pés
-    this.grupo.add(this.grupoCostas);
+    this.raiz.add(this.grupoCostas);
     this.grupoMao = new THREE.Group();      // na mão direita
     this.grupoMao.position.set(0, -10.5 * ESCALA, 0);
     this.pivoBracoD.add(this.grupoMao);
@@ -1086,6 +1101,15 @@ export class Personagem {
     this._tempo = 0;      // para a respiração
     this._abertura = 0;   // quanto as pernas estão abertas (no ar)
     this._golpe = -1;     // tempo do golpe em andamento (-1 = sem golpe)
+    this.contGolpes = 0;  // conta os golpes (a mãozinha da 1ª pessoa usa para saber quando bater)
+
+    // Poses especiais: quem usa o boneco liga estas duas chaves antes de chamar animar()
+    this.planando = false;  // capa aberta, planando
+    this.nadando = false;   // deitado na água
+    this._pPlan = 0;        // 0..1 suavizado (quanto já está na pose de planar)
+    this._pNado = 0;        // 0..1 suavizado (quanto já está deitado nadando)
+    this._faseNado = 0;     // avança batendo os braços (crawl)
+    this._inclina = 0;      // inclinação do corpo para frente (radianos, positivo = deitado)
   }
 
   // ------------------------------------------------------------------
@@ -1244,12 +1268,12 @@ export class Personagem {
         novaMalha('capacete', 10, 10, 10, CAIXAS_ARM.cabeca, {}, this.pivoCabeca, 4);
         break;
       case 'peitoral':
-        novaMalha('peito', 10, 14, 6, CAIXAS_ARM.corpo, {}, this.grupo, 18);
+        novaMalha('peito', 10, 14, 6, CAIXAS_ARM.corpo, {}, this.raiz, 18);
         novaMalha('braco', 6, 13.5, 6, CAIXAS_ARM.braco, {}, this.pivoBracoD, -5.65);
         novaMalha('braco', 6, 13.5, 6, CAIXAS_ARM.braco, {}, this.pivoBracoE, -5.65);
         break;
       case 'calca':
-        novaMalha('cintura', 9.5, 5.5, 5.5, CAIXAS_ARM.corpo, { deLinha: 8, nLinhas: 4 }, this.grupo, 14);
+        novaMalha('cintura', 9.5, 5.5, 5.5, CAIXAS_ARM.corpo, { deLinha: 8, nLinhas: 4 }, this.raiz, 14);
         novaMalha('perna', 5.5, 13, 5.5, CAIXAS_ARM.perna, {}, this.pivoPernaD, -5.75);
         novaMalha('perna', 5.5, 13, 5.5, CAIXAS_ARM.perna, {}, this.pivoPernaE, -5.75);
         break;
@@ -1265,7 +1289,12 @@ export class Personagem {
   _montarMao() {
     limparGrupo(this.grupoMao);
     if (!this._mao) return;
-    const { base, n } = separarMelhoria(this._mao);
+    this.grupoMao.add(this.criarEspada(this._mao));
+  }
+
+  /** Monta uma espada nova (grupo) para o item `mao`. Também usada pela mãozinha da 1ª pessoa. */
+  criarEspada(mao) {
+    const { base, n } = separarMelhoria(mao);
     const v = VISUAIS_ARMA[base];
     // A espada é feita apontando para +Y e depois deitada para a frente (-Z)
     const e = new THREE.Group();
@@ -1292,13 +1321,13 @@ export class Personagem {
     peca(lam(v.lamina), 1, 1.2, 1.4, 0, 13.6, 0);        // ponta
     if (v.reflexo) peca(lam(v.reflexo), 1.15, 5, 0.5, 0, 9, 0.2); // reflexo (hidra)
     e.rotation.x = -Math.PI / 2 + 0.3;
-    this.grupoMao.add(e);
+    return e;
   }
 
   // Capa: duas metades articuladas que balançam
   _montarCapa() {
     if (this._capa) {
-      this.grupo.remove(this._capa.pivo);
+      this.raiz.remove(this._capa.pivo);
       this._capa = null;
     }
     if (!this._acessorio) return;
@@ -1313,8 +1342,8 @@ export class Personagem {
     inf.position.y = -3.5 * ESCALA;
     pivoInf.add(inf);
     pivo.add(sup, pivoInf);
-    this.grupo.add(pivo);
-    this._capa = { pivo, pivoInf, inf };
+    this.raiz.add(pivo);
+    this._capa = { pivo, pivoInf, inf, sup };
   }
 
   // Afasta chapéu, mochila e capa quando há armadura por baixo
@@ -1344,6 +1373,7 @@ export class Personagem {
   /** Balanço rápido do braço direito para a frente e de volta (~0.25 s) */
   animarGolpe() {
     this._golpe = 0;
+    this.contGolpes++;
   }
 
   /**
@@ -1404,11 +1434,79 @@ export class Personagem {
         c.rotation.x = c.userData.base * (1 - Math.min(0.6, v * 0.12)) + Math.sin(this._tempo * 5 + k * 2) * 0.1 * agita;
       }
     }
+
+    this._aplicarPoses(dt, vel);
+  }
+
+  /**
+   * Poses especiais por cima da animação normal: nadar deitado (crawl) e planar com a capa.
+   * `this.nadando` e `this.planando` dizem qual pose é a desejada; aqui ela entra aos poucos.
+   */
+  _aplicarPoses(dt, vel) {
+    const suave = Math.min(1, dt * 8);
+    this._pNado += ((this.nadando ? 1 : 0) - this._pNado) * suave;
+    this._pPlan += ((this.planando ? 1 : 0) - this._pPlan) * suave;
+    if (this._pNado < 0.002) this._pNado = 0;
+    if (this._pPlan < 0.002) this._pPlan = 0;
+    const kN = this._pNado, kP = this._pPlan;
+
+    // Inclinação do corpo todo para frente (em volta do centro do corpo, 0.9 de altura)
+    const inclina = kN * POSE_NADO_ANGULO + kP * POSE_PLANAR_ANGULO;
+    this._inclina = inclina;
+    const raiz = this.raiz;
+    if (inclina > 0) {
+      raiz.rotation.x = -inclina;
+      raiz.position.y = CENTRO_CORPO * (1 - Math.cos(inclina));
+      raiz.position.z = CENTRO_CORPO * Math.sin(inclina);
+    } else if (raiz.rotation.x !== 0) {
+      raiz.rotation.x = 0; raiz.position.y = 0; raiz.position.z = 0;
+    }
+
+    // Nadar: braços giram alternados (crawl) e as pernas batem
+    if (kN > 0) {
+      this._faseNado += dt * (4 + Math.min(vel, 3) * 1.6);
+      const fase = this._faseNado;
+      const giro = (a) => { const m = a % DOIS_PI; return m > Math.PI ? m - DOIS_PI : m; };
+      const bD = this.pivoBracoD.rotation.x, bE = this.pivoBracoE.rotation.x;
+      this.pivoBracoD.rotation.x = bD + (giro(fase) - bD) * kN;
+      this.pivoBracoE.rotation.x = bE + (giro(fase + Math.PI) - bE) * kN;
+      const batida = Math.sin(fase * 3) * 0.45;
+      const pD = this.pivoPernaD.rotation.x, pE = this.pivoPernaE.rotation.x;
+      this.pivoPernaD.rotation.x = pD + (batida - pD) * kN;
+      this.pivoPernaE.rotation.x = pE + (-batida - pE) * kN;
+    }
+
+    // Planar: braços abertos para os lados e capa bem aberta (estilo asa)
+    if (kP > 0) {
+      const abre = 1.25 * kP;
+      this.pivoBracoD.rotation.x *= 1 - kP; this.pivoBracoE.rotation.x *= 1 - kP;
+      this.pivoPernaD.rotation.x *= 1 - kP; this.pivoPernaE.rotation.x *= 1 - kP;
+      this.pivoBracoD.rotation.z += abre;
+      this.pivoBracoE.rotation.z -= abre;
+      this.pivoPernaD.rotation.z = 0.08 * kP;
+      this.pivoPernaE.rotation.z = -0.08 * kP;
+    }
+    if (this._capa) {
+      const c = this._capa;
+      if (kP > 0) {
+        const tremor = Math.sin(this._tempo * 9) * 0.04 * kP;
+        c.pivo.rotation.x = c.pivo.rotation.x * (1 - kP) + (-0.1 + tremor) * kP;
+        c.pivoInf.rotation.x = c.pivoInf.rotation.x * (1 - kP) + (-0.05 - tremor) * kP;
+        c.sup.scale.set(1 + 1.6 * kP, 1, 1);
+        c.inf.scale.x = c.inf.scale.x * (1 - kP) + 3.6 * kP;
+        c.inf.scale.y = 1 + 0.35 * kP;
+        c.pivoInf.position.y = -7 * ESCALA;
+      } else if (c.sup.scale.x !== 1 || c.inf.scale.y !== 1) {
+        c.sup.scale.set(1, 1, 1);
+        c.inf.scale.y = 1;
+      }
+    }
   }
 
   /** Inclina a cabeça: pitch positivo = olhar para cima (limite de ±1.2 rad) */
   definirOlhar(pitch) {
-    this.pivoCabeca.rotation.x = Math.max(-1.2, Math.min(1.2, pitch));
+    // Com o corpo deitado, a cabeça compensa a inclinação para continuar olhando para frente
+    this.pivoCabeca.rotation.x = Math.max(-1.2, Math.min(1.2, pitch + this._inclina * 0.85));
   }
 
   /** Libera a memória da GPU (geometrias e materiais de cache são compartilhados e ficam) */
@@ -1418,5 +1516,182 @@ export class Personagem {
     this.materialCamada2.dispose();
     this.textura.dispose();
     this.neonTextura.dispose();
+  }
+}
+
+// =====================================================================
+// MÃOZINHA DA 1ª PESSOA
+// ---------------------------------------------------------------------
+// O braço direito aparece no canto de baixo da tela (como no Minecraft).
+// Ele é desenhado numa SEGUNDA PASSADA: depois de desenhar o mundo, limpamos
+// só a profundidade e desenhamos a mão numa cena própria (com luzes próprias).
+// Assim a mão nunca entra dentro de paredes e não é escurecida pela noite.
+// Usa a pele e a roupa do `Personagem` (mesmos materiais e texturas).
+// =====================================================================
+const MAO = {
+  // Posição do ombro do braço, em relação à câmera (x direita, y cima, -z frente)
+  posicao: [0.38, -0.55, -0.48],
+  rotX: 1.95,        // quanto o braço aponta para frente/cima
+  rotY: 0.32,        // gira um pouco para dentro (para o centro da tela)
+  rotZ: -0.12,
+  duracaoGolpe: 0.28,
+  tamanhoBloco: 0.27, // lado do cubo do bloco segurado (em blocos)
+};
+const texturasCubo = new Map(); // nome da textura → CanvasTexture (compartilhado)
+
+export class MaoPrimeiraPessoa {
+  /**
+   * @param opcoes { scene, camera, personagem, texturas }
+   *   scene: a cena principal (ganha um gancho de pós-desenho)
+   *   personagem: o Personagem do jogador (pele, roupa e espada)
+   *   texturas: o objeto de criarTexturas() (para o cubinho do bloco)
+   */
+  constructor({ scene, camera, personagem, texturas }) {
+    this.camera = camera;
+    this.personagem = personagem;
+    this.texturas = texturas;
+    this.visivel = false;
+
+    // Cena própria da mão, com luz fixa
+    this.cena = new THREE.Scene();
+    this.cena.add(new THREE.AmbientLight(0xffffff, 1.6));
+    const sol = new THREE.DirectionalLight(0xffffff, 1.4);
+    sol.position.set(-0.5, 1, 0.8);
+    this.cena.add(sol);
+
+    this.ancora = new THREE.Group();   // acompanha a câmera
+    this.cena.add(this.ancora);
+    this.pivo = new THREE.Group();     // ombro: gira para balançar e golpear
+    this.pivo.position.set(...MAO.posicao);
+    this.ancora.add(this.pivo);
+
+    // Braço (mesmas geometrias e materiais do boneco)
+    const base = personagem.pivoBracoD.children[0];
+    const manga = personagem.pivoBracoD.children[1];
+    this.malhaBraco = new THREE.Mesh(base.geometry, personagem.material);
+    this.malhaBraco.position.copy(base.position);
+    this.malhaManga = new THREE.Mesh(manga.geometry, personagem.materialCamada2);
+    this.malhaManga.position.copy(manga.position);
+    this.grupoItem = new THREE.Group();   // na ponta da mão
+    this.grupoItem.position.set(0, -10.5 * ESCALA, 0);
+    this.pivo.add(this.malhaBraco, this.malhaManga, this.grupoItem);
+
+    this._itemAtual = null;   // chave do que está na mão (para só remontar quando mudar)
+    this._geoCubo = new THREE.BoxGeometry(1, 1, 1);
+    this._fase = 0;
+    this._amp = 0;
+    this._golpe = -1;
+    this._golpesVistos = personagem.contGolpes;
+    this._entrada = 0;        // 0..1: a mão sobe suavemente quando aparece
+
+    // Gancho: depois que o mundo foi desenhado, desenha a mão por cima
+    scene.onAfterRender = (renderer, _cena, cam) => this._desenhar(renderer, cam);
+  }
+
+  /**
+   * Chamada uma vez por quadro.
+   * mostrar: true só em 1ª pessoa, sem menu, sem montaria
+   * vel: velocidade horizontal; noChao: está pisando no chão
+   * itemSel: item da hotbar selecionado (texto) ou null; blocoSel: id do bloco dele ou null
+   */
+  atualizar(dt, mostrar, vel, noChao, blocoSel) {
+    this.visivel = mostrar;
+    if (!mostrar) { this._entrada = 0; return; }
+    this._entrada += (1 - this._entrada) * Math.min(1, dt * 8);
+
+    // O que está na mão: espada da mão principal, senão o bloco selecionado
+    const mao = this.personagem._mao;
+    const chave = mao ? 'mao:' + mao : (blocoSel ? 'bloco:' + blocoSel : '');
+    if (chave !== this._itemAtual) { this._itemAtual = chave; this._montarItem(mao, blocoSel); }
+
+    // Espelha a manga da roupa (ela só aparece se a roupa tem manga)
+    this.malhaManga.visible = this.personagem.pivoBracoD.children[1].visible;
+
+    // Golpe novo? (o Personagem conta cada animarGolpe)
+    if (this.personagem.contGolpes !== this._golpesVistos) {
+      this._golpesVistos = this.personagem.contGolpes;
+      this._golpe = 0;
+    }
+    let golpe = 0;
+    if (this._golpe >= 0) {
+      this._golpe += dt;
+      if (this._golpe >= MAO.duracaoGolpe) this._golpe = -1;
+      else golpe = Math.sin((this._golpe / MAO.duracaoGolpe) * Math.PI);
+    }
+
+    // Balanço ao andar
+    this._fase += (noChao ? vel : 0) * dt * 2.4;
+    const alvoAmp = noChao ? Math.min(1, vel / 4.3) : 0;
+    this._amp += (alvoAmp - this._amp) * Math.min(1, dt * 8);
+    const bx = Math.cos(this._fase) * 0.018 * this._amp;
+    const by = Math.abs(Math.sin(this._fase)) * -0.022 * this._amp;
+    const respira = Math.sin(this.personagem._tempo * 1.8) * 0.004;
+
+    const p = this.pivo;
+    const sobe = (1 - this._entrada) * -0.35;
+    p.position.set(
+      MAO.posicao[0] + bx - golpe * 0.10,
+      MAO.posicao[1] + by + respira + sobe + golpe * 0.02,
+      MAO.posicao[2] - golpe * 0.18);
+    p.rotation.set(MAO.rotX - golpe * 0.5, MAO.rotY + golpe * 0.45, MAO.rotZ);
+
+    // Acompanha a câmera
+    this.ancora.position.copy(this.camera.position);
+    this.ancora.quaternion.copy(this.camera.quaternion);
+  }
+
+  // Monta a espada ou o cubinho do bloco na ponta da mão
+  _montarItem(mao, blocoSel) {
+    limparGrupo(this.grupoItem);
+    if (mao) {
+      const espada = this.personagem.criarEspada(mao);
+      espada.scale.setScalar(0.85);
+      this.grupoItem.add(espada);
+    } else if (blocoSel) {
+      const mats = this._materiaisDoBloco(blocoSel);
+      if (!mats) return;
+      const cubo = new THREE.Mesh(this._geoCubo, mats);
+      const t = MAO.tamanhoBloco;
+      cubo.scale.setScalar(t);
+      cubo.position.set(0, -0.05, -0.12);
+      cubo.rotation.set(0.15, 0.7, 0);
+      this.grupoItem.add(cubo);
+    }
+  }
+
+  // 6 materiais do cubo (direita, esquerda, topo, baixo, frente, trás) com as texturas do bloco
+  _materiaisDoBloco(id) {
+    if (!this.texturas || !this.texturas.canvasDaTextura) return null;
+    const def = { topo: texturaDaFace(id, 'topo'), lado: texturaDaFace(id, 'lado'), baixo: texturaDaFace(id, 'baixo') };
+    const mat = (nome) => {
+      let tex = texturasCubo.get(nome);
+      if (!tex) {
+        const canvas = this.texturas.canvasDaTextura(nome);
+        if (!canvas) return null;
+        tex = new THREE.CanvasTexture(canvas);
+        tex.magFilter = THREE.NearestFilter;
+        tex.minFilter = THREE.NearestFilter;
+        tex.generateMipmaps = false;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        texturasCubo.set(nome, tex);
+      }
+      return new THREE.MeshLambertMaterial({ map: tex, transparent: true, alphaTest: 0.4 });
+    };
+    const lado = mat(def.lado), topo = mat(def.topo), baixo = mat(def.baixo);
+    if (!lado || !topo || !baixo) return null;
+    return [lado, lado, topo, baixo, lado, lado];
+  }
+
+  _desenhar(renderer, cam) {
+    if (!this.visivel) return;
+    // Segunda passada: limpa só a profundidade e desenha a mão por cima de tudo
+    const autoClear = renderer.autoClear;
+    const autoReset = renderer.info.autoReset;
+    renderer.autoClear = false;
+    renderer.info.autoReset = false; // (não zera as contagens do F3)
+    renderer.clearDepth();
+    renderer.render(this.cena, cam);
+    renderer.autoClear = autoClear;
+    renderer.info.autoReset = autoReset;
   }
 }

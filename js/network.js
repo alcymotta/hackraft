@@ -29,7 +29,7 @@
 //   Cliente → anfitrião
 //     ola        { versao, apelido, cores }
 //                1ª mensagem: "quero entrar". `cores` = cores da roupa.
-//     pos        { x, y, z, yaw, pitch, noAr, quebrando, morto }
+//     pos        { x, y, z, yaw, pitch, noAr, quebrando, morto, planando, nadando }
 //                Posição, ~15 vezes por segundo (só se mudou; no mínimo
 //                1 vez por segundo, que serve de "ainda estou aqui").
 //                `morto` (Fase 8): o jogador está na tela de morte (os
@@ -122,7 +122,7 @@
 //     recusado   { motivo }    não deu para entrar (sala cheia, versão diferente)
 //     entrou     { id, apelido, cores }   alguém novo chegou
 //     saiu       { id }                   alguém foi embora
-//     pos        { id, x, y, z, yaw, pitch, noAr, quebrando }
+//     pos        { id, x, y, z, yaw, pitch, noAr, quebrando, planando, nadando }
 //                Posição de outro jogador (o anfitrião ou um repasse).
 //     bloco      { x, y, z, id, e, de }
 //                Um bloco mudou. `de` = id de quem mudou. O anfitrião manda
@@ -233,6 +233,29 @@
 //   null) e cada mob do `bemvindo` ganhou esse mesmo `extra` no 8º lugar.
 //   Os flags do `mobs` ganharam: 17 domado, 18 montado, 19 sentado, 20 desmaiado.
 //
+// PROTOCOLO VERSÃO 9 (tipo de mundo e Hardcore):
+//   O `bemvindo` leva `modoMundo`: 'sobrevivencia' | 'criativo' | 'hardcore'
+//   (a escolha do anfitrião, que também vai no save). Quem entra usa o do
+//   anfitrião. `rede.modoMundo` guarda o valor (o main define no anfitrião).
+//   Hardcore: quem morre fica CAÍDO (o `pos` leva `morto: true`; o corpo
+//   aparece deitado para todos) e só volta se outro jogador reanimar.
+//   Cliente → anfitrião
+//     reanimar   { apelido }
+//                "Segurei o botão direito 4 s ao lado do corpo de `apelido`".
+//                O anfitrião confere: quem reanima está vivo, o alvo está
+//                mesmo caído e a distância entre os dois é de até
+//                REANIMAR_DIST (+ REANIMAR_TOLERANCIA de folga da rede).
+//                Se valer, manda `reanimado` só para o alvo.
+//   Anfitrião → cliente
+//     reanimado  { por }
+//                "`por` te reanimou": o jogador volta com metade da vida.
+//     fimDeJogo  { }
+//                Todos os jogadores da sala estão caídos (só o anfitrião decide,
+//                em `todosCaidos()`). O mundo Hardcore foi apagado do save.
+//   API: rede.reanimar(apelido) (devolve true se o pedido saiu/valeu),
+//   rede.aoReanimado(fn(por)), rede.aoFimDeJogo(fn), rede.todosCaidos()
+//   e rede.enviarFimDeJogo() (anfitrião).
+//
 // LUA VERMELHA (Fase 8): o anfitrião (ou quem joga sozinho) sorteia ao
 //   anoitecer (1 em 8, CHANCE_LUA_VERMELHA) e manda `luaVermelha`. Todos
 //   chamam ceu.definirLuaVermelha e mostram o aviso no chat. Para forçar
@@ -292,7 +315,7 @@ import { Equipamento } from './equipamento.js';
 import { quantoCabe } from './itens_chao.js';
 
 const PREFIXO_ID = 'hackraft-';
-const VERSAO_PROTOCOLO = 8;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5, 5 = Fase 6, 6 = Fase 7, 7 = Fase 8, 8 = Fase 11)
+const VERSAO_PROTOCOLO = 9;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5, 5 = Fase 6, 6 = Fase 7, 7 = Fase 8, 8 = Fase 11, 9 = tipo de mundo/Hardcore)
 const MAX_QTD_ITEM = 64;             // maior pilha aceita numa mensagem de item
 const VEL_MAX_ITEM = 20;             // maior velocidade aceita para um item solto
 const DIST_SOLTAR = 8;               // o cliente só solta itens até 8 blocos de onde está
@@ -801,7 +824,7 @@ function lerExtraMob(e) {
 
 /** Objeto de estado (posição) reaproveitado para cada jogador */
 function novoEstado() {
-  return { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false, morto: false };
+  return { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false, morto: false, planando: false, nadando: false };
 }
 
 /**
@@ -817,6 +840,8 @@ function lerEstado(m, destino) {
   destino.noAr = m.noAr === true;
   destino.quebrando = m.quebrando === true;
   destino.morto = m.morto === true;
+  destino.planando = m.planando === true;
+  destino.nadando = m.nadando === true;
   return true;
 }
 
@@ -969,6 +994,9 @@ export class Rede {
     this._ultimaMsgAnfitriao = 0;
     this._caiu = false;
     this._ouvintesDesconectar = [];
+    this.modoMundo = 'sobrevivencia'; // 'sobrevivencia' | 'criativo' | 'hardcore' (o main define no anfitrião)
+    this._ouvintesReanimado = [];     // fn(por): fui reanimado
+    this._ouvintesFimDeJogo = [];     // fn(): fim de jogo (Hardcore)
 
     // --- Envio periódico (quando foi o último envio, em performance.now) ---
     this._tempoPos = 0;
@@ -976,7 +1004,7 @@ export class Rede {
     this._tempoEstado = 0;
     this._ultimoEnvioPos = -Infinity;
     // Mensagens reaproveitadas (o loop do jogo não cria objetos novos)
-    this._msgPos = { tipo: 'pos', id: '', x: NaN, y: NaN, z: NaN, yaw: NaN, pitch: NaN, noAr: false, quebrando: false, morto: false };
+    this._msgPos = { tipo: 'pos', id: '', x: NaN, y: NaN, z: NaN, yaw: NaN, pitch: NaN, noAr: false, quebrando: false, morto: false, planando: false, nadando: false };
     this._msgHora = { tipo: 'hora', hora: 0 };
     this._relogio = null;
 
@@ -1209,7 +1237,7 @@ export class Rede {
       estado: novoEstado(),   // última posição recebida
       temEstado: false,
       // mensagem de repasse da posição (reaproveitada)
-      msgPos: { tipo: 'pos', id: conn.peer, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false, morto: false },
+      msgPos: { tipo: 'pos', id: conn.peer, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false, morto: false, planando: false, nadando: false },
       criadoEm: agora,
       ultimaMsg: agora,
       poderes: [],            // poderes ativos dele (Fase 5)
@@ -1305,6 +1333,9 @@ export class Rede {
         case 'apito':
         case 'sentar':
           if (cli.pronto) this._montariaDoCliente(cli, msg);
+          return;
+        case 'reanimar':
+          if (cli.pronto) this._reanimarDoCliente(cli, msg);
           return;
         case 'tchau':
           this._clienteSaiu(cli);
@@ -1564,6 +1595,7 @@ export class Rede {
       itensChao: this.itensChao ? this.itensChao.exportar() : [],
       mobs: this.mobs && typeof this.mobs.exportarParaRede === 'function' ? this.mobs.exportarParaRede() : [],
       luaVermelha: this.luaVermelha,
+      modoMundo: this.modoMundo,
       totalMods: total,
       lotes,
     });
@@ -1609,7 +1641,7 @@ export class Rede {
       apelido: this.apelido,
       cores: this.cores,
       anfitriao: true,
-      estado: { x: j.posicao.x, y: j.posicao.y, z: j.posicao.z, yaw: j.yaw, pitch: j.pitch, noAr: !j.noChao, quebrando: false },
+      estado: { x: j.posicao.x, y: j.posicao.y, z: j.posicao.z, yaw: j.yaw, pitch: j.pitch, noAr: !j.noChao, quebrando: false, planando: !!j.planando, nadando: !!j.nadando },
       aparencia: this.aparencia,
     }];
     for (const c of this.clientes.values()) {
@@ -1632,6 +1664,7 @@ export class Rede {
     const e = cli.estado;
     m.x = e.x; m.y = e.y; m.z = e.z; m.yaw = e.yaw; m.pitch = e.pitch;
     m.noAr = e.noAr; m.quebrando = e.quebrando; m.morto = e.morto;
+    m.planando = e.planando; m.nadando = e.nadando;
     for (const outro of this.clientes.values()) {
       if (outro !== cli && outro.pronto) this._enviar(outro.conn, m);
     }
@@ -1922,6 +1955,12 @@ export class Rede {
             this.mobs.receberXp(msg.qtd);
           }
           return;
+        case 'reanimado':
+          if (this.ligado) this._receberReanimado(limparApelido(msg.por));
+          return;
+        case 'fimDeJogo':
+          if (this.ligado) this._receberFimDeJogo();
+          return;
         case 'tchau':
           if (this._entrada) this._entrada.falhar(erroRede('O anfitrião fechou a sala.', 'tchau'));
           else this._perdeuAnfitriao();
@@ -1994,6 +2033,7 @@ export class Rede {
 
     this._recebendo = {
       semente,
+      modoMundo: ['sobrevivencia', 'criativo', 'hardcore'].includes(msg.modoMundo) ? msg.modoMundo : 'sobrevivencia',
       hora: ehNumero(msg.hora) ? msg.hora : CONFIG.HORA_INICIAL,
       apelido: limparApelido(msg.apelido || this.apelido),
       meuEstado: limparEstadoJogador(msg.meuEstado),
@@ -2038,6 +2078,7 @@ export class Rede {
     this.apelido = r.apelido;
     this._msgPos.id = this.meuId;
     this.casa = r.meuEstado ? r.meuEstado.casa : null; // a casa que o anfitrião guardou para mim
+    this.modoMundo = r.modoMundo;                      // o tipo de mundo é o do anfitrião
 
     this.jogadores.clear();
     for (const j of r.jogadores) {
@@ -2056,6 +2097,7 @@ export class Rede {
       posAnfitriao: r.posAnfitriao,
       jogadores: this.listaJogadores(),
       apelido: this.apelido,
+      modoMundo: r.modoMundo,
     });
   }
 
@@ -2723,6 +2765,108 @@ export class Rede {
     if (typeof texto === 'string' && texto) this._aviso(texto);
   }
 
+  // ------------------------------------------------------------------
+  // Hardcore: reanimar quem caiu e fim de jogo
+  // ------------------------------------------------------------------
+
+  /** Registra uma função chamada quando EU sou reanimado: fn(apelidoDeQuemReanimou) */
+  aoReanimado(fn) {
+    if (typeof fn === 'function') this._ouvintesReanimado.push(fn);
+  }
+
+  /** Registra uma função chamada no fim de jogo do Hardcore (todos caídos) */
+  aoFimDeJogo(fn) {
+    if (typeof fn === 'function') this._ouvintesFimDeJogo.push(fn);
+  }
+
+  /**
+   * Quero reanimar o jogador `apelido` (já segurei o botão pelo tempo todo).
+   * Cliente: pede ao anfitrião. Anfitrião: confere e manda direto ao alvo.
+   * Sozinho: não há ninguém. Devolve true se o pedido foi enviado/aceito.
+   */
+  reanimar(apelido) {
+    const nome = limparApelido(apelido);
+    if (!nome || this.encerrado || !this.jogador) return false;
+    if (this.modo === 'cliente') {
+      if (this._caiu) return false;
+      this._enviar(this.conexaoAnfitriao, { tipo: 'reanimar', apelido: nome });
+      return true;
+    }
+    if (this.modo === 'anfitriao') {
+      return this._executarReanimar(this.apelido, this.jogador.posicao, !!this.jogador.morto, nome);
+    }
+    return false;
+  }
+
+  /** Um cliente pediu para reanimar alguém */
+  _reanimarDoCliente(cli, msg) {
+    if (!cli.temEstado || typeof msg.apelido !== 'string') return;
+    this._executarReanimar(cli.apelido, cli.estado, !!cli.estado.morto, limparApelido(msg.apelido));
+  }
+
+  /**
+   * (Anfitrião) Confere e reanima. `pos` = { x, y, z } de quem reanima.
+   * O alvo tem de estar caído, a poucos blocos, e não pode ser quem reanima.
+   */
+  _executarReanimar(porApelido, pos, porMorto, alvoApelido) {
+    if (porMorto || !pos || !alvoApelido) return false;
+    const minusculo = alvoApelido.toLowerCase();
+    if (minusculo === String(porApelido).toLowerCase()) return false; // ninguém reanima a si mesmo
+    let alvoCli = null;
+    let alvoPos = null;
+    if (minusculo === this.apelido.toLowerCase()) {
+      // O alvo sou eu (anfitrião)
+      if (!this.jogador || !this.jogador.morto) return false;
+      alvoPos = this.jogador.posicao;
+    } else {
+      for (const c of this.clientes.values()) {
+        if (c.pronto && c.apelido.toLowerCase() === minusculo) { alvoCli = c; break; }
+      }
+      if (!alvoCli || !alvoCli.temEstado || !alvoCli.estado.morto) return false;
+      alvoPos = alvoCli.estado;
+    }
+    const max = (CONFIG.REANIMAR_DIST ?? 2) + (CONFIG.REANIMAR_TOLERANCIA ?? 1.5);
+    const dx = alvoPos.x - pos.x, dy = alvoPos.y - pos.y, dz = alvoPos.z - pos.z;
+    if (!(dx * dx + dy * dy + dz * dz <= max * max)) return false;
+    if (alvoCli) {
+      alvoCli.estado.morto = false; // já conta como vivo (o próximo `pos` dele confirma)
+      this._enviar(alvoCli.conn, { tipo: 'reanimado', por: porApelido });
+    } else {
+      this._receberReanimado(porApelido);
+    }
+    return true;
+  }
+
+  /** Fui reanimado: avisa os ouvintes (o main tira o jogador do chão) */
+  _receberReanimado(por) {
+    for (const fn of this._ouvintesReanimado) {
+      try { fn(por); } catch (e) { console.error(e); }
+    }
+  }
+
+  /**
+   * (Anfitrião ou sozinho) true se TODOS os jogadores da sala estão caídos agora
+   * (eu e todos os clientes prontos). Sozinho: true se eu caí.
+   */
+  todosCaidos() {
+    if (this.modo === 'cliente' || !this.jogador || !this.jogador.morto) return false;
+    for (const c of this.clientes.values()) {
+      if (c.pronto && !c.estado.morto) return false;
+    }
+    return true;
+  }
+
+  /** (Anfitrião) Manda o fim de jogo para todos os clientes */
+  enviarFimDeJogo() {
+    this._avisarTodos({ tipo: 'fimDeJogo' });
+  }
+
+  _receberFimDeJogo() {
+    for (const fn of this._ouvintesFimDeJogo) {
+      try { fn(); } catch (e) { console.error(e); }
+    }
+  }
+
   /** O jogador `id` (outro jogador da sala) está na tela de morte? */
   estaMorto(id) {
     if (this.modo === 'anfitriao') {
@@ -3270,15 +3414,19 @@ export class Rede {
     const noAr = !j.noChao && !j.naAgua;
     const quebrando = !!j.quebrando;
     const morto = !!j.morto;
+    const planando = !!j.planando;
+    const nadando = !!j.nadando;
     const agora = performance.now();
     const mudou = Math.abs(p.x - m.x) > 0.001 || Math.abs(p.y - m.y) > 0.001 || Math.abs(p.z - m.z) > 0.001 ||
       Math.abs(j.yaw - m.yaw) > 0.001 || Math.abs(j.pitch - m.pitch) > 0.001 ||
-      noAr !== m.noAr || quebrando !== m.quebrando || morto !== m.morto;
+      noAr !== m.noAr || quebrando !== m.quebrando || morto !== m.morto ||
+      planando !== m.planando || nadando !== m.nadando;
     if (!mudou && !forcar && agora - this._ultimoEnvioPos < 1000) return;
     if (!posicaoValida(p.x, p.y, p.z) || !ehNumero(j.yaw) || !ehNumero(j.pitch)) return;
     m.x = p.x; m.y = p.y; m.z = p.z;
     m.yaw = j.yaw; m.pitch = j.pitch;
     m.noAr = noAr; m.quebrando = quebrando; m.morto = morto;
+    m.planando = planando; m.nadando = nadando;
     this._ultimoEnvioPos = agora;
     if (this.modo === 'anfitriao') {
       for (const c of this.clientes.values()) {

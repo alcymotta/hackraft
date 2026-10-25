@@ -77,7 +77,7 @@ Exemplos:
 Observações:
 - `/dar` só entrega até 10 de cada vez para itens que não empilham (roupas, espadas, armaduras).
 - `/tp` só funciona com outro jogador na sala.
-- Os nomes dos mobs para `/spawn` são: porco, galinha, zumbi, aranha, esqueleto, aranha_gigante, orc_guerreiro, orc_xama, dragao e hidra.
+- Os nomes dos mobs para `/spawn` são: porco, galinha, zumbi, aranha, esqueleto, aranha_gigante, orc_guerreiro, orc_xama, dragao, dragao_gelo, dragao_veneno, dragao_raio e hidra (também vale o começo do nome, como `/spawn dragao de gelo`).
 
 ---
 
@@ -92,6 +92,8 @@ Observações:
 5. **Acenda tochas dentro do abrigo.** Os monstros aparecem à noite e somem quando o sol nasce.
 
 Tempo do jogo: o dia dura 3 minutos e a noite 2 minutos, ou seja, um dia inteiro tem 5 minutos.
+
+**Água:** quebrar um bloco do lado da água (o fundo de um lago, a areia da praia) enche o buraco de água. A água escorre só um pouquinho e nunca sobe acima da superfície do lago.
 
 ### Crafting (tela E)
 
@@ -141,7 +143,7 @@ A **forja** faz o papel da bigorna e da fornalha. Coloque a forja no chão e cli
 - **Fundir:** 1 minério bruto + 1 carvão viram 1 barra (cobre, ferro, prata, ouro e dracônio).
 - **Forjar:** cria espadas e armaduras com barras, diamantes ou escamas.
   - Cada peça gasta uma quantidade do material: espada 2 (e 1 graveto), capacete 5, peitoral 8, calça 7, botas 4.
-  - Materiais que dá para forjar: cobre, ferro, prata, ouro, diamante, dracônio, escama de dragão e escama de hidra.
+  - Materiais que dá para forjar: cobre, ferro, prata, ouro, diamante, dracônio, escama de dragão (de fogo, gelo, veneno e raio) e escama de hidra.
   - Madeira e couro não se forjam, só se melhoram.
 - **Melhorar:** sobe o equipamento de **+1 até +5**. A melhoria nunca falha.
   - Cada nível gasta 2, 3, 4, 5 e 6 unidades do material (o do +1 ao +5).
@@ -198,10 +200,19 @@ A armadura reduz o dano que você recebe: cada ponto de defesa tira 4% do dano, 
 | Aranha gigante | noite; maior e envenenadora | fio de seda (2 a 4), seda rara (10%) | 15 |
 | Orc guerreiro | noite, em grupos de 2 a 3 | moedas (2 a 5), couro de orc | 20 |
 | Orc xamã | junto dos orcs; atira orbe roxo | moedas (3 a 6), cristal roxo (15%) | 25 |
-| **Dragão Ancestral** (chefão) | **Ninho do Dragão** (pico alto) ou Lua Vermelha | escamas de dragão (4 a 8), ovo de dragão, espada do dragão (40%) | 500 |
+| **Dragão Ancestral** (chefão, fogo) | **Ninho do Dragão** (pico alto) ou Lua Vermelha | escamas de dragão (4 a 8), ovo de dragão, espada do dragão (40%) | 500 |
+| **Dragão de Gelo Ancestral** (chefão) | ninho de gelo (picos muito altos), Lua Vermelha | escamas de dragão de gelo, ovo de dragão de gelo, espada de gelo (40%) | 500 |
+| **Dragão Venenoso Ancestral** (chefão) | ninho de veneno (perto de água), Lua Vermelha | escamas de dragão venenoso, ovo de dragão venenoso, espada venenosa (40%) | 500 |
+| **Dragão de Raio Ancestral** (chefão) | ninho de raio (platôs), Lua Vermelha | escamas de dragão de raio, ovo de dragão de raio, espada de raio (40%) | 500 |
 | **Hidra de Três Cabeças** (chefão) | **Covil da Hidra** (lago escuro) ou Lua Vermelha | escamas de hidra (4 a 8), espada da hidra (50%), cristal verde (3) | 600 |
 
-- A **espada do dragão** põe fogo no inimigo. A **espada da hidra** envenena.
+- A **espada do dragão** põe fogo no inimigo. A **espada da hidra** e a **venenosa** envenenam. A **de gelo** deixa lento e a **de raio** dá um choque (dano extra).
+- **Dragões elementais:** cada Ninho do Dragão é de um elemento (dá para ver pela decoração: troncos e brasas = fogo; gelo e neve = gelo; musgo tóxico verde e poças = veneno; pedras com cristais de raio = raio).
+  - Gelo: sopra gelo (deixa lento e congela a água).
+  - Veneno: sopra uma nuvem venenosa (e deixa uma nuvem no chão).
+  - Raio: chama raios do céu. Antes de cada raio saem faíscas do chão: **corra!** O raio pula para quem estiver perto de quem levou.
+  - As escamas viram armaduras na forja (defesa igual à de dragão). A de gelo protege da lentidão, e a venenosa protege do veneno.
+  - O ovo de cada dragão choca (perto de uma fogueira) um filhote da cor dele.
 - O **veneno** tira vida só até 1 coração (não mata). O **fogo** e os ataques podem matar.
 - Os chefões aparecem quando alguém chega a menos de 40 blocos da área deles. Cada um aparece no máximo uma vez por dia de jogo.
 - A maioria dos monstros pega fogo e some ao amanhecer.

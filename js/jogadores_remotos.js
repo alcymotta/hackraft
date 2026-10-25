@@ -50,7 +50,7 @@ export class JogadoresRemotos {
       apelido,
       personagem,
       etiqueta,
-      alvo: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false },
+      alvo: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, noAr: false, quebrando: false, planando: false, nadando: false },
       recebeu: false,        // já chegou algum estado?
       yaw: 0,
       pitch: 0,
@@ -87,7 +87,7 @@ export class JogadoresRemotos {
   }
 
   /** Guarda o estado mais novo como alvo; atualizar() faz o resto */
-  receberEstado(id, { x, y, z, yaw, pitch, noAr, quebrando }) {
+  receberEstado(id, { x, y, z, yaw, pitch, noAr, quebrando, planando, nadando }) {
     const r = this.remotos.get(id);
     if (!r) return;
     const a = r.alvo;
@@ -95,6 +95,8 @@ export class JogadoresRemotos {
     a.yaw = yaw; a.pitch = pitch;
     a.noAr = !!noAr;
     a.quebrando = !!quebrando;
+    a.planando = !!planando;
+    a.nadando = !!nadando;
 
     // Primeiro estado: já nasce no lugar certo
     if (!r.recebeu) {
@@ -146,6 +148,8 @@ export class JogadoresRemotos {
       r.pitch += (a.pitch - r.pitch) * fator;
       r.personagem.definirOlhar(r.pitch);
 
+      r.personagem.planando = a.planando;
+      r.personagem.nadando = a.nadando;
       r.personagem.animar(dt, r.velocidade, a.noAr);
 
       // Golpes enquanto está quebrando

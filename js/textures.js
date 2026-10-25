@@ -852,7 +852,58 @@ Object.assign(RECEITAS, {
     for (const [x, y] of [[3, 2], [4, 2], [3, 3], [11, 12], [12, 4], [8, 8]]) pixel(ctx, x, y, [170, 120, 226]);
     for (const [x, y] of [[3, 2], [12, 4]]) pixel(ctx, x, y, [236, 214, 255]);
   },
+
+  // Ovos dos dragões elementais: o mesmo desenho do de fogo, com as cores do elemento
+  ovo_dragao_gelo(ctx) { ovoElemental(ctx, PALETA_OVO.gelo); },
+  ovo_dragao_veneno(ctx) { ovoElemental(ctx, PALETA_OVO.veneno); },
+  ovo_dragao_raio(ctx) {
+    ovoElemental(ctx, PALETA_OVO.raio);
+    // um raiozinho em zigue-zague no meio
+    for (const [x, y] of [[9, 3], [8, 4], [8, 5], [7, 6], [8, 7], [9, 7], [8, 8], [7, 9], [7, 10], [6, 11]]) pixel(ctx, x, y, [255, 246, 170]);
+  },
+
+  // Neve: branco-azulada, fofa, com pontinhos que brilham
+  neve(ctx) {
+    ruidoBase(ctx, [238, 244, 250], 6);
+    salpicar(ctx, [226, 236, 248], 22, 10);
+    for (let n = 0; n < 5; n++) pixel(ctx, inteiro(T), inteiro(T), [255, 255, 255]);
+    for (let n = 0; n < 4; n++) pixel(ctx, inteiro(T), inteiro(T), [200, 220, 240]);
+  },
+
+  // Musgo tóxico: verde-escuro com bolhas verde-ácidas (que brilham no escuro)
+  musgo_toxico(ctx) {
+    ruidoBase(ctx, [44, 82, 34], 12);
+    salpicar(ctx, [56, 104, 40], 20, 18);
+    for (let n = 0; n < 6; n++) {
+      const cx = 1 + inteiro(T - 3), cy = 1 + inteiro(T - 3);
+      mancha(ctx, cx, cy, 2, 2, [126, 230, 60]);
+      pixel(ctx, cx, cy, [210, 255, 140]);
+    }
+  },
 });
+
+// Cores dos ovos elementais: casca, faixa das escamas, mancha (borda, meio, brilho) e brilho da casca
+const PALETA_OVO = {
+  gelo: { casca: [120, 186, 222], faixa: [92, 150, 196], borda: [70, 120, 170], mancha: [226, 246, 255], miolo: [255, 255, 255], brilho: [214, 244, 255] },
+  veneno: { casca: [44, 92, 36], faixa: [30, 66, 26], borda: [30, 70, 20], mancha: [130, 226, 60], miolo: [210, 255, 150], brilho: [150, 236, 120] },
+  raio: { casca: [56, 62, 110], faixa: [40, 44, 84], borda: [150, 120, 20], mancha: [240, 210, 60], miolo: [255, 246, 170], brilho: [190, 210, 255] },
+};
+
+function ovoElemental(ctx, c) {
+  ruidoBase(ctx, c.casca, 10);
+  for (let y = 1; y < T; y += 4) for (let x = 0; x < T; x++) {
+    if ((x + (y >> 2) * 2) % 4 === 0) pixel(ctx, x, y, c.faixa);
+  }
+  for (let n = 0; n < 6; n++) {
+    const cx = 2 + inteiro(T - 4);
+    const cy = 2 + inteiro(T - 4);
+    mancha(ctx, cx - 1, cy - 1, 3, 3, c.borda);
+    mancha(ctx, cx, cy - 1, 2, 2, c.mancha);
+    pixel(ctx, cx, cy - 1, c.miolo);
+  }
+  for (const [x, y] of [[3, 2], [4, 2], [3, 3], [11, 12], [12, 4], [8, 8]]) pixel(ctx, x, y, c.brilho);
+  for (const [x, y] of [[3, 2], [12, 4]]) pixel(ctx, x, y, [255, 255, 255]);
+}
 
 // ---------------------------------------------------------------------
 // Geração de uma textura (canvas 16x16)
@@ -1312,8 +1363,8 @@ function pecaArmadura(g, parte, material) {
         else if ((x + y * 2) % 9 === 0) g[y * T + x] = tom(c, -52);
       }
     }
-  } else if (material === 'escama_dragao' || material === 'escama_hidra') {
-    // escamas: fileiras de arcos (pixel escuro embaixo, claro em cima)
+  } else if (typeof material === 'string' && material.startsWith('escama_')) {
+    // escamas (dragões e hidra): fileiras de arcos (pixel escuro embaixo, claro em cima)
     for (let y = 0; y < T; y++) {
       for (let x = 0; x < T; x++) {
         const c = g[y * T + x];
@@ -1350,6 +1401,28 @@ function espadaIcone(g, visual) {
     // gotas de veneno
     for (const [x, y] of [[9, 10], [12, 8], [6, 7], [11, 6], [13, 4]]) ponto(g, x, y, [140, 255, 120]);
     ponto(g, 9, 11, [90, 210, 90]); ponto(g, 12, 9, [90, 210, 90]);
+    return;
+  }
+  // Espadas dos dragões elementais
+  if (visual === 'espada_gelo') {
+    espadaDeCor(g, [150, 222, 250], [70, 120, 170]);
+    // lascas de gelo saindo da lâmina e um brilho branco
+    for (const [x, y] of [[8, 5], [11, 2], [10, 7], [13, 4], [7, 9]]) ponto(g, x, y, [236, 252, 255]);
+    ponto(g, 9, 6, [255, 255, 255]); ponto(g, 12, 3, [255, 255, 255]);
+    return;
+  }
+  if (visual === 'espada_veneno') {
+    espadaDeCor(g, [96, 200, 52], [40, 80, 30]);
+    // gotas verde-ácidas pingando
+    for (const [x, y] of [[8, 9], [11, 6], [13, 4], [6, 10]]) ponto(g, x, y, [200, 255, 110]);
+    ponto(g, 8, 10, [130, 230, 60]); ponto(g, 11, 7, [130, 230, 60]); ponto(g, 8, 11, [90, 180, 40]);
+    return;
+  }
+  if (visual === 'espada_raio') {
+    espadaDeCor(g, [244, 214, 64], [70, 76, 130]);
+    // faíscas azul-claras em volta da lâmina
+    for (const [x, y] of [[7, 6], [10, 3], [12, 6], [14, 0], [9, 9], [11, 1]]) ponto(g, x, y, [200, 230, 255]);
+    ponto(g, 9, 5, [255, 255, 255]); ponto(g, 12, 2, [255, 255, 255]);
     return;
   }
   const material = visual.replace(/^espada_/, '');
@@ -1920,23 +1993,28 @@ function apitoIcone(g) {
   ponto(g, 5, 10, [150, 100, 52]); ponto(g, 4, 11, [150, 100, 52]); ponto(g, 3, 12, [130, 86, 44]);
 }
 
-/** Ovo de dragão (versão 2D para o inventário) */
-function ovoDragaoIcone(g) {
-  const roxo = [74, 30, 112];
+/** Ovo de dragão (versão 2D para o inventário). `c` = cores do elemento (sem = o de fogo, roxo com manchas vermelhas) */
+const COR_OVO_FOGO = { casca: [74, 30, 112], mancha: [210, 40, 62], escura: [120, 16, 40], brilho: [226, 190, 255], brilho2: [190, 140, 240], sombra: [56, 20, 86] };
+const COR_OVO_ICONE = {
+  gelo: { casca: [128, 192, 228], mancha: [236, 250, 255], escura: [76, 128, 178], brilho: [240, 252, 255], brilho2: [200, 236, 255], sombra: [80, 130, 170] },
+  veneno: { casca: [46, 96, 38], mancha: [134, 232, 62], escura: [28, 60, 22], brilho: [190, 250, 150], brilho2: [130, 210, 100], sombra: [24, 50, 20] },
+  raio: { casca: [58, 64, 116], mancha: [244, 214, 64], escura: [150, 120, 24], brilho: [210, 222, 255], brilho2: [160, 176, 236], sombra: [34, 38, 76] },
+};
+function ovoDragaoIcone(g, c = COR_OVO_FOGO) {
   const dentro = (x, y) => {
     const dy = (y - 8) / 7;
     const dx = (x - 7.5) / (4.6 + (y - 8) * 0.14);
     return dx * dx + dy * dy <= 1;
   };
-  preencher(g, dentro, roxo);
-  // manchas vermelhas
-  for (const [x, y] of [[6, 5], [7, 5], [10, 7], [11, 7], [5, 9], [6, 9], [8, 11], [9, 11], [9, 3]]) if (dentro(x, y)) ponto(g, x, y, [210, 40, 62]);
-  for (const [x, y] of [[6, 6], [10, 8], [5, 10], [8, 12]]) if (dentro(x, y)) ponto(g, x, y, [120, 16, 40]);
+  preencher(g, dentro, c.casca);
+  // manchas
+  for (const [x, y] of [[6, 5], [7, 5], [10, 7], [11, 7], [5, 9], [6, 9], [8, 11], [9, 11], [9, 3]]) if (dentro(x, y)) ponto(g, x, y, c.mancha);
+  for (const [x, y] of [[6, 6], [10, 8], [5, 10], [8, 12]]) if (dentro(x, y)) ponto(g, x, y, c.escura);
   // brilho
-  ponto(g, 5, 4, [226, 190, 255]); ponto(g, 5, 5, [190, 140, 240]); ponto(g, 6, 3, [190, 140, 240]);
-  ponto(g, 11, 12, [56, 20, 86]); ponto(g, 10, 13, [56, 20, 86]);
-  ponto(g, 13, 3, [255, 255, 255]); ponto(g, 12, 3, [236, 190, 255]); ponto(g, 14, 3, [236, 190, 255]);
-  ponto(g, 13, 2, [236, 190, 255]); ponto(g, 13, 4, [236, 190, 255]);
+  ponto(g, 5, 4, c.brilho); ponto(g, 5, 5, c.brilho2); ponto(g, 6, 3, c.brilho2);
+  ponto(g, 11, 12, c.sombra); ponto(g, 10, 13, c.sombra);
+  ponto(g, 13, 3, [255, 255, 255]); ponto(g, 12, 3, c.brilho); ponto(g, 14, 3, c.brilho);
+  ponto(g, 13, 2, c.brilho); ponto(g, 13, 4, c.brilho);
 }
 
 const ICONES_MOBS = {
@@ -1954,7 +2032,10 @@ const ICONES_MOBS = {
   armadura_montaria_ouro: (g) => armaduraMontariaIcone(g, [250, 204, 56]),
   armadura_montaria_diamante: (g) => armaduraMontariaIcone(g, [84, 222, 234]),
   apito: apitoIcone,
-  ovo_dragao: ovoDragaoIcone,
+  ovo_dragao: (g) => ovoDragaoIcone(g),
+  ovo_dragao_gelo: (g) => ovoDragaoIcone(g, COR_OVO_ICONE.gelo),
+  ovo_dragao_veneno: (g) => ovoDragaoIcone(g, COR_OVO_ICONE.veneno),
+  ovo_dragao_raio: (g) => ovoDragaoIcone(g, COR_OVO_ICONE.raio),
   costeleta: costeletaIcone,
   coxinha: coxinhaIcone,
   maca: macaIcone,
@@ -1964,7 +2045,7 @@ const ICONES_MOBS = {
 };
 
 // Itens de bloco que usam um ícone próprio em vez do cubinho
-const ICONES_ESPECIAIS = new Set(['porta', 'tocha', 'ovo_dragao']);
+const ICONES_ESPECIAIS = new Set(['porta', 'tocha', 'ovo_dragao', 'ovo_dragao_gelo', 'ovo_dragao_veneno', 'ovo_dragao_raio']);
 
 /** Desenha o ícone de um item que não é bloco (item pode ser undefined) */
 function desenharIconeItem(item) {
@@ -1978,7 +2059,8 @@ function desenharIconeItem(item) {
   } else if (item && item.nome === 'diamante') {
     gema(g, COR_MATERIAL.diamante);
     contornar(g);
-  } else if (item && (item.nome === 'escama_dragao' || item.nome === 'escama_hidra')) {
+  } else if (item && item.nome.startsWith('escama_') && COR_MATERIAL[item.nome]) {
+    // escamas de dragão (fogo, gelo, veneno, raio) e de hidra
     escamaIcone(g, COR_MATERIAL[item.nome]);
     contornar(g);
   } else if (item && item.nome === 'graveto') {

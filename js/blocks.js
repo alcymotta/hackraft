@@ -48,6 +48,13 @@ export const B = {
   MESA_ALFAIATE: 33,
   FOGUEIRA: 34,
   OVO_DRAGAO: 35,
+  // Dragões elementais: um ovo para cada elemento (o de fogo é o OVO_DRAGAO)
+  // e os enfeites dos ninhos de gelo e de veneno
+  OVO_DRAGAO_GELO: 36,
+  OVO_DRAGAO_VENENO: 37,
+  OVO_DRAGAO_RAIO: 38,
+  NEVE: 39,
+  MUSGO_TOXICO: 40,
 };
 
 // BLOCOS[id] devolve a descrição completa do bloco
@@ -87,6 +94,8 @@ const porNome = new Map();
  *  - texturaFrente: nome da textura da face da frente (baú). null = sem frente própria.
  *  - dropExtra: lista de drops sorteados ao quebrar, além do `item`:
  *    [{ item: 'maca', chance: 0.08 }] (chance de 0 a 1, 1 item por acerto). Padrão [].
+ *  - ovoDragao: elemento do filhote que nasce deste ovo ('fogo' | 'gelo' |
+ *    'veneno' | 'raio'); null nos blocos que não são ovo. Padrão null.
  */
 function registrar(id, def) {
   const bloco = {
@@ -111,6 +120,7 @@ function registrar(id, def) {
     interativo: def.interativo ?? false,
     texturaFrente: def.texturaFrente ?? null,
     dropExtra: def.dropExtra ?? [],
+    ovoDragao: def.ovoDragao ?? null,
   };
   BLOCOS[id] = bloco;
   SOLIDO[id] = bloco.solido ? 1 : 0;
@@ -274,8 +284,37 @@ registrar(B.FOGUEIRA, {
 // Ovo de dragão (Fase 11): choca perto de uma fogueira
 registrar(B.OVO_DRAGAO, {
   nome: 'ovo_dragao', rotulo: 'Ovo de dragão', texturas: igual('ovo_dragao'),
-  luz: 4, brilho: true, dureza: 1, som: 'pedra', item: 'ovo_dragao',
+  luz: 4, brilho: true, dureza: 1, som: 'pedra', item: 'ovo_dragao', ovoDragao: 'fogo',
 });
+// Ovos dos dragões elementais: iguais ao de fogo, mas cada um com a sua cor.
+// O bloco diz qual filhote nasce (por isso são blocos separados: o player
+// coloca o bloco do item, e o mobs.js lê o elemento no BLOCOS[id].ovoDragao).
+const OVOS_ELEMENTAIS = [
+  ['OVO_DRAGAO_GELO', 'ovo_dragao_gelo', 'Ovo de dragão de gelo', 'gelo'],
+  ['OVO_DRAGAO_VENENO', 'ovo_dragao_veneno', 'Ovo de dragão venenoso', 'veneno'],
+  ['OVO_DRAGAO_RAIO', 'ovo_dragao_raio', 'Ovo de dragão de raio', 'raio'],
+];
+for (const [chave, nome, rotulo, elemento] of OVOS_ELEMENTAIS) {
+  registrar(B[chave], {
+    nome, rotulo, texturas: igual(nome),
+    luz: 4, brilho: true, dureza: 1, som: 'pedra', item: nome, ovoDragao: elemento,
+  });
+}
+// Enfeites dos ninhos elementais (também dá para quebrar e construir com eles)
+registrar(B.NEVE, {
+  nome: 'neve', rotulo: 'Neve', texturas: igual('neve'),
+  dureza: 0.4, som: 'areia',
+});
+registrar(B.MUSGO_TOXICO, {
+  nome: 'musgo_toxico', rotulo: 'Musgo tóxico', texturas: igual('musgo_toxico'),
+  brilho: true, luz: 3, dureza: 0.4, som: 'folhas',
+});
+
+/** Elemento do filhote que nasce do ovo `id` ('fogo', 'gelo'...) ou null se não for ovo */
+export function elementoDoOvo(id) {
+  const b = BLOCOS[id];
+  return b ? b.ovoDragao : null;
+}
 
 /** Devolve o id do bloco a partir do nome (ou undefined se não existir) */
 export function blocoPorNome(nome) {

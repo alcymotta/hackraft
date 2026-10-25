@@ -19,6 +19,7 @@
 //   8 (Fases 8 a 10): nada novo no save (XP já vai em `jogador.xpTotal`); a versão 8 é aceita por segurança
 //   9 (Fase 11): + `montarias: [{ tipo, dono, variante, sela, armadura, vida, pos, yaw, sentado, desmaiado? }]`
 //               (montarias e pets domados) e `ovos: [{ x, y, z, dono, tempo }]` (ovos de dragão chocando)
+//  10 (tipo de mundo): + `modoMundo: 'sobrevivencia' | 'criativo' | 'hardcore'` (saves antigos = sobrevivencia)
 //   6 (Fase 6): + `baus` ("x,y,z" → 27 espaços) e as `modificacoes` passam a ter
 //               o estado do bloco: [x, y, z, id, estado]
 //
@@ -31,7 +32,8 @@
 
 import { CONFIG } from './config.js';
 
-const VERSOES_ACEITAS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const VERSOES_ACEITAS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const MODOS_MUNDO = ['sobrevivencia', 'criativo', 'hardcore'];
 
 /** Guarda o estado. Devolve true se deu certo, false se falhou (ex.: sem espaço). */
 export function salvarJogo(estado) {
@@ -46,7 +48,7 @@ export function salvarJogo(estado) {
 
 /**
  * Lê o jogo salvo. Devolve o estado, ou null se não existir ou for inválido.
- * Aceita as versões 1 a 9. O que faltar das versões antigas é preenchido:
+ * Aceita as versões 1 a 10. O que faltar das versões antigas é preenchido:
  * `jogadores` = {}, `equipamento` = null, `itensChao` = [], `casa` = null, `baus` = {},
  * `montarias` = [], `ovos` = [].
  */
@@ -66,6 +68,7 @@ export function carregarJogo() {
     if (!estado.baus || typeof estado.baus !== 'object' || Array.isArray(estado.baus)) estado.baus = {};
     if (!Array.isArray(estado.montarias)) estado.montarias = [];
     if (!Array.isArray(estado.ovos)) estado.ovos = [];
+    if (!MODOS_MUNDO.includes(estado.modoMundo)) estado.modoMundo = 'sobrevivencia';
     const c = estado.casa;
     if (!Array.isArray(c) || c.length !== 3 || !c.every(Number.isFinite)) estado.casa = null;
     return estado;

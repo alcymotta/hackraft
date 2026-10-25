@@ -31,7 +31,8 @@ const NOME_PECA = { espada: 'Espada', capacete: 'Capacete', peitoral: 'Peitoral'
 
 // Materiais que dá para forjar (usado se MATERIAIS_EQUIP não existir em items.js).
 // madeira e couro ficam de fora: não se forja, só se melhora.
-const MATERIAIS_FORJAVEIS_PADRAO = ['cobre', 'ferro', 'prata', 'ouro', 'diamante', 'draconio', 'escama_dragao', 'escama_hidra'];
+const MATERIAIS_FORJAVEIS_PADRAO = ['cobre', 'ferro', 'prata', 'ouro', 'diamante', 'draconio', 'escama_dragao', 'escama_hidra',
+  'escama_dragao_gelo', 'escama_dragao_veneno', 'escama_dragao_raio'];
 
 // Qual item serve de "unidade" de cada material (o que se gasta)
 const UNIDADE_DO_MATERIAL = {
@@ -59,6 +60,9 @@ function unidadeDoMaterial(material) {
 const ROTULO_MATERIAL = {
   cobre: 'Cobre', ferro: 'Ferro', prata: 'Prata', ouro: 'Ouro', diamante: 'Diamante', draconio: 'Dracônio',
   escama_dragao: 'Dragão', escama_hidra: 'Hidra', madeira: 'Madeira', couro: 'Couro',
+  // Dragões elementais (as armaduras vêm sozinhas da MATERIAIS_EQUIP; as espadas
+  // deles, espada_gelo etc., são melhoradas com as escamas pelo campo `material`)
+  escama_dragao_gelo: 'Dragão de gelo', escama_dragao_veneno: 'Dragão venenoso', escama_dragao_raio: 'Dragão de raio',
 };
 
 // ---------------------------------------------------------------------

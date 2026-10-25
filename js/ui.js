@@ -90,6 +90,13 @@ const CONTROLES = [
 const TEMPO_NOME_ITEM = 1500;   // ms que o nome do item fica na tela
 const TEMPO_MENSAGEM = 3000;    // ms que um aviso fica na tela
 const TEMPO_CONFIRMAR = 3000;   // ms do "Tem certeza?" do Novo mundo
+// Tipos de mundo: nome na tela e explicação curta (tela inicial)
+const ROTULOS_MODO = { sobrevivencia: 'Sobrevivência', criativo: 'Criativo', hardcore: 'Hardcore' };
+const TEXTOS_MODO = {
+  sobrevivencia: 'O modo normal: vida, monstros e perigo. Ao cair você volta para casa.',
+  criativo: 'Todos voam, têm blocos infinitos e não sofrem dano.',
+  hardcore: 'Quem cai só volta se um amigo reanimar. Se todos caírem, o mundo é apagado!',
+};
 
 // Atalho para pegar elementos pelo id
 const $ = (id) => document.getElementById(id);
@@ -192,7 +199,10 @@ export class InterfaceJogo {
     this.mao = null;                    // pilha "na mão": { item, qtd } ou null
     this.aoNovoMundo = null;            // guardado em mostrarTelaInicial
     this.aoSair = null;                 // idem: "Sair para o menu" da pausa
-    this.morteAberta = false;           // tela "Você desmaiou!"
+    this.morteAberta = false;           // tela "Você desmaiou!" (também vale para "Você caiu!" e "Fim de jogo")
+    this.caidoAberto = false;           // tela "Você caiu!" (Hardcore)
+    this.modoMundo = null;              // 'sobrevivencia' | 'criativo' | 'hardcore' (definirModoMundo)
+    this.aoLimparInventario = null;
     this.aoUsarItem = null;             // callback do Q e do duplo clique (definirCallbacks)
     this.aoSoltarItem = null;           // callbacks (definirCallbacks)
     this.aoMudarAparenciaBase = null;
@@ -729,6 +739,20 @@ export class InterfaceJogo {
 
   /** Tela "Você desmaiou!". Os itens não se perdem. */
   mostrarMorte({ aoRenascer } = {}) {
+    this._prepararTelaDeMorte();
+    this.elMorte.classList.remove('oculto');
+    const botao = $('btn-renascer');
+    botao.onclick = (e) => {
+      e.currentTarget.blur();
+      this.morteAberta = false;
+      this.elMorte.classList.add('oculto');
+      if (aoRenascer) aoRenascer();
+      this.travarMouse();
+    };
+  }
+
+  /** Fecha o que estiver aberto e solta o mouse (comum às telas de morte, de caído e de fim) */
+  _prepararTelaDeMorte() {
     // A pilha da mão volta ao inventário (sobra vai ao chão), para o inventário fechar de verdade
     this.devolverMao(true);
     // Fecha o que estiver aberto, sem prender o mouse de novo
@@ -738,16 +762,92 @@ export class InterfaceJogo {
     this._esconderPausa();
     this.elDano.classList.remove('ativo');
     this.morteAberta = true;
-    this.elMorte.classList.remove('oculto');
     this.soltarMouse();
-    const botao = $('btn-renascer');
-    botao.onclick = (e) => {
-      e.currentTarget.blur();
-      this.morteAberta = false;
-      this.elMorte.classList.add('oculto');
-      if (aoRenascer) aoRenascer();
-      this.travarMouse();
+  }
+
+  /**
+   * Hardcore: tela "Você caiu!" (sem botão de voltar para casa), com a contagem
+   * de quanto tempo está caído. `aoSair` = botão "Sair para o menu".
+   */
+  mostrarCaido({ aoSair } = {}) {
+    this._prepararTelaDeMorte();
+    this.caidoAberto = true;
+    $('tela-caido').classList.remove('oculto');
+    const t0 = performance.now();
+    const atualizar = () => {
+      const seg = Math.floor((performance.now() - t0) / 1000);
+      $('contagem-caido').textContent = 'Caído há ' + Math.floor(seg / 60) + ':' + String(seg % 60).padStart(2, '0');
     };
+    atualizar();
+    clearInterval(this._contagemCaido);
+    this._contagemCaido = setInterval(atualizar, 500);
+    $('btn-sair-caido').onclick = (e) => { e.currentTarget.blur(); if (aoSair) aoSair(); };
+  }
+
+  /** Foi reanimado: esconde a tela de caído e prende o mouse de novo */
+  esconderCaido(travar = true) {
+    if (!this.caidoAberto) return;
+    this.caidoAberto = false;
+    this.morteAberta = false;
+    clearInterval(this._contagemCaido);
+    $('tela-caido').classList.add('oculto');
+    if (travar) this.travarMouse();
+  }
+
+  /** Tela "Fim de jogo" (Hardcore). `aoVoltar` = botão "Voltar ao menu". */
+  mostrarFimDeJogo(texto, aoVoltar) {
+    if (this.caidoAberto) this.esconderCaido(false);
+    this._prepararTelaDeMorte();
+    this.elMorte.classList.add('oculto');
+    $('texto-fim').textContent = texto || '';
+    $('tela-fim').classList.remove('oculto');
+    $('btn-voltar-menu').onclick = (e) => { e.currentTarget.blur(); if (aoVoltar) aoVoltar(); };
+  }
+
+  /** Barra "Reanimando fulano..." sob a mira (fracao 0 a 1; null esconde) */
+  mostrarReanimando(fracao, apelido) {
+    if (!this.elReanimar) {
+      const caixa = document.createElement('div');
+      caixa.id = 'barra-reanimar';
+      caixa.className = 'oculto';
+      const texto = document.createElement('div');
+      const trilho = document.createElement('div');
+      trilho.className = 'trilho';
+      const enchimento = document.createElement('div');
+      enchimento.className = 'enchimento';
+      trilho.appendChild(enchimento);
+      caixa.append(texto, trilho);
+      document.body.appendChild(caixa);
+      this.elReanimar = caixa; this.elReanimarTexto = texto; this.elReanimarBarra = enchimento;
+    }
+    if (fracao === null || fracao === undefined) {
+      if (!this.elReanimar.classList.contains('oculto')) this.elReanimar.classList.add('oculto');
+      return;
+    }
+    this.elReanimar.classList.remove('oculto');
+    const t = 'Reanimando ' + (apelido || '') + '...';
+    if (this.elReanimarTexto.textContent !== t) this.elReanimarTexto.textContent = t; // textContent: apelido nunca vira HTML
+    this.elReanimarBarra.style.width = (Math.max(0, Math.min(1, fracao)) * 100).toFixed(0) + '%';
+  }
+
+  // ------------------------------------------------------------------
+  // Tipo de mundo (Sobrevivência, Criativo, Hardcore) e limpar inventário
+  // ------------------------------------------------------------------
+
+  /** Guarda o tipo do mundo e mostra no selo da sala e na pausa */
+  definirModoMundo(modo) {
+    this.modoMundo = ROTULOS_MODO[modo] ? modo : 'sobrevivencia';
+    $('modo-mundo-pausa').textContent = 'Mundo: ' + ROTULOS_MODO[this.modoMundo];
+    this._atualizarSelo();
+  }
+
+  /** Apaga TODOS os itens do inventário e da mão (não mexe no equipamento) */
+  limparInventario() {
+    this.inventario.espacos.fill(null);
+    this.mao = null;
+    this._desenharMao();
+    this.inventario.notificar();
+    this.mostrarMensagem('Inventário limpo');
   }
 
   // Os 7 espaços de equipamento, em duas colunas em volta do preview
@@ -1354,7 +1454,7 @@ export class InterfaceJogo {
   // ------------------------------------------------------------------
   // Telas
   // ------------------------------------------------------------------
-  mostrarTelaInicial({ aoCriarSala, aoEntrar, aoNovoMundo, aoSair }) {
+  mostrarTelaInicial({ aoCriarSala, aoEntrar, aoNovoMundo, aoSair, modoSalvo = null }) {
     this.aoNovoMundo = aoNovoMundo;
     this.aoSair = aoSair;
     this.inicialAberta = true;
@@ -1370,6 +1470,26 @@ export class InterfaceJogo {
 
     // Apelido salvo da última vez
     campoApelido.value = this._lerApelidoSalvo();
+
+    // Tipo de mundo: só vale para mundo novo. Se já existe um mundo salvo, mostra o tipo dele (travado).
+    let modoEscolhido = ROTULOS_MODO[modoSalvo] ? modoSalvo : 'sobrevivencia';
+    const caixaModo = $('escolha-modo');
+    const marcarModo = () => {
+      for (const b of caixaModo.querySelectorAll('.modo-opcao')) b.classList.toggle('ativo', b.dataset.modo === modoEscolhido);
+      caixaModo.classList.toggle('travado', !!modoSalvo);
+      $('nota-modo').textContent = modoSalvo
+        ? 'Mundo salvo (' + ROTULOS_MODO[modoEscolhido] + '). Para outro tipo, clique em Novo mundo.'
+        : TEXTOS_MODO[modoEscolhido];
+    };
+    for (const b of caixaModo.querySelectorAll('.modo-opcao')) {
+      b.onclick = (e) => {
+        e.currentTarget.blur();
+        if (modoSalvo) return;
+        modoEscolhido = b.dataset.modo;
+        marcarModo();
+      };
+    }
+    marcarModo();
 
     // Código: sempre em maiúsculas e sem espaços
     campoCodigo.oninput = () => {
@@ -1422,7 +1542,7 @@ export class InterfaceJogo {
 
     btnCriar.onclick = (e) => {
       e.currentTarget.blur(); // o Espaço do jogo não deve "clicar" no botão
-      if (aoCriarSala) executar((apelido) => aoCriarSala(apelido));
+      if (aoCriarSala) executar((apelido) => aoCriarSala(apelido, modoEscolhido));
     };
     const entrar = () => {
       const codigo = campoCodigo.value.toUpperCase().replace(/\s+/g, '');
@@ -1491,11 +1611,15 @@ export class InterfaceJogo {
   _atualizarSelo() {
     const selo = $('selo-sala');
     if (!this.codigoSala) {
-      selo.classList.add('oculto');
+      // Sozinho: o selo só mostra o tipo do mundo
+      selo.textContent = this.modoMundo ? ROTULOS_MODO[this.modoMundo] : '';
+      selo.classList.toggle('oculto', !this.modoMundo);
       return;
     }
     const n = this.jogadoresOnline || 1;
-    selo.textContent = 'Sala: ' + this.codigoSala + ' · ' + n + (n === 1 ? ' jogador' : ' jogadores');
+    let texto = 'Sala: ' + this.codigoSala + ' · ' + n + (n === 1 ? ' jogador' : ' jogadores');
+    if (this.modoMundo) texto += ' · ' + ROTULOS_MODO[this.modoMundo];
+    selo.textContent = texto;
     selo.classList.remove('oculto');
   }
 
@@ -1575,6 +1699,21 @@ export class InterfaceJogo {
       this._esconderPausa();
       if (this.aoNovoMundo) this.aoNovoMundo();
       this.travarMouse();
+    });
+
+    // Limpar inventário: dois cliques (como o Novo mundo)
+    this._confirmarDoisCliques($('btn-limpar-inv'), () => {
+      this.limparInventario();
+      if (this.aoLimparInventario) this.aoLimparInventario();
+    });
+    // Lixeira do baú: soltar aqui o item da mão apaga o item
+    $('bau-lixeira').addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      if (!this.mao) { this.mostrarMensagem('Pegue um item e solte aqui para apagar'); return; }
+      this.mao = null;
+      this._desenharMao();
+      this.inventario.notificar();
+      this.mostrarMensagem('Item apagado');
     });
 
     // Tela de aparência

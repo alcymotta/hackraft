@@ -1270,12 +1270,51 @@ registrarModelo('orc_xama', {
 });
 
 // ---------------------------------------------------------------------
-// DRAGAO (chefão; 1 pixel = 1/10 de bloco; ~6.5 blocos de comprimento, ~3 de altura)
+// DRAGÕES (chefões; 1 pixel = 1/10 de bloco; ~6.5 blocos de comprimento, ~3 de altura)
 // estado: { voando, pousado, boca (0..1), atacando }
+// Os 4 dragões (fogo, gelo, veneno e raio) usam o MESMO boneco: muda a paleta
+// de cores, a cor dos olhos e alguns enfeites de cada elemento (chifres,
+// cristais, bolsas de veneno, barbatanas elétricas), montados em construir().
+// O de fogo é o original da Fase 8 (paleta sem `elemento`: nada a mais).
 // ---------------------------------------------------------------------
-registrarModelo('dragao', {
-  esc: 0.1, altura: 3.2, raio: 1.1, meiaLargura: 0.75, passo: 1.5, semente: 8008, largura: 128,
-  partes: {
+const PALETAS_DRAGAO = {
+  // fogo: escamas vermelhas, barriga dourada, chifres de marfim, olhos amarelos
+  dragao: {
+    semente: 8008, elemento: null,
+    V: '#7e1c1a', V2: '#5a1212', OURO: '#d9a636', MARFIM: '#d6ccae', chifreRisca: '#a89e80',
+    narina: '#1a0606', boca: '#8a2a2a', dente: '#efe8d0',
+    osso: '#3d1010', ossoPonto: '#6a2a1a', mem: '#8a2230', memPonto: '#b0384a', nervura: '#4a0e18', memBorda: '#5a1420',
+    olho: 0xffd21a, pupila: 0x3a2000,
+  },
+  // gelo: azul-claro e branco, chifres longos de cristal, olhos ciano
+  dragao_gelo: {
+    semente: 8118, elemento: 'gelo',
+    V: '#8ccbe6', V2: '#4f8db2', OURO: '#eef7fb', MARFIM: '#e8f8ff', chifreRisca: '#a6d8ee',
+    narina: '#24506a', boca: '#3a7aa0', dente: '#ffffff',
+    osso: '#2f5f80', ossoPonto: '#6aa8cc', mem: '#bfe4f4', memPonto: '#e8f8ff', nervura: '#5f9cc2', memBorda: '#7fbad6',
+    olho: 0x7af0ff, pupila: 0x0a3a5a, brilho: 0xbff4ff, brilho2: 0xffffff,
+  },
+  // veneno: verde-ácido, membranas roxas, bolsas de veneno que brilham
+  dragao_veneno: {
+    semente: 8228, elemento: 'veneno',
+    V: '#3f7a26', V2: '#244a16', OURO: '#b4d84a', MARFIM: '#3a3428', chifreRisca: '#5a5040',
+    narina: '#0a1a06', boca: '#6a2a6a', dente: '#e8f0c8',
+    osso: '#1e3a12', ossoPonto: '#4a7a2a', mem: '#5a3a6a', memPonto: '#8a5a9a', nervura: '#2a1a3a', memBorda: '#3a2a4a',
+    olho: 0xc8ff3a, pupila: 0x1a2a00, brilho: 0x7aff3a, brilho2: 0xd8ff8a,
+  },
+  // raio: amarelo e branco-azulado, chifres em zigue-zague, barbatanas elétricas
+  dragao_raio: {
+    semente: 8338, elemento: 'raio',
+    V: '#dcb42a', V2: '#8a6a14', OURO: '#f4f0e0', MARFIM: '#2e3a5e', chifreRisca: '#5a6a9a',
+    narina: '#2a2000', boca: '#3a5aa0', dente: '#ffffff',
+    osso: '#2a2e4a', ossoPonto: '#5a6aa0', mem: '#2c3566', memPonto: '#4a5aa0', nervura: '#f0d440', memBorda: '#8aa0ff',
+    olho: 0xcfeeff, pupila: 0x1a3a8a, brilho: 0xbfe6ff, brilho2: 0xfff6a0,
+  },
+};
+
+/** Definição (registrarModelo) de um dragão com a paleta `pal` */
+function criarDefDragao(pal) {
+  const partes = {
     tronco: [14, 12, 24], espinho: [2, 3, 2],
     pesc1: [8, 8, 5], pesc2: [7, 7, 5], pesc3: [6, 6, 5],
     cabeca: [8, 6, 8], focinho: [6, 4, 7], mandibula: [5, 2, 11], chifre: [2, 2, 6], dente: [1, 2, 1],
@@ -1283,60 +1322,100 @@ registrarModelo('dragao', {
     coxa: [5, 6, 6], canela: [4, 5, 4], pe: [5, 2, 7], garra: [1, 1, 3],
     osso1: [12, 3, 3], osso2: [12, 2, 2], osso3: [10, 2, 2],
     mem1: [12, 1, 12], mem2: [12, 1, 10], mem3: [10, 1, 8],
-  },
-  pintar(p, r) {
-    const V = '#7e1c1a', V2 = '#5a1212', OURO = '#d9a636', MARFIM = '#d6ccae';
-    // segmento de corpo: escamas vermelhas por cima e dos lados, placas douradas embaixo
-    const segmento = (g) => {
-      for (const reg of [g.topo, g.direita, g.esquerda, g.frente, g.tras]) p.escamas(reg, V, 7, 4, 3);
-      p.escamas(g.baixo, OURO, 6, 6, 2);
-    };
-    // tronco: a barriga dourada sobe um pouco pelos lados
-    const t = r.tronco;
-    p.escamas(t.topo, V, 7, 4, 3);
-    for (const g of [t.direita, t.esquerda, t.frente, t.tras]) {
-      p.escamas(g, V, 7, 4, 3);
-      const j0 = g[3] - 4;
-      p.escamas([g[0], g[1] + j0, g[2], g[3] - j0], OURO, 6, 6, 2);
-    }
-    p.escamas(t.baixo, OURO, 6, 6, 2);
-    p.todas(r.espinho).forEach((g) => p.enche(g, V2, 6));
-    p.sombra(r.espinho.frente, 0, 15);
-    for (const nome of ['pesc1', 'pesc2', 'pesc3', 'cauda1', 'cauda2', 'cauda3', 'cauda4']) segmento(r[nome]);
-    for (const nome of ['coxa', 'canela']) segmento(r[nome]);
-    p.todas(r.pe).forEach((g) => p.escamas(g, V2, 6, 4, 2));
-    p.todas(r.garra).forEach((g) => p.enche(g, MARFIM, 5));
-    // cabeça: escamas, sobrancelha escura, narinas; mandibula com interior vermelho vivo
-    for (const g of p.todas(r.cabeca)) p.escamas(g, V, 7, 3, 3);
-    for (const g of [r.cabeca.direita, r.cabeca.esquerda, r.cabeca.frente]) p.ret(g, 0, 0, g[2], 1, V2);
-    for (const g of p.todas(r.focinho)) p.escamas(g, V, 6, 3, 3);
-    p.pix(r.focinho.frente, 1, 1, '#1a0606'); p.pix(r.focinho.frente, 4, 1, '#1a0606');
-    for (const g of p.lados(r.mandibula)) p.escamas(g, V, 6, 3, 2);
-    p.escamas(r.mandibula.baixo, OURO, 5, 4, 2);
-    p.enche(r.mandibula.topo, '#8a2a2a', 6);
-    p.todas(r.chifre).forEach((g) => {
-      p.enche(g, MARFIM, 6);
-      for (let j = 1; j < g[3]; j += 2) p.ret(g, 0, j, g[2], 1, '#a89e80');
-    });
-    p.todas(r.dente).forEach((g) => p.enche(g, '#efe8d0', 4));
-    // asas: ossos escuros e membranas vermelho-vinho com nervuras
-    for (const nome of ['osso1', 'osso2', 'osso3']) p.todas(r[nome]).forEach((g) => { p.enche(g, '#3d1010', 7); p.pontos(g, 3, '#6a2a1a'); p.sombra(g, 0, 12); });
-    for (const nome of ['mem1', 'mem2', 'mem3']) {
-      const m = r[nome];
-      for (const g of p.todas(m)) p.enche(g, '#8a2230', 9);
-      for (const g of [m.topo, m.baixo]) {
-        const w = g[2], d = g[3];
-        p.pontos(g, 8, '#b0384a');
-        p.linha(g, 0, 0, w - 1, d - 1, '#4a0e18');
-        p.linha(g, 0, 0, w - 1, Math.floor(d / 2), '#4a0e18');
-        p.linha(g, 0, 0, Math.floor(w / 2), d - 1, '#4a0e18');
-        p.ret(g, 0, d - 1, w, 1, '#5a1420');                    // bordinha da membrana
+  };
+  // Peças a mais dos elementais (o de fogo não tem nenhuma: a skin dele fica igual)
+  if (pal.elemento) partes.chifreLongo = [2, 2, 10];
+  return {
+    esc: 0.1, altura: 3.2, raio: 1.1, meiaLargura: 0.75, passo: 1.5, semente: pal.semente, largura: 128,
+    partes,
+    pintar(p, r) {
+      const V = pal.V, V2 = pal.V2, OURO = pal.OURO, MARFIM = pal.MARFIM;
+      // segmento de corpo: escamas por cima e dos lados, placas da barriga embaixo
+      const segmento = (g) => {
+        for (const reg of [g.topo, g.direita, g.esquerda, g.frente, g.tras]) p.escamas(reg, V, 7, 4, 3);
+        p.escamas(g.baixo, OURO, 6, 6, 2);
+      };
+      // tronco: a barriga sobe um pouco pelos lados
+      const t = r.tronco;
+      p.escamas(t.topo, V, 7, 4, 3);
+      for (const g of [t.direita, t.esquerda, t.frente, t.tras]) {
+        p.escamas(g, V, 7, 4, 3);
+        const j0 = g[3] - 4;
+        p.escamas([g[0], g[1] + j0, g[2], g[3] - j0], OURO, 6, 6, 2);
       }
-    }
-  },
-  construir(m) {
+      p.escamas(t.baixo, OURO, 6, 6, 2);
+      p.todas(r.espinho).forEach((g) => p.enche(g, V2, 6));
+      p.sombra(r.espinho.frente, 0, 15);
+      for (const nome of ['pesc1', 'pesc2', 'pesc3', 'cauda1', 'cauda2', 'cauda3', 'cauda4']) segmento(r[nome]);
+      for (const nome of ['coxa', 'canela']) segmento(r[nome]);
+      p.todas(r.pe).forEach((g) => p.escamas(g, V2, 6, 4, 2));
+      p.todas(r.garra).forEach((g) => p.enche(g, MARFIM, 5));
+      // cabeça: escamas, sobrancelha escura, narinas; mandíbula com o interior da boca
+      for (const g of p.todas(r.cabeca)) p.escamas(g, V, 7, 3, 3);
+      for (const g of [r.cabeca.direita, r.cabeca.esquerda, r.cabeca.frente]) p.ret(g, 0, 0, g[2], 1, V2);
+      for (const g of p.todas(r.focinho)) p.escamas(g, V, 6, 3, 3);
+      p.pix(r.focinho.frente, 1, 1, pal.narina); p.pix(r.focinho.frente, 4, 1, pal.narina);
+      for (const g of p.lados(r.mandibula)) p.escamas(g, V, 6, 3, 2);
+      p.escamas(r.mandibula.baixo, OURO, 5, 4, 2);
+      p.enche(r.mandibula.topo, pal.boca, 6);
+      p.todas(r.chifre).forEach((g) => {
+        p.enche(g, MARFIM, 6);
+        for (let j = 1; j < g[3]; j += 2) p.ret(g, 0, j, g[2], 1, pal.chifreRisca);
+      });
+      p.todas(r.dente).forEach((g) => p.enche(g, pal.dente, 4));
+      // asas: ossos escuros e membranas com nervuras
+      for (const nome of ['osso1', 'osso2', 'osso3']) p.todas(r[nome]).forEach((g) => { p.enche(g, pal.osso, 7); p.pontos(g, 3, pal.ossoPonto); p.sombra(g, 0, 12); });
+      for (const nome of ['mem1', 'mem2', 'mem3']) {
+        const m = r[nome];
+        for (const g of p.todas(m)) p.enche(g, pal.mem, 9);
+        for (const g of [m.topo, m.baixo]) {
+          const w = g[2], d = g[3];
+          p.pontos(g, 8, pal.memPonto);
+          p.linha(g, 0, 0, w - 1, d - 1, pal.nervura);
+          p.linha(g, 0, 0, w - 1, Math.floor(d / 2), pal.nervura);
+          p.linha(g, 0, 0, Math.floor(w / 2), d - 1, pal.nervura);
+          p.ret(g, 0, d - 1, w, 1, pal.memBorda);                 // bordinha da membrana
+        }
+      }
+      if (!pal.elemento) return; // o de fogo termina aqui (igual ao original)
+      // ----- detalhes pintados dos elementais (depois de tudo: não mexem no resto) -----
+      p.todas(r.chifreLongo).forEach((g) => {
+        p.enche(g, MARFIM, 6);
+        for (let j = 1; j < g[3]; j += 3) p.ret(g, 0, j, g[2], 1, pal.chifreRisca);
+      });
+      if (pal.elemento === 'gelo') {
+        // geada: pontinhos brancos nas costas e na cabeça
+        p.pontos(t.topo, 26, '#ffffff');
+        p.pontos(r.cabeca.topo, 6, '#ffffff');
+        for (const g of [t.direita, t.esquerda]) p.pontos(g, 10, '#e8fbff');
+      } else if (pal.elemento === 'veneno') {
+        // manchas escuras e pintas amarelas (sapo venenoso)
+        for (const g of [t.topo, t.direita, t.esquerda]) { p.pontos(g, 14, '#1a3a0e'); p.pontos(g, 8, '#e0f040'); }
+        for (const nome of ['cauda1', 'cauda2', 'pesc1']) p.pontos(r[nome].topo, 4, '#e0f040');
+      } else if (pal.elemento === 'raio') {
+        // raios brancos em zigue-zague pelos lados do corpo
+        for (const g of [t.direita, t.esquerda]) {
+          const w = g[2];
+          for (let x0 = 2; x0 < w - 4; x0 += 7) {
+            p.linha(g, x0, 0, x0 + 2, 3, '#fffbe0');
+            p.linha(g, x0 + 2, 3, x0 + 1, 4, '#fffbe0');
+            p.linha(g, x0 + 1, 4, x0 + 3, 7, '#fffbe0');
+          }
+        }
+        p.pontos(t.topo, 10, '#fffbe0');
+      }
+    },
+    construir(m) {
+      return construirDragao(m, pal);
+    },
+  };
+}
+
+/** Monta o boneco do dragão (pal = paleta; pal.elemento escolhe os enfeites) */
+function construirDragao(m, pal) {
     const raiz = m.raiz;
     const ESC = m._esc;
+    const el = pal.elemento;
     const corpo = m.pivo(raiz, 0, 0, 0);      // balança no voo
     // tronco + espinhos do dorso (nada disso se mexe: uma malha só)
     const itens = [['tronco', 0, 16, 0]];
@@ -1351,16 +1430,57 @@ registrarModelo('dragao', {
     const pc2 = m.pivo(pc1, 0, 0, -5);
     m.parte('pesc3', pc2, 0, 0, -2.5);
     const cabeca = m.pivo(pc2, 0, 0, -5);
-    m.mesclar('cabeca', cabeca, [
+    const itensCabeca = [
       ['cabeca', 0, 0, -4], ['focinho', 0, -1, -11.5],
-      ['chifre', -3, 3.5, 0.5, -0.5, 0, 0], ['chifre', 3, 3.5, 0.5, -0.5, 0, 0],
       ['dente', -2.5, -4, -9], ['dente', 2.5, -4, -9], ['dente', -2.5, -4, -11.5], ['dente', 2.5, -4, -11.5],
       ['dente', -2.5, -4, -14], ['dente', 2.5, -4, -14],
-    ]);
+    ];
+    if (el === 'gelo') {
+      // dois chifres longos e retos para trás + dois chifrinhos em cima do focinho
+      itensCabeca.push(['chifreLongo', -2.6, 4, 2, -0.32, -0.12, 0], ['chifreLongo', 2.6, 4, 2, -0.32, 0.12, 0]);
+      itensCabeca.push(['chifre', -1.6, 1.8, -8.5, -1.0, 0, 0], ['chifre', 1.6, 1.8, -8.5, -1.0, 0, 0]);
+    } else if (el === 'veneno') {
+      // chifres curvos para a frente e "babados" espinhudos dos lados da cabeça
+      itensCabeca.push(['chifre', -3, 3.5, -1, 0.55, 0, 0.25], ['chifre', 3, 3.5, -1, 0.55, 0, -0.25]);
+      for (const s of [-1, 1]) {
+        itensCabeca.push(['espinho', s * 4.6, 0.5, -1, 0, 0, s * 1.1], ['espinho', s * 4.6, -1.5, -3, 0, 0, s * 1.2], ['espinho', s * 4.2, 1.8, 1, 0, 0, s * 0.9]);
+      }
+    } else if (el === 'raio') {
+      // chifres em zigue-zague: um pedaço sobe para trás e outro dobra para cima
+      for (const s of [-1, 1]) {
+        itensCabeca.push(['chifre', s * 3, 3.5, 0.5, -0.9, 0, 0]);
+        itensCabeca.push(['chifreLongo', s * 3.4, 7.2, 4.5, 0.55, s * 0.25, 0]);
+      }
+    } else {
+      itensCabeca.push(['chifre', -3, 3.5, 0.5, -0.5, 0, 0], ['chifre', 3, 3.5, 0.5, -0.5, 0, 0]);
+    }
+    m.mesclar('cabeca', cabeca, itensCabeca);
     m.mesclarBrilho('olhos', cabeca, [
-      [0xffd21a, 1.8, 1.6, 2.4, -3.3, 1.3, -7.3], [0xffd21a, 1.8, 1.6, 2.4, 3.3, 1.3, -7.3],
-      [0x3a2000, 0.8, 1.6, 0.6, -3.3, 1.3, -8.5], [0x3a2000, 0.8, 1.6, 0.6, 3.3, 1.3, -8.5],
+      [pal.olho, 1.8, 1.6, 2.4, -3.3, 1.3, -7.3], [pal.olho, 1.8, 1.6, 2.4, 3.3, 1.3, -7.3],
+      [pal.pupila, 0.8, 1.6, 0.6, -3.3, 1.3, -8.5], [pal.pupila, 0.8, 1.6, 0.6, 3.3, 1.3, -8.5],
     ]);
+    // Enfeites que brilham (não dependem da luz: aparecem até de noite)
+    if (el === 'gelo') {
+      // cristais de gelo saindo das costas, entre os espinhos
+      const cr = [];
+      for (let k = 0; k < 5; k++) {
+        const alto = 3.5 + (k % 2) * 2;
+        cr.push([k % 2 ? pal.brilho : pal.brilho2, 1.4, alto, 1.4, (k % 2 ? 1.6 : -1.6), 22 + alto / 2, -7.2 + k * 3.6]);
+      }
+      m.mesclarBrilho('cristais', corpo, cr);
+    } else if (el === 'veneno') {
+      // bolsas de veneno verdes nas costas e no pescoço
+      m.mesclarBrilho('bolsas', corpo, [
+        [pal.brilho, 3, 2.2, 3, -3.5, 22.4, -4], [pal.brilho, 3, 2.2, 3, 3.5, 22.4, 1],
+        [pal.brilho2, 2.4, 1.8, 2.4, -3.2, 22.3, 6], [pal.brilho, 2.4, 2, 2.4, 3.3, 22.3, -8.5],
+      ]);
+      m.mesclarBrilho('baba', cabeca, [[pal.brilho, 1, 2.5, 1, -1.5, -5.2, -12], [pal.brilho2, 1, 1.6, 1, 1.8, -4.8, -10]]);
+    } else if (el === 'raio') {
+      // barbatanas elétricas finas e altas ao longo do dorso
+      const fins = [];
+      for (let k = 0; k < 6; k++) fins.push([k % 2 ? pal.brilho : pal.brilho2, 0.6, 3 + (k % 3), 2.4, 0, 24 + (k % 3) / 2, -9 + k * 3.6]);
+      m.mesclarBrilho('barbatanas', corpo, fins);
+    }
     const mandibula = m.pivo(cabeca, 0, -3, -3);
     m.mesclar('mandibula', mandibula, [
       ['mandibula', 0, -1, -5.5],
@@ -1378,6 +1498,11 @@ registrarModelo('dragao', {
       cauda.push(pv);
       pai = pv; px = 0; py = 0; pz = 5;
     }
+    // Ponta da cauda dos elementais: cristal de gelo, ferrão de veneno ou bola de energia
+    let pontaCauda = null;
+    if (el === 'gelo') pontaCauda = m.caixaBrilho(cauda[3], pal.brilho, 2.2, 2.2, 4.5, 0, 0, 7.5);
+    else if (el === 'veneno') pontaCauda = m.caixaBrilho(cauda[3], pal.brilho, 2.6, 2.6, 2.6, 0, 1, 7);
+    else if (el === 'raio') pontaCauda = m.caixaBrilho(cauda[3], pal.brilho2, 2.4, 2.4, 2.4, 0, 0, 7);
 
     // ----- pernas: coxa + canela + pé com garras -----
     const pernas = [];
@@ -1452,9 +1577,19 @@ registrarModelo('dragao', {
         joelho.rotation.x = 0.25 + dobra + 1.3 * voo;
         tornozelo.rotation.x = -0.25 - dobra * 0.6 - 0.6 * voo;
       }
+
+      // ponta da cauda pulsando (a de raio pisca rápido, como uma faísca)
+      if (pontaCauda) {
+        const f = el === 'raio' ? 0.75 + 0.35 * Math.abs(Math.sin(t * 17)) : 0.9 + 0.12 * Math.sin(t * 3.2);
+        pontaCauda.scale.set(f * (el === 'gelo' ? 2.2 : 2.5) * ESC, f * (el === 'gelo' ? 2.2 : 2.5) * ESC, f * (el === 'gelo' ? 4.5 : 2.5) * ESC);
+      }
     };
-  },
-});
+}
+
+registrarModelo('dragao', criarDefDragao(PALETAS_DRAGAO.dragao));
+registrarModelo('dragao_gelo', criarDefDragao(PALETAS_DRAGAO.dragao_gelo));
+registrarModelo('dragao_veneno', criarDefDragao(PALETAS_DRAGAO.dragao_veneno));
+registrarModelo('dragao_raio', criarDefDragao(PALETAS_DRAGAO.dragao_raio));
 
 // ---------------------------------------------------------------------
 // HIDRA (chefão; 1 pixel = 1/10 de bloco; ~4 blocos de altura)
@@ -1994,15 +2129,32 @@ function suave(p, reg, cor, v = 6) {
     if (j % 3 === 0) for (let i = off + 1; i < reg[2]; i += 4) p.pix(reg, i, j, clara);
   }
 }
+// Cores do filhote por elemento (variante 0 = fogo, 1 = gelo, 2 = veneno, 3 = raio,
+// na ordem de ELEMENTOS_DRAGAO do world.js). O ovo de cada dragão choca o filhote da cor dele.
+const PALETAS_FILHOTE = [
+  { VERM: '#d8532a', VERM2: '#b8401f', OURO: '#f0c040', OURO2: '#d29a20', MEMB: '#f08a3a', focinho: '#e0643a',
+    dedo: '#b04a20', borda: '#f5b04a', asaLado: '#c8602a', chifre: '#f4e6b0', espinho: '#f4d070',
+    olho: '#f2b81c', olhoEscuro: '#c27a10', bochecha: '#ee7a74', narina: '#7a2a18', sorriso: '#8a2a1a', chama: 0xffa820 },
+  { VERM: '#8ccbe6', VERM2: '#5a9cc4', OURO: '#f2fbff', OURO2: '#c8e6f4', MEMB: '#c4ecfa', focinho: '#a6dcf0',
+    dedo: '#6aaed2', borda: '#ffffff', asaLado: '#8ac4e0', chifre: '#ffffff', espinho: '#e8fbff',
+    olho: '#5ad8ff', olhoEscuro: '#2a88b8', bochecha: '#f0b8d8', narina: '#2a5a7a', sorriso: '#3a6a8a', chama: 0xbff4ff },
+  { VERM: '#4f9a2e', VERM2: '#356e1e', OURO: '#c8e050', OURO2: '#9ab830', MEMB: '#8a5aa8', focinho: '#5eaa38',
+    dedo: '#5a3a72', borda: '#b88ad0', asaLado: '#6a4a86', chifre: '#3a3428', espinho: '#d8f070',
+    olho: '#d8ff3a', olhoEscuro: '#8aa810', bochecha: '#e89ab8', narina: '#1a3a0e', sorriso: '#24481a', chama: 0x7aff3a },
+  { VERM: '#e6c030', VERM2: '#b8941e', OURO: '#fffbe8', OURO2: '#e8dcb0', MEMB: '#3c4888', focinho: '#f0cc40',
+    dedo: '#26306a', borda: '#9ab0ff', asaLado: '#323c78', chifre: '#2e3a5e', espinho: '#ffffff',
+    olho: '#8ad8ff', olhoEscuro: '#2a6ab8', bochecha: '#f0a0a0', narina: '#5a4210', sorriso: '#6a4e14', chama: 0xfff27a },
+];
 registrarModelo('filhote_dragao', {
   esc: 1 / 16, altura: 1.45, raio: 0.65, meiaLargura: 0.4, passo: 2.8, semente: 5150, montaria: true,
-  largura: 128,
+  largura: 128, variantes: 4,
   partes: {
     corpo: [9, 9, 16], pescoco: [6, 6, 5], cabeca: [10, 9, 9], focinho: [6, 4, 3], chifre: [2, 4, 2],
     pata: [4, 6, 4], rabo1: [5, 5, 8], rabo2: [3, 3, 8], asa: [10, 1, 9], osso: [10, 2, 2], espinho: [1, 2, 2],
   },
-  pintar(p, r) {
-    const VERM = '#d8532a', VERM2 = '#b8401f', OURO = '#f0c040', OURO2 = '#d29a20', MEMB = '#f08a3a';
+  pintar(p, r, variante = 0) {
+    const C = PALETAS_FILHOTE[variante] || PALETAS_FILHOTE[0];
+    const VERM = C.VERM, VERM2 = C.VERM2, OURO = C.OURO, OURO2 = C.OURO2, MEMB = C.MEMB;
     // corpo: escamas vermelho-alaranjadas, barriga dourada com faixas
     p.todas(r.corpo).forEach((g) => suave(p, g, VERM, 7, 4, 3));
     p.enche(r.corpo.baixo, OURO, 6);
@@ -2020,47 +2172,47 @@ registrarModelo('filhote_dragao', {
     const h = r.cabeca;
     p.todas(h).forEach((g) => suave(p, g, VERM, 6, 4, 3));
     const f = h.frente;
-    // olhos grandes: âmbar com pupila e brilhinho
+    // olhos grandes: com pupila e brilhinho (âmbar no de fogo)
     for (const x0 of [1, 6]) {
-      p.ret(f, x0, 2, 3, 3, '#f2b81c');
+      p.ret(f, x0, 2, 3, 3, C.olho);
       p.ret(f, x0 + 1, 2, 1, 3, '#1a0a10');
       p.pix(f, x0, 2, '#ffffff');
-      p.pix(f, x0 + 2, 4, '#c27a10');
+      p.pix(f, x0 + 2, 4, C.olhoEscuro);
     }
-    p.pix(f, 0, 6, '#ee7a74'); p.pix(f, 9, 6, '#ee7a74');                     // bochechas coradas
+    p.pix(f, 0, 6, C.bochecha); p.pix(f, 9, 6, C.bochecha);                   // bochechas coradas
     p.ret(f, 1, 1, 3, 1, VERM2); p.ret(f, 6, 1, 3, 1, VERM2);                 // sobrancelhas
     for (const [g, dir] of [[h.direita, true], [h.esquerda, false]]) {
-      p.ret(g, bordaFrente(g, dir, 4), 2, 1, 3, '#f2b81c');                   // olho de lado
+      p.ret(g, bordaFrente(g, dir, 4), 2, 1, 3, C.olho);                      // olho de lado
       p.pix(g, bordaFrente(g, dir, 4), 3, '#1a0a10');
     }
     p.enche(h.baixo, OURO, 5);
-    p.todas(r.focinho).forEach((g) => suave(p, g, '#e0643a', 5, 3, 2));
+    p.todas(r.focinho).forEach((g) => suave(p, g, C.focinho, 5, 3, 2));
     const fo = r.focinho.frente;
-    p.pix(fo, 1, 1, '#7a2a18'); p.pix(fo, 4, 1, '#7a2a18');                   // narinas
-    p.ret(fo, 1, 3, 4, 1, '#8a2a1a'); p.pix(fo, 0, 2, '#8a2a1a'); p.pix(fo, 5, 2, '#8a2a1a'); // sorriso
+    p.pix(fo, 1, 1, C.narina); p.pix(fo, 4, 1, C.narina);                     // narinas
+    p.ret(fo, 1, 3, 4, 1, C.sorriso); p.pix(fo, 0, 2, C.sorriso); p.pix(fo, 5, 2, C.sorriso); // sorriso
     p.pix(fo, 1, 3, '#fff6dc'); p.pix(fo, 4, 3, '#fff6dc');                   // dentinhos
     p.enche(r.focinho.baixo, OURO, 5);
-    p.todas(r.chifre).forEach((g) => p.enche(g, '#f4e6b0', 6));
+    p.todas(r.chifre).forEach((g) => p.enche(g, C.chifre, 6));
     p.lados(r.chifre).forEach((g) => p.sombra(g, 0, -12));
     // patas com garrinhas claras
     p.todas(r.pata).forEach((g) => suave(p, g, VERM, 6, 3, 3));
     p.lados(r.pata).forEach((g) => p.ret(g, 0, g[3] - 1, g[2], 1, '#f4e6b0'));
     p.enche(r.pata.baixo, OURO2, 5);
-    // cauda: vermelha em cima e dourada embaixo
+    // cauda: cor do corpo em cima e da barriga embaixo
     p.todas(r.rabo1).forEach((g) => suave(p, g, VERM, 6, 4, 3));
     p.enche(r.rabo1.baixo, OURO, 5);
-    p.todas(r.rabo2).forEach((g) => suave(p, g, '#e0643a', 6, 3, 3));
+    p.todas(r.rabo2).forEach((g) => suave(p, g, C.focinho, 6, 3, 3));
     p.enche(r.rabo2.baixo, OURO, 5);
-    // asas: membrana alaranjada com "dedos" mais escuros e osso vermelho
+    // asas: membrana com "dedos" mais escuros
     const t = r.asa.topo, b = r.asa.baixo;
     for (const reg of [t, b]) {
       p.enche(reg, MEMB, 8);
-      for (const x of [2, 5, 8]) p.linha(reg, 0, 0, x, reg[3] - 1, '#b04a20');
-      p.ret(reg, 0, reg[3] - 1, reg[2], 1, '#f5b04a');
+      for (const x of [2, 5, 8]) p.linha(reg, 0, 0, x, reg[3] - 1, C.dedo);
+      p.ret(reg, 0, reg[3] - 1, reg[2], 1, C.borda);
     }
-    p.lados(r.asa).forEach((g) => p.enche(g, '#c8602a', 6));
+    p.lados(r.asa).forEach((g) => p.enche(g, C.asaLado, 6));
     p.todas(r.osso).forEach((g) => p.enche(g, VERM2, 6));
-    p.todas(r.espinho).forEach((g) => p.enche(g, '#f4d070', 5));
+    p.todas(r.espinho).forEach((g) => p.enche(g, C.espinho, 5));
   },
   construir(m) {
     const raiz = m.raiz;
@@ -2085,7 +2237,7 @@ registrarModelo('filhote_dragao', {
     rabo2.rotation.x = -0.4;
     m.parte('rabo2', rabo2, 0, 0, 4);
     m.parte('espinho', rabo2, 0, 2.5, 4);
-    const chama = m.caixaBrilho(rabo2, 0xffa820, 3, 3, 3, 0, 0, 9.5);
+    const chama = m.caixaBrilho(rabo2, (PALETAS_FILHOTE[m.variante] || PALETAS_FILHOTE[0]).chama, 3, 3, 3, 0, 0, 9.5);
     // asas: pivô no ombro, a membrana vai para trás e para o lado
     const asas = [];
     for (const s of [-1, 1]) {

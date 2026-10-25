@@ -111,6 +111,19 @@
 //   - Save (versão 9): exportarMontarias()/carregarMontarias(),
 //     exportarOvos()/carregarOvos().
 //
+// DRAGÕES ELEMENTAIS (depois da Fase 11)
+//   dragao (fogo, o original), dragao_gelo, dragao_veneno e dragao_raio: mesma
+//   IA ('dragao'), mesma vida (400) e XP (500); muda o ataque especial (o
+//   campo `sopro` do tipo):
+//     gelo   → 'sopro_gelo': cone que deixa lento e congela a água que acerta
+//     veneno → 'sopro_veneno': nuvem em cone que envenena e deixa uma nuvem no chão
+//     raio   → 'tempestade': raios ('relampago') caem no alvo, com 0,7 s de aviso,
+//              e um arco pula para quem estiver perto de quem levou o raio
+//   Cada Ninho do Dragão tem um elemento (world.js), e o chefão de lá é o do
+//   elemento. Cada dragão solta as escamas dele, a espada dele (40%) e o ovo
+//   dele; o ovo choca o filhote da cor do elemento (variante 0 a 3).
+//   Tudo pela rede de sempre: os sopros e os raios são projéteis (projetilMob).
+//
 // DESEMPENHO
 //   - Até 40 mobs e 64 projéteis. Nada de criar objetos a cada quadro: mobs,
 //     modelos, projéteis e malhas são reaproveitados (pools), listas também.
@@ -132,7 +145,10 @@ import * as THREE from 'three';
 import { CONFIG, CICLO_SEGUNDOS } from './config.js';
 import { B, BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { ITENS, obterItem, ITENS_DOMAR } from './items.js';
-import { BIOMA } from './world.js';
+import { BIOMA, ELEMENTOS_DRAGAO } from './world.js';
+
+/** Elemento do ovo de dragão `id` ('fogo', 'gelo'...) ou null (não é ovo) */
+const elementoDoOvo = (id) => (BLOCOS[id] ? BLOCOS[id].ovoDragao || null : null);
 
 // Os modelos (bonecos) vêm de modelos_mobs.js. Se o arquivo faltar ou der
 // erro, cada mob vira uma caixa colorida (dá para jogar e testar assim).
@@ -300,14 +316,17 @@ const EF_VENENO_MOB = {
   velocidade: 0.4, vy: 0.6, espalhar: 0.5, gravidade: -0.6, vida: 0.6, tamanho: 0.12, aditivo: false,
 };
 
-// Efeitos das armas de chefão no golpe (Fase 8): 'fogo' queima 3 s, 'veneno' envenena 3 s
+// Efeitos das armas de chefão no golpe (Fase 8): 'fogo' queima 3 s, 'veneno' envenena 3 s,
+// 'gelo' (espada de gelo) deixa lento 3 s. A de raio ('raio') dá dano extra (veja atacar).
 const EF_ARMA_FOGO = Object.freeze({ queimar: 3 });
 const EF_ARMA_VENENO = Object.freeze({ veneno: 3 });
+const EF_ARMA_GELO = Object.freeze({ lento: 3 });
 
-/** Efeito de um golpe: o texto da arma ('fogo' | 'veneno') ou { queimar?, lento?, veneno? } */
+/** Efeito de um golpe: o texto da arma ('fogo' | 'veneno' | 'gelo') ou { queimar?, lento?, veneno? } */
 function efeitoDeArma(e) {
   if (e === 'fogo') return EF_ARMA_FOGO;
   if (e === 'veneno') return EF_ARMA_VENENO;
+  if (e === 'gelo') return EF_ARMA_GELO;
   if (e && typeof e === 'object' && (e.queimar > 0 || e.lento > 0 || e.veneno > 0)) return e;
   return null;
 }
@@ -357,6 +376,8 @@ export const ORDEM_TIPOS = [];
  *    neutro (só ataca quem bate nele: o lobo), pet (segue o dono),
  *    montaria ({ vel, pulo (blocos), sobeParede, voa, mordida }),
  *    domar ({ item, vezes (o cachorro: 3 ossos), vidaMaxFrac (aranha: 0,3), vira (tipo depois de domado) })
+ *  - Dragões elementais: elemento, sopro (projétil do ataque especial: 'sopro',
+ *    'sopro_gelo', 'sopro_veneno' ou 'tempestade'), imune ('lento' | 'veneno' | 'queimar')
  */
 export function registrarTipoMob(nome, def) {
   const d = {
@@ -405,6 +426,12 @@ export function registrarTipoMob(nome, def) {
     pet: def.pet ?? false,
     montaria: def.montaria ?? null,
     domar: def.domar ?? null,
+    // Dragões elementais: elemento ('fogo' | 'gelo' | 'veneno' | 'raio'), o
+    // "sopro" que ele usa (tipo de projétil em TIPOS_PROJETIL) e o efeito que
+    // não pega nele (imune: 'lento' | 'veneno' | 'queimar')
+    elemento: def.elemento ?? null,
+    sopro: def.sopro ?? 'sopro',
+    imune: def.imune ?? null,
     indice: 0,
   };
   let i = ORDEM_TIPOS.indexOf(nome);
@@ -475,6 +502,7 @@ registrarTipoMob('dragao', {
   nome: 'Dragão Ancestral', vidaMax: 400, velocidade: 7.5, dano: 10, alcance: 1.6, visao: 56,
   altura: 2.6, raio: 1.6, hostil: true, voa: true, alturaVoo: 11, chefao: true, xp: 500,
   comportamento: 'dragao', giro: 2.6, queimaNoSol: false, roupaGarantida: true, corReserva: '#8a1a1a',
+  elemento: 'fogo', sopro: 'sopro',
   drops: [
     { item: 'escama_dragao', min: 4, max: 8, chance: 1 },
     { item: 'ovo_dragao', min: 1, max: 1, chance: 1 },
@@ -518,14 +546,58 @@ registrarTipoMob('aranha_montaria', {
   montaria: { vel: 8, pulo: 1.3, sobeParede: true },
 });
 registrarTipoMob('filhote_dragao', {
+  // variantes = a cor do elemento (0 fogo, 1 gelo, 2 veneno, 3 raio; veja ELEMENTOS_DRAGAO)
   nome: 'Filhote de dragão', vidaMax: 40, velocidade: 2, altura: 1.45, raio: 0.65, xp: 0,
-  nasce: null, corReserva: '#d8532a', montaria: { vel: 10, pulo: 1.3, voa: true },
+  nasce: null, corReserva: '#d8532a', montaria: { vel: 10, pulo: 1.3, voa: true }, variantes: 4,
 });
 registrarTipoMob('cachorro', {
   nome: 'Cachorro', vidaMax: 20, velocidade: 1.6, velFuga: 5, altura: 0.72, raio: 0.32, xp: 1,
   nasce: 'grama', peso: 0.7, grupo: [1, 1], biomaSuperficie: 'planicie', variantes: 3, pet: true,
   corReserva: '#c4843e', domar: { item: 'osso', vezes: 3 },
 });
+
+// ----- Dragões elementais (depois de todos: o índice vai pela rede) -----
+// Mesma IA do dragão de fogo ('dragao'); muda o ataque especial (`sopro`):
+//   gelo   → rajada de gelo em cone: deixa lento e congela a água que acerta
+//   veneno → nuvem de veneno em cone (envenena) que deixa uma nuvem no chão
+//   raio   → tempestade: raios caem no jogador (aviso de 0,7 s antes) e saltam
+//            para quem estiver perto dele
+const BASE_DRAGAO = {
+  vidaMax: 400, velocidade: 7.5, dano: 10, alcance: 1.6, visao: 56,
+  altura: 2.6, raio: 1.6, hostil: true, voa: true, alturaVoo: 11, chefao: true, xp: 500,
+  comportamento: 'dragao', giro: 2.6, queimaNoSol: false, roupaGarantida: true,
+};
+registrarTipoMob('dragao_gelo', {
+  ...BASE_DRAGAO, nome: 'Dragão de Gelo Ancestral', corReserva: '#8fd0e6',
+  elemento: 'gelo', sopro: 'sopro_gelo', imune: 'lento',
+  drops: [
+    { item: 'escama_dragao_gelo', min: 4, max: 8, chance: 1 },
+    { item: 'ovo_dragao_gelo', min: 1, max: 1, chance: 1 },
+    { item: 'espada_gelo', min: 1, max: 1, chance: 0.4 },
+  ],
+});
+registrarTipoMob('dragao_veneno', {
+  ...BASE_DRAGAO, nome: 'Dragão Venenoso Ancestral', corReserva: '#4f9a2a',
+  elemento: 'veneno', sopro: 'sopro_veneno', imune: 'veneno',
+  drops: [
+    { item: 'escama_dragao_veneno', min: 4, max: 8, chance: 1 },
+    { item: 'ovo_dragao_veneno', min: 1, max: 1, chance: 1 },
+    { item: 'espada_veneno', min: 1, max: 1, chance: 0.4 },
+  ],
+});
+registrarTipoMob('dragao_raio', {
+  ...BASE_DRAGAO, nome: 'Dragão de Raio Ancestral', corReserva: '#e0b828',
+  elemento: 'raio', sopro: 'tempestade',
+  drops: [
+    { item: 'escama_dragao_raio', min: 4, max: 8, chance: 1 },
+    { item: 'ovo_dragao_raio', min: 1, max: 1, chance: 1 },
+    { item: 'espada_raio', min: 1, max: 1, chance: 0.4 },
+  ],
+});
+
+/** Tipo do dragão de cada elemento ('fogo' → 'dragao') */
+const DRAGAO_DO_ELEMENTO = { fogo: 'dragao', gelo: 'dragao_gelo', veneno: 'dragao_veneno', raio: 'dragao_raio' };
+const TIPOS_DRAGAO = ['dragao', 'dragao_gelo', 'dragao_veneno', 'dragao_raio'];
 
 // =====================================================================
 // PROJÉTEIS DE MOB (Fase 8)
@@ -545,6 +617,18 @@ export const TIPOS_PROJETIL = {
   veneno: { grav: 12, raio: 0.4, vida: 4, dano: 3, efeito: 'veneno', segundos: 4, nuvem: true },
   cura: { grav: 0, raio: 0.3, vida: 3, dano: 0, efeito: null, segundos: 0, guiaMob: 7, cura: 12 },
   sopro: { grav: 0, raio: 0, vida: 2.2, dano: 2, efeito: 'fogo', segundos: 3, sopro: true },
+  // Dragões elementais. Os "sopros" são cones parados na boca (como o de fogo):
+  //   congela: a água que o cone acerta vira gelo; nuvem: no fim fica uma nuvem
+  //   de veneno no chão onde o cone bateu; tempestade: em vez de cone, chama
+  //   raios (projétil 'relampago') no alvo a cada `intervalo` segundos.
+  sopro_gelo: { grav: 0, raio: 0, vida: 2.2, dano: 2, efeito: 'lento', segundos: 4, sopro: true, congela: true },
+  sopro_veneno: { grav: 0, raio: 0, vida: 2.4, dano: 2, efeito: 'veneno', segundos: 4, sopro: true, nuvem: true, cos: 0.88, alcance: 10 },
+  tempestade: { grav: 0, raio: 0, vida: 2.6, dano: 0, efeito: null, segundos: 0, sopro: true, tempestade: true, intervalo: 0.7 },
+  // Raio que cai do céu em (x, y, z) = o chão: `aviso` s de faíscas no chão
+  // (dá para fugir!), depois o raio cai: `dano` em quem estiver a até
+  // `raioArea` blocos, e um arco (`danoArco`) pula para quem estiver a até
+  // `alcanceArco` blocos de cada atingido.
+  relampago: { grav: 0, raio: 0, vida: 1.2, dano: 5, efeito: null, segundos: 0, relampago: true, aviso: 0.7, raioArea: 1.8, danoArco: 3, alcanceArco: 5 },
 };
 const MAX_PROJETEIS = 64;
 const MALHAS_NO_POOL = 24;            // malhas guardadas por tipo de projétil
@@ -579,6 +663,45 @@ const EF_FUMACA_FOGO = { x: 0, y: 0, z: 0, qtd: 6, cores: ['#5a5a5a', '#7a7a7a']
 const EF_SOPRO = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, qtd: 4, cores: ['#ff7a1a', '#ffb02a', '#e8401a', '#ffd23f'], velocidade: 2.6, espalhar: 0.35, gravidade: -1.5, vida: 0.75, tamanho: 0.34, aditivo: false, arrasto: 0.4 };
 const EF_SOPRO_BRILHO = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, qtd: 2, cores: ['#ffd23f', '#ffe8a0', '#ff9a2a'], velocidade: 2, espalhar: 0.25, gravidade: -1.5, vida: 0.6, tamanho: 0.3, aditivo: true, arrasto: 0.4 };
 const EF_NUVEM = { x: 0, y: 0, z: 0, qtd: 3, cores: ['#5dd23a', '#3fa82a', '#8ae05a', '#2f7a22'], velocidade: 0.3, vy: 0.35, espalhar: 0.4, gravidade: -0.3, vida: 1.3, tamanho: 0.5, aditivo: false, arrasto: 1 };
+
+// Dragões elementais: partículas de cada sopro ([corpo, brilho], como o de fogo)
+// (o gelo usa azuis mais fortes que o branco: contra o céu claro, o branco some)
+const EF_SOPRO_GELO = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, qtd: 5, cores: ['#9fe6ff', '#6ccaf2', '#4fb2e6', '#e8fbff'], velocidade: 2.4, espalhar: 0.35, gravidade: 0.6, vida: 0.75, tamanho: 0.32, aditivo: false, arrasto: 0.4 };
+const EF_SOPRO_GELO_BRILHO = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, qtd: 2, cores: ['#ffffff', '#c8f6ff'], velocidade: 2, espalhar: 0.25, gravidade: 0.6, vida: 0.6, tamanho: 0.2, aditivo: true, arrasto: 0.4 };
+const EF_SOPRO_VENENO = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, qtd: 4, cores: ['#5dd23a', '#3fa82a', '#8ae05a', '#a8f060'], velocidade: 1.8, espalhar: 0.55, gravidade: 0.3, vida: 1.1, tamanho: 0.45, aditivo: false, arrasto: 0.9 };
+const EF_SOPRO_VENENO_BRILHO = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, qtd: 1, cores: ['#c8ff7a', '#7aff3a'], velocidade: 1.5, espalhar: 0.4, gravidade: 0.3, vida: 0.8, tamanho: 0.25, aditivo: true, arrasto: 0.9 };
+const EF_TEMPESTADE = { x: 0, y: 0, z: 0, qtd: 3, cores: ['#ffffff', '#cfeeff', '#fff27a'], velocidade: 2.2, espalhar: 0.5, gravidade: 0, vida: 0.25, tamanho: 0.12, aditivo: true, arrasto: 2 };
+const SOPROS_PARTICULAS = {
+  sopro: [EF_SOPRO, EF_SOPRO_BRILHO],
+  sopro_gelo: [EF_SOPRO_GELO, EF_SOPRO_GELO_BRILHO],
+  sopro_veneno: [EF_SOPRO_VENENO, EF_SOPRO_VENENO_BRILHO],
+};
+// Raio caindo: aviso no chão (faíscas subindo), estouro na hora do raio
+const EF_AVISO_RAIO = { x: 0, y: 0, z: 0, qtd: 2, cores: ['#fff27a', '#ffffff', '#9fd8ff'], velocidade: 0.8, vy: 2.2, espalhar: 0.9, gravidade: -1, vida: 0.4, tamanho: 0.1, aditivo: true };
+const EF_ESTOURO_RAIO = { x: 0, y: 0, z: 0, qtd: 26, cores: ['#ffffff', '#fff27a', '#9fd8ff', '#cfeeff'], velocidade: 4.5, vy: 2, espalhar: 0.3, gravidade: 6, vida: 0.5, tamanho: 0.13, aditivo: true, arrasto: 1.5 };
+const EF_FUMACA_RAIO = { x: 0, y: 0, z: 0, qtd: 5, cores: ['#5a5a5a', '#7a7a7a'], velocidade: 0.6, vy: 0.9, espalhar: 0.5, gravidade: -0.4, vida: 1, tamanho: 0.3, arrasto: 1 };
+// Partículas em volta dos dragões elementais (o de fogo não tem: ficou como era)
+const EF_AURA_DRAGAO = {
+  gelo: { x: 0, y: 0, z: 0, qtd: 2, cores: ['#ffffff', '#e0f6ff', '#bfe8ff'], velocidade: 0.4, vy: -0.6, espalhar: 1.6, gravidade: 1.2, vida: 1.4, tamanho: 0.12, aditivo: false },
+  veneno: { x: 0, y: 0, z: 0, qtd: 1, cores: ['#5dd23a', '#8ae05a', '#c8ff7a'], velocidade: 0.3, vy: -0.4, espalhar: 0.9, gravidade: 5, vida: 0.9, tamanho: 0.14, aditivo: false },
+  raio: { x: 0, y: 0, z: 0, qtd: 2, cores: ['#ffffff', '#fff27a', '#9fd8ff'], velocidade: 2.6, espalhar: 1.6, gravidade: 0, vida: 0.18, tamanho: 0.1, aditivo: true, arrasto: 2 },
+};
+// Faíscas dos ovos elementais chocando (o de fogo fica no main.js)
+const EF_OVO_ELEMENTO = {
+  gelo: { x: 0, y: 0, z: 0, qtd: 1, cores: ['#ffffff', '#bfefff', '#8fdcff'], velocidade: 0.5, vy: 0.8, espalhar: 0.4, gravidade: -0.6, vida: 0.8, tamanho: 0.08, aditivo: true },
+  veneno: { x: 0, y: 0, z: 0, qtd: 1, cores: ['#7aff3a', '#c8ff7a', '#3fa82a'], velocidade: 0.5, vy: 0.9, espalhar: 0.4, gravidade: -0.8, vida: 0.7, tamanho: 0.09, aditivo: true },
+  raio: { x: 0, y: 0, z: 0, qtd: 1, cores: ['#ffffff', '#fff27a', '#9fd8ff'], velocidade: 1.4, vy: 1, espalhar: 0.4, gravidade: 0, vida: 0.3, tamanho: 0.08, aditivo: true, arrasto: 2 },
+};
+// Choque da espada de raio no mob
+const EF_CHOQUE = { x: 0, y: 0, z: 0, qtd: 10, cores: ['#ffffff', '#fff27a', '#9fd8ff'], velocidade: 3, espalhar: 0.5, gravidade: 0, vida: 0.25, tamanho: 0.1, aditivo: true, arrasto: 2 };
+const DANO_CHOQUE_ESPADA = 3;          // dano extra da espada de raio a cada golpe
+const MAX_CONGELAR_SOPRO = 14;         // blocos de água que o sopro de gelo congela a cada 0,5 s
+// Desenho dos raios (pool de "raios" feitos de caixinhas finas: as linhas do
+// WebGL têm só 1 pixel de grossura, finas demais para um raio do céu)
+const MAX_RAIOS = 8;                   // raios desenhados ao mesmo tempo
+const SEGMENTOS_RAIO = 9;              // pedaços em zigue-zague de cada raio
+const DURACAO_RAIO = 0.32;             // segundos até o raio sumir
+const ALTURA_RAIO = 24;                // o raio começa tanto acima do chão
 
 // Malhas dos projéteis: geometrias e materiais criados uma vez só
 let RECURSOS_PROJ = null;
@@ -945,12 +1068,13 @@ registrarComportamento('xama', (mobs, m, dt) => {
 });
 
 /**
- * Dragão (chefão). Fases:
+ * Dragão (chefão; os 4 elementos usam esta mesma IA). Fases:
  *   circular  → voa em círculos sobre a casa (o ninho) ou em volta do alvo
  *   mergulho  → desce rápido no jogador e dá uma garrada
  *   subir     → volta para o alto depois do mergulho
  *   aproximar → para a ~9 blocos do jogador, um pouco acima
- *   sopro     → fica parado soprando fogo em cone (~2 s)
+ *   sopro     → fica parado soltando o ataque do elemento (~2 s): fogo, gelo ou
+ *               veneno em cone, ou a tempestade de raios do dragão de raio
  *   descer / pousado / decolar → pousa às vezes, anda e dá garradas no chão
  */
 registrarComportamento('dragao', (mobs, m, dt) => {
@@ -1015,7 +1139,8 @@ registrarComportamento('dragao', (mobs, m, dt) => {
       m.querVel = 0;
       m.querVy = 0;
       if (p) virarPara(p.x, p.z);
-      if (m.tFase > TIPOS_PROJETIL.sopro.vida || !m.soproId) {
+      // (o sopro de cada elemento dura o tempo do projétil dele)
+      if (m.tFase > (TIPOS_PROJETIL[def.sopro] || TIPOS_PROJETIL.sopro).vida || !m.soproId) {
         mobs._terminarSopro(m);
         mudar('subir');
       }
@@ -1350,6 +1475,16 @@ export class Mobs {
     this._malhasProj = new Map();     // tipo → [malhas guardadas]
     this._nuvens = [];
     for (let i = 0; i < MAX_NUVENS; i++) this._nuvens.push({ ativa: false, x: 0, y: 0, z: 0, t: 0, tDano: 0, tParticula: 0 });
+    // Dragões elementais: rascunhos do sopro de gelo/veneno e os raios desenhados
+    this._pontoSopro = { x: 0, y: 0, z: 0 };
+    this._listaGelo = [];
+    this._raios = null;               // criados na primeira vez que um raio cai
+    this._proxRaio = 0;
+    this._ptsRaio = new Float32Array((SEGMENTOS_RAIO + 1) * 3);
+    this._tOvosElem = 0;              // faíscas dos ovos elementais (todos os computadores)
+    this._tEstaloOvo = 0;
+    this._listaOvos = [];
+    this._filtroOvo = (id) => { const e = elementoDoOvo(id); return !!e && e !== 'fogo'; };
 
     // Chefões (Fase 8)
     this._dia = 0;                    // dias de jogo desde que o mundo abriu (o chefão volta 1 vez por dia)
@@ -1481,6 +1616,8 @@ export class Mobs {
     // Projéteis e nuvens (o anfitrião simula; o cliente só desenha)
     this._atualizarProjeteis(dt);
     this._atualizarNuvens(dt);
+    this._atualizarRaios(dt);
+    this._faiscasOvosElementais(dt);
 
     // Desenho e limpeza (de trás para frente: dá para tirar da lista no caminho)
     for (let i = this.lista.length - 1; i >= 0; i--) {
@@ -1537,7 +1674,7 @@ export class Mobs {
       donoXAnt: 0, donoZAnt: 0, tDonoParado: 0, xMont: 0, zMont: 0,
       etiqueta: null, etiquetaTexto: '', inclinaSentado: 0, deitado: 0,
       // desenho
-      modelo: null, tLuz: 0, tSom: 0, tSomDano: -Infinity, tFogo: 0, tNeve: 0, tVen: 0,
+      modelo: null, tLuz: 0, tSom: 0, tSomDano: -Infinity, tFogo: 0, tNeve: 0, tVen: 0, tElem: 0,
       inclinacao: 0, velAnim: 0, xAnt: 0, zAnt: 0, distLocal: 0,
       anim: { atacando: false, voando: false, nadando: false, pousado: false, boca: 0, cabecaAtacando: [false, false, false] },
       // cliente: histórico de posições [t, x, y, z, yaw] × HIST
@@ -1592,7 +1729,7 @@ export class Mobs {
     m.tCab[0] = 1.2; m.tCab[1] = 2.4; m.tCab[2] = 3.6;
     m.tCabAnim.fill(0);
     // desenho
-    m.tLuz = 0; m.tSom = 3 + Math.random() * 10; m.tSomDano = -Infinity; m.tFogo = 0; m.tNeve = 0; m.tVen = 0;
+    m.tLuz = 0; m.tSom = 3 + Math.random() * 10; m.tSomDano = -Infinity; m.tFogo = 0; m.tNeve = 0; m.tVen = 0; m.tElem = 0;
     m.inclinacao = 0; m.velAnim = 0; m.xAnt = x; m.zAnt = z;
     const an = m.anim;
     an.atacando = false; an.voando = false; an.nadando = false; an.pousado = false; an.boca = 0;
@@ -1761,6 +1898,12 @@ export class Mobs {
       this._descartarProjetil(i);
     }
     for (const n of this._nuvens) n.ativa = false;
+    if (this._raios) {
+      for (const r of this._raios) {
+        r.t = 0;
+        for (let s = 0; s < SEGMENTOS_RAIO; s++) { r.miolos[s].visible = false; r.brilhos[s].visible = false; }
+      }
+    }
     this._chefePorArea.clear();
   }
 
@@ -2078,8 +2221,9 @@ export class Mobs {
           if (vivo && !vivo.morrendo && !vivo.descartar) continue;
           if (this._diaChefao.get(chave) === this._dia) continue;
           if (!this.mundo.estaPronto(a.x, a.z)) continue;
-          const tipo = a.tipo === 'ninho' ? 'dragao' : 'hidra';
-          const id = this.criarMob(tipo, a.x, tipo === 'dragao' ? a.y + 10 : a.y, a.z);
+          // O ninho diz qual dragão mora lá (fogo, gelo, veneno ou raio)
+          const tipo = a.tipo === 'ninho' ? (DRAGAO_DO_ELEMENTO[a.elemento] || 'dragao') : 'hidra';
+          const id = this.criarMob(tipo, a.x, TIPOS_MOB[tipo].voa ? a.y + 10 : a.y, a.z);
           if (!id) continue;
           const m = this.porId.get(id);
           m.casaX = a.x; m.casaY = a.y; m.casaZ = a.z;
@@ -2095,7 +2239,9 @@ export class Mobs {
     this._luaAntes = lua;
     if (this._chefaoLuaTentativas > 0) {
       this._chefaoLuaTentativas--;
-      if (!lua || this._criarChefaoPerto(Math.random() < 0.5 ? 'dragao' : 'hidra')) this._chefaoLuaTentativas = 0;
+      // metade das vezes a hidra; na outra metade, um dos 4 dragões
+      const tipoLua = Math.random() < 0.5 ? TIPOS_DRAGAO[Math.floor(Math.random() * TIPOS_DRAGAO.length)] : 'hidra';
+      if (!lua || this._criarChefaoPerto(tipoLua)) this._chefaoLuaTentativas = 0;
     }
     // Acabou a Lua Vermelha: o chefão que veio com ela vai embora (senão a
     // hidra, que não anda, ficaria para sempre do lado da casa). Se alguém
@@ -2131,14 +2277,15 @@ export class Mobs {
     if (!j || !j.posicao || j.morto) return null;
     const p = j.posicao;
     const def = TIPOS_MOB[tipo];
+    if (!def) return null;
     for (let t = 0; t < 8; t++) {
       const ang = Math.random() * Math.PI * 2;
-      const dist = tipo === 'dragao' ? 28 : 18 + Math.random() * 8;
+      const dist = def.voa ? 28 : 18 + Math.random() * 8;
       const x = Math.floor(p.x + Math.sin(ang) * dist), z = Math.floor(p.z + Math.cos(ang) * dist);
       if (!this.mundo.estaPronto(x, z)) continue;
       const topo = this._topoColuna(x, z);
       let y;
-      if (tipo === 'dragao') {
+      if (def.voa) {
         y = Math.max(topo, p.y) + 14;
       } else {
         y = topo;
@@ -2820,14 +2967,16 @@ export class Mobs {
       if ((m.noChao || m.naAgua) && !def.chefao) m.vy = RECUO_CIMA;
     }
 
-    // Efeitos dos poderes e das armas de chefão
+    // Efeitos dos poderes e das armas de chefão (o dragão de gelo não fica lento,
+    // o venenoso não se envenena: `imune`)
     if (efeito) {
-      if (efeito.queimar > 0) {
+      const imune = def.imune;
+      if (efeito.queimar > 0 && imune !== 'queimar') {
         m.queimar = Math.max(m.queimar, Math.min(10, efeito.queimar));
         m.queimadoPor = quem;
       }
-      if (efeito.lento > 0) m.lento = Math.max(m.lento, Math.min(10, efeito.lento));
-      if (efeito.veneno > 0) {
+      if (efeito.lento > 0 && imune !== 'lento') m.lento = Math.max(m.lento, Math.min(10, efeito.lento));
+      if (efeito.veneno > 0 && imune !== 'veneno') {
         m.veneno = Math.max(m.veneno, Math.min(10, efeito.veneno));
         m.envenenadoPor = quem;
       }
@@ -2949,6 +3098,17 @@ export class Mobs {
   atacar(id, dano, dir, efeito = null) {
     const m = this.porId.get(id);
     if (!m || m.morrendo || m.descartar || !(dano > 0) || m.dono) return false;
+    // Espada de raio: cada golpe dá um choque (dano extra e faíscas)
+    if (efeito === 'raio') {
+      dano += DANO_CHOQUE_ESPADA;
+      const part = this.particulas;
+      if (part && typeof part.emitir === 'function') {
+        EF_CHOQUE.x = m.x; EF_CHOQUE.y = m.y + m.def.altura * 0.6; EF_CHOQUE.z = m.z;
+        EF_CHOQUE.espalhar = Math.max(0.4, m.def.raio);
+        part.emitir(EF_CHOQUE);
+      }
+      if (this.som && typeof this.som.choque === 'function') this.som.choque();
+    }
     const ef = efeitoDeArma(efeito);
     if (this.autoridade) return this._aplicarDano(m, dano, dir, this._idLocal(), 'golpe', ef);
     m.piscouLocal = performance.now();
@@ -3137,18 +3297,28 @@ export class Mobs {
     if (Math.random() < 0.5) this._tocar(m, 'ataque');
   }
 
-  /** Dragão: começa a soprar fogo em cone na direção do jogador */
+  /**
+   * Dragão: começa o ataque especial do elemento na direção do jogador (o
+   * sopro em cone de fogo, gelo ou veneno, ou a tempestade de raios, que
+   * guarda quem é o alvo para os raios caírem nele)
+   */
   _iniciarSopro(m, alvo) {
     if (m.soproId) return;
+    const tipo = TIPOS_PROJETIL[m.def.sopro] ? m.def.sopro : 'sopro';
+    const pd = TIPOS_PROJETIL[tipo];
     const p = alvo && alvo.posicao;
     const fx = -Math.sin(m.yaw), fz = -Math.cos(m.yaw);
     const ox = m.x + fx * 3.4, oy = m.y + m.def.altura * 0.62, oz = m.z + fz * 3.4;
     let dx = fx, dy = -0.25, dz = fz;
     if (p) { dx = p.x - ox; dy = p.y + 1 - oy; dz = p.z - oz; }
     const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-    const pr = this._lancarProjetil('sopro', m, ox, oy, oz, dx / d, dy / d, dz / d, TIPOS_PROJETIL.sopro.dano, null, 0);
-    if (pr) m.soproId = pr.id;
-    this._tocar(m, 'ataque'); // "fuuu" do sopro
+    const alvoId = pd.tempestade && alvo ? alvo.id : null;
+    const pr = this._lancarProjetil(tipo, m, ox, oy, oz, dx / d, dy / d, dz / d, pd.dano, alvoId, 0);
+    if (pr) {
+      m.soproId = pr.id;
+      if (pd.tempestade) pr.tDano = 0.25; // o primeiro raio sai logo
+    }
+    this._tocar(m, 'ataque'); // "fuuu" do sopro (cada dragão tem o seu som)
   }
 
   /** Dragão: para de soprar (fim do tempo, morte ou mudança de fase) */
@@ -3175,7 +3345,8 @@ export class Mobs {
     p.x = x; p.y = y; p.z = z; p.vx = vx; p.vy = vy; p.vz = vz;
     p.t = 0; p.dono = 0; p.alvo = null; p.alvoMob = 0; p.dano = def.dano;
     p.tRastro = 0; p.tDano = 0; p.ativo = true; p.parado = false;
-    p.malha = def.sopro ? null : this._pegarMalha(tipo);
+    // sopros e raios não têm malha (são só partículas e as caixinhas do raio)
+    p.malha = def.sopro || def.relampago ? null : this._pegarMalha(tipo);
     if (p.malha) this._posicionarMalha(p);
     this._proj.push(p);
     this._projPorId.set(id, p);
@@ -3296,6 +3467,8 @@ export class Mobs {
       const def = p.def;
       if (def.sopro) {
         this._atualizarSopro(p, dt);
+      } else if (def.relampago) {
+        this._atualizarRelampago(p);
       } else if (!p.parado) {
         // Orbe: persegue o jogador alvo de leve (gira a velocidade aos poucos)
         if (def.guia && p.alvo) {
@@ -3393,6 +3566,11 @@ export class Mobs {
       }
     }
     if (def.nuvem) {
+      // Sopro de veneno: a nuvem fica onde o cone bateu (no chão), não na boca do dragão
+      if (def.sopro) {
+        const pt = this._impactoSopro(p);
+        x = pt.x; y = pt.y; z = pt.z;
+      }
       y = this._chaoEm(x, y, z);
       this._criarNuvem(x, y, z);
     }
@@ -3403,6 +3581,70 @@ export class Mobs {
       const d = this.porId.get(p.dono);
       if (d && d.soproId === p.id) d.soproId = 0;
     }
+  }
+
+  /**
+   * Onde o eixo do cone do sopro `p` bate: o primeiro bloco no caminho (até o
+   * alcance do cone) ou a ponta do cone. Devolve um objeto reaproveitado.
+   */
+  _impactoSopro(p) {
+    const alcance = p.def.alcance || ALCANCE_SOPRO;
+    const s = this._pontoSopro;
+    let t = alcance;
+    if (typeof this.mundo.raycast === 'function') {
+      const o = this._origemVisao, dv = this._dirVisao;
+      o.x = p.x; o.y = p.y; o.z = p.z; dv.x = p.vx; dv.y = p.vy; dv.z = p.vz;
+      const r = this.mundo.raycast(o, dv, alcance);
+      if (r && Number.isFinite(r.t)) t = Math.max(0, r.t - 0.3);
+    }
+    s.x = p.x + p.vx * t; s.y = p.y + p.vy * t; s.z = p.z + p.vz * t;
+    return s;
+  }
+
+  /**
+   * (Anfitrião) Sopro de gelo: a água que o cone acerta vira gelo. Olha alguns
+   * pontos ao longo do eixo do cone e, em cada um, até 3 blocos para baixo,
+   * procurando a superfície da água (água com ar ou gelo em cima). O lote vai
+   * pela rede como qualquer mudança de bloco.
+   */
+  _congelarNoSopro(p) {
+    const mundo = this.mundo;
+    if (typeof mundo.definirBlocos !== 'function') return;
+    const lista = this._listaGelo;
+    lista.length = 0;
+    const alcance = p.def.alcance || ALCANCE_SOPRO;
+    for (let t = 2; t <= alcance && lista.length < MAX_CONGELAR_SOPRO; t += 1.5) {
+      const cx = Math.floor(p.x + p.vx * t), cy = Math.floor(p.y + p.vy * t), cz = Math.floor(p.z + p.vz * t);
+      const r = t < 6 ? 0 : 1; // mais longe, o cone é mais largo
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          for (let dy = 0; dy >= -3; dy--) {
+            const x = cx + dx, y = cy + dy, z = cz + dz;
+            const id = mundo.obterBloco(x, y, z);
+            if (id === B.AGUA) {
+              const cima = mundo.obterBloco(x, y + 1, z);
+              if (cima !== B.AGUA && lista.length < MAX_CONGELAR_SOPRO && !this._jaNaLista(lista, x, y, z)) lista.push([x, y, z, B.GELO, 0]);
+              break;
+            }
+            if (SOLIDO[id]) break; // bateu no chão: não atravessa
+          }
+        }
+      }
+    }
+    if (lista.length === 0) return;
+    mundo.definirBlocos(lista, 'local');
+    const part = this.particulas;
+    if (part && typeof part.neve === 'function') {
+      for (let i = 0; i < lista.length; i += 3) part.neve(lista[i][0] + 0.5, lista[i][1] + 1, lista[i][2] + 0.5);
+    }
+  }
+
+  _jaNaLista(lista, x, y, z) {
+    for (let i = 0; i < lista.length; i++) {
+      const b = lista[i];
+      if (b[0] === x && b[1] === y && b[2] === z) return true;
+    }
+    return false;
   }
 
   /** y do chão logo abaixo de (x, y, z) (até 6 blocos), para a nuvem de veneno */
@@ -3451,22 +3693,31 @@ export class Mobs {
     part.emitir(ef);
   }
 
-  /** Sopro de fogo: partículas no cone e (no anfitrião) o dano a cada 0,5 s */
+  /**
+   * Sopro (fogo, gelo ou veneno): partículas no cone e (no anfitrião) o dano
+   * a cada 0,5 s. O de gelo também congela a água. A "tempestade" do dragão
+   * de raio não tem cone: chama raios no alvo (veja _tempestade).
+   */
   _atualizarSopro(p, dt) {
     const dono = p.dono ? this.porId.get(p.dono) : null;
     if (this.autoridade && (!dono || dono.morrendo || dono.descartar)) {
       this._fimProjetil(p, p.x, p.y, p.z, null);
       return;
     }
+    const def = p.def;
+    if (def.tempestade) { this._tempestade(p, dt, dono); return; }
     // Partículas: saem da boca na direção do cone, um pouco abertas
     const part = this.particulas;
     p.tRastro -= dt;
     if (p.tRastro <= 0 && part && typeof part.emitir === 'function') {
       p.tRastro = 1 / 30;
       if (this._pertoDeMim(p.x, p.y, p.z, 80)) {
-        const e = EF_SOPRO, b = EF_SOPRO_BRILHO;
+        const par = SOPROS_PARTICULAS[p.tipo] || SOPROS_PARTICULAS.sopro;
+        const e = par[0], b = par[1];
+        // o veneno sai mais devagar (uma nuvem que se espalha), o fogo e o gelo em jato
+        const v = def.nuvem ? 8 : 12;
         e.x = b.x = p.x; e.y = b.y = p.y; e.z = b.z = p.z;
-        e.vx = b.vx = p.vx * 12; e.vy = b.vy = p.vy * 12; e.vz = b.vz = p.vz * 12;
+        e.vx = b.vx = p.vx * v; e.vy = b.vy = p.vy * v; e.vz = b.vz = p.vz * v;
         part.emitir(e);
         part.emitir(b);
       }
@@ -3475,14 +3726,17 @@ export class Mobs {
     p.tDano -= dt;
     if (p.tDano > 0) return;
     p.tDano = INTERVALO_DANO_SOPRO;
+    if (def.congela) this._congelarNoSopro(p);
+    const alcance = def.alcance || ALCANCE_SOPRO;
+    const cos = def.cos || COS_SOPRO;
     const jog = this._jogadores;
     for (let i = 0; i < jog.length; i++) {
       const j = jog[i];
       if (!j.posicao || j.morto) continue;
       const tx = j.posicao.x - p.x, ty = j.posicao.y + 1 - p.y, tz = j.posicao.z - p.z;
       const d = Math.sqrt(tx * tx + ty * ty + tz * tz);
-      if (d > ALCANCE_SOPRO || d < 0.01) continue;
-      if ((tx * p.vx + ty * p.vy + tz * p.vz) / d < COS_SOPRO) continue; // fora do cone
+      if (d > alcance || d < 0.01) continue;
+      if ((tx * p.vx + ty * p.vy + tz * p.vz) / d < cos) continue; // fora do cone
       // Atrás de uma parede, o fogo não pega
       if (typeof this.mundo.raycast === 'function') {
         const o = this._origemVisao, dv = this._dirVisao;
@@ -3491,6 +3745,204 @@ export class Mobs {
         if (r && r.t < d - 0.8) continue;
       }
       this._danoEmJogador(j, p.dano, p.x, p.y, p.z, p.def.efeito, p.def.segundos);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Dragão de raio: tempestade e raios caindo
+  // ------------------------------------------------------------------
+
+  /**
+   * A "tempestade" (o sopro do dragão de raio): faíscas na boca e, no
+   * anfitrião, um raio a cada `intervalo` s no alvo (com um pouco de erro, e
+   * às vezes um segundo raio perto, "na área"). Cada raio é um projétil
+   * 'relampago' parado no chão: assim os clientes recebem pelo mesmo
+   * caminho dos outros projéteis (projetilMob / projetilFim).
+   */
+  _tempestade(p, dt, dono) {
+    const part = this.particulas;
+    p.tRastro -= dt;
+    if (p.tRastro <= 0 && part && typeof part.emitir === 'function') {
+      p.tRastro = 0.05;
+      if (this._pertoDeMim(p.x, p.y, p.z, 80) && !this._pertoDosOlhos(p.x, p.y, p.z, DIST_PARTICULA_OLHOS)) {
+        EF_TEMPESTADE.x = p.x; EF_TEMPESTADE.y = p.y; EF_TEMPESTADE.z = p.z;
+        part.emitir(EF_TEMPESTADE);
+      }
+    }
+    if (!this.autoridade) return;
+    p.tDano -= dt;
+    if (p.tDano > 0) return;
+    p.tDano = p.def.intervalo || 0.65;
+    const alvo = this._jogadorPorId(p.alvo);
+    if (!alvo || !alvo.posicao || alvo.morto) return;
+    const q = alvo.posicao;
+    // Mira no jogador com um erro de até ~1,2 bloco (parado, ele leva; andando, escapa)
+    const a = Math.random() * Math.PI * 2, e = Math.random() * 1.2;
+    this._lancarRaio(dono, q.x + Math.cos(a) * e, q.y, q.z + Math.sin(a) * e);
+    if (Math.random() < 0.45) {
+      const a2 = Math.random() * Math.PI * 2, e2 = 2.5 + Math.random() * 3.5;
+      this._lancarRaio(dono, q.x + Math.cos(a2) * e2, q.y, q.z + Math.sin(a2) * e2);
+    }
+  }
+
+  /** (Anfitrião) Um raio vai cair em (x, z), no chão perto de y */
+  _lancarRaio(dono, x, y, z) {
+    const yc = this._chaoRaio(x, y, z);
+    this._lancarProjetil('relampago', dono, x, yc, z, 0, 0, 0, TIPOS_PROJETIL.relampago.dano, null, 0);
+  }
+
+  /** y do chão em (x, z) para o raio: o topo da coluna, ou o chão abaixo de y (dentro de cavernas) */
+  _chaoRaio(x, y, z) {
+    const bx = Math.floor(x), bz = Math.floor(z);
+    let by = Math.floor(y + 0.5);
+    // sobe se estiver dentro de um bloco, desce até achar chão (até 12 blocos)
+    for (let k = 0; k < 4 && SOLIDO[this.mundo.obterBloco(bx, by, bz)]; k++) by++;
+    for (let k = 0; k < 12 && by > 1 && !SOLIDO[this.mundo.obterBloco(bx, by - 1, bz)] && !LIQUIDO[this.mundo.obterBloco(bx, by - 1, bz)]; k++) by--;
+    return by;
+  }
+
+  /**
+   * Raio caindo (anfitrião e clientes): durante o `aviso` saem faíscas do
+   * chão (é a hora de correr); depois o raio cai, com estouro, fumaça e som.
+   * Só o anfitrião dá o dano (quem está perto do ponto, e o arco que pula
+   * para os vizinhos de quem levou). `p.parado` marca que o raio já caiu.
+   */
+  _atualizarRelampago(p) {
+    const def = p.def;
+    const part = this.particulas;
+    const perto = this._pertoDeMim(p.x, p.y, p.z, 96);
+    if (!p.parado) {
+      if (p.t < def.aviso) {
+        if (perto && part && typeof part.emitir === 'function' && p.tRastro <= p.t) {
+          p.tRastro = p.t + 0.07;
+          EF_AVISO_RAIO.x = p.x; EF_AVISO_RAIO.y = p.y + 0.1; EF_AVISO_RAIO.z = p.z;
+          part.emitir(EF_AVISO_RAIO);
+        }
+        return;
+      }
+      p.parado = true;
+      // O raio: do céu até o chão, e uns galhinhos para os lados
+      if (perto) {
+        this._desenharRaio(p.x + (Math.random() - 0.5) * 3, p.y + ALTURA_RAIO, p.z + (Math.random() - 0.5) * 3, p.x, p.y, p.z, 1);
+        for (let k = 0; k < 2; k++) {
+          const a = Math.random() * Math.PI * 2, d = 1.5 + Math.random() * 1.5;
+          this._desenharRaio(p.x, p.y + 0.2, p.z, p.x + Math.cos(a) * d, p.y + 0.1, p.z + Math.sin(a) * d, 0.45);
+        }
+        if (part && typeof part.emitir === 'function' && !this._pertoDosOlhos(p.x, p.y, p.z, DIST_PARTICULA_OLHOS)) {
+          EF_ESTOURO_RAIO.x = p.x; EF_ESTOURO_RAIO.y = p.y + 0.2; EF_ESTOURO_RAIO.z = p.z;
+          part.emitir(EF_ESTOURO_RAIO);
+          EF_FUMACA_RAIO.x = p.x; EF_FUMACA_RAIO.y = p.y + 0.3; EF_FUMACA_RAIO.z = p.z;
+          part.emitir(EF_FUMACA_RAIO);
+        }
+        const s = this.som;
+        if (s && typeof s.trovao === 'function' && this._local) {
+          const lp = this._local.posicao;
+          const dist = Math.hypot(p.x - lp.x, p.y - lp.y, p.z - lp.z);
+          s.trovao(Math.max(0.15, 1 - dist / 90));
+        }
+      }
+      // Arcos: do ponto do raio para cada jogador atingido e dele para os vizinhos.
+      // Todos desenham (cada um com as posições que conhece); só o anfitrião machuca.
+      const jog = this._jogadores;
+      const r2 = def.raioArea * def.raioArea, a2 = def.alcanceArco * def.alcanceArco;
+      for (let i = 0; i < jog.length; i++) {
+        const j = jog[i];
+        if (!j || !j.posicao || j.morto) continue;
+        const dx = j.posicao.x - p.x, dz = j.posicao.z - p.z, dy = j.posicao.y - p.y;
+        if (dx * dx + dz * dz > r2 || dy < -1.5 || dy > 3) continue;
+        if (this.autoridade) {
+          if (p.dono && j.id) this._agressor.set(j.id, p.dono);
+          this._danoEmJogador(j, p.dano, p.x, p.y - 1, p.z, null, 0);
+        }
+        for (let k = 0; k < jog.length; k++) {
+          const o = jog[k];
+          if (o === j || !o || !o.posicao || o.morto) continue;
+          const ex = o.posicao.x - j.posicao.x, ey = o.posicao.y - j.posicao.y, ez = o.posicao.z - j.posicao.z;
+          if (ex * ex + ey * ey + ez * ez > a2) continue;
+          // o vizinho já estava no círculo do raio: não leva duas vezes
+          const fx = o.posicao.x - p.x, fz = o.posicao.z - p.z;
+          if (fx * fx + fz * fz <= r2) continue;
+          if (perto) this._desenharRaio(j.posicao.x, j.posicao.y + 1.1, j.posicao.z, o.posicao.x, o.posicao.y + 1.1, o.posicao.z, 0.6);
+          if (this.autoridade) this._danoEmJogador(o, def.danoArco, j.posicao.x, j.posicao.y, j.posicao.z, null, 0);
+        }
+      }
+    }
+  }
+
+  /** Cria (uma vez só) as caixinhas dos raios: MAX_RAIOS raios × SEGMENTOS_RAIO pedaços */
+  _criarRaios() {
+    this._raios = [];
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    for (let i = 0; i < MAX_RAIOS; i++) {
+      // miolo branco (aparece até de dia) e um brilho azulado aditivo em volta
+      const matMiolo = new THREE.MeshBasicMaterial({ color: 0xfffbe6, transparent: true, opacity: 1, depthWrite: false, fog: false });
+      const matBrilho = new THREE.MeshBasicMaterial({ color: 0x7ab8ff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+      const miolos = [], brilhos = [];
+      for (let s = 0; s < SEGMENTOS_RAIO; s++) {
+        const a = new THREE.Mesh(geo, matMiolo), b = new THREE.Mesh(geo, matBrilho);
+        a.visible = b.visible = false;
+        a.frustumCulled = b.frustumCulled = false;
+        a.renderOrder = b.renderOrder = 3;
+        if (this.scene) { this.scene.add(a); this.scene.add(b); }
+        miolos.push(a); brilhos.push(b);
+      }
+      this._raios.push({ matMiolo, matBrilho, miolos, brilhos, t: 0 });
+    }
+    this._proxRaio = 0;
+  }
+
+  /** Desenha um raio em zigue-zague de A até B (grossura 1 = raio do céu; menor = galho/arco) */
+  _desenharRaio(ax, ay, az, bx, by, bz, grossura) {
+    if (!this._raios) this._criarRaios();
+    const r = this._raios[this._proxRaio];
+    this._proxRaio = (this._proxRaio + 1) % MAX_RAIOS;
+    const dx = bx - ax, dy = by - ay, dz = bz - az;
+    const comp = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+    const amp = Math.min(1.4, comp * 0.07);
+    // pontos do zigue-zague (as pontas ficam no lugar)
+    const pts = this._ptsRaio;
+    for (let s = 0; s <= SEGMENTOS_RAIO; s++) {
+      const t = s / SEGMENTOS_RAIO;
+      const forca = s === 0 || s === SEGMENTOS_RAIO ? 0 : amp;
+      pts[s * 3] = ax + dx * t + (Math.random() - 0.5) * 2 * forca;
+      pts[s * 3 + 1] = ay + dy * t + (Math.random() - 0.5) * forca * 0.5;
+      pts[s * 3 + 2] = az + dz * t + (Math.random() - 0.5) * 2 * forca;
+    }
+    const w = 0.13 * grossura, wb = 0.5 * grossura;
+    for (let s = 0; s < SEGMENTOS_RAIO; s++) {
+      const k = s * 3;
+      this._pedacoRaio(r.miolos[s], pts[k], pts[k + 1], pts[k + 2], pts[k + 3], pts[k + 4], pts[k + 5], w);
+      this._pedacoRaio(r.brilhos[s], pts[k], pts[k + 1], pts[k + 2], pts[k + 3], pts[k + 4], pts[k + 5], wb);
+    }
+    r.t = DURACAO_RAIO;
+    r.matMiolo.opacity = 1;
+    r.matBrilho.opacity = 0.5;
+  }
+
+  /** Estica a caixinha `m` de (x0, y0, z0) até (x1, y1, z1), com a grossura `larg` */
+  _pedacoRaio(m, x0, y0, z0, x1, y1, z1, larg) {
+    const l = Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0)) || 0.01;
+    m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    m.lookAt(x1, y1, z1); // o +Z da caixinha aponta para o fim do pedaço
+    m.scale.set(larg, larg, l + larg * 0.5);
+    m.visible = true;
+  }
+
+  /** Apaga os raios aos poucos */
+  _atualizarRaios(dt) {
+    if (!this._raios) return;
+    for (let i = 0; i < this._raios.length; i++) {
+      const r = this._raios[i];
+      if (r.t <= 0) continue;
+      r.t -= dt;
+      if (r.t <= 0) {
+        for (let s = 0; s < SEGMENTOS_RAIO; s++) { r.miolos[s].visible = false; r.brilhos[s].visible = false; }
+        continue;
+      }
+      const f = r.t / DURACAO_RAIO;
+      // pisca um pouquinho no começo (como um raio de verdade)
+      r.matMiolo.opacity = f > 0.6 && Math.random() < 0.3 ? 0.35 : f;
+      r.matBrilho.opacity = 0.5 * f;
     }
   }
 
@@ -4306,7 +4758,7 @@ export class Mobs {
 
   // ----- Ovo de dragão (anfitrião) -----
 
-  /** O mundo mudou um bloco: um ovo foi colocado (guarda quem pôs) ou tirado */
+  /** O mundo mudou um bloco: um ovo (de qualquer elemento) foi colocado (guarda quem pôs) ou tirado */
   _aoMudarBloco(ev) {
     if (!this.autoridade || B.OVO_DRAGAO === undefined) return;
     if (ev.lote && Array.isArray(ev.lista)) {
@@ -4317,15 +4769,44 @@ export class Mobs {
   }
 
   _conferirOvo(x, y, z, id, anterior, origem) {
-    const OVO = B.OVO_DRAGAO;
     if (id === anterior) return; // só o estado mudou (é o próprio ovo mostrando o progresso)
     const chave = x + ',' + y + ',' + z;
-    if (id === OVO) {
+    if (elementoDoOvo(id)) {
       // Quem pôs: eu (origem 'local') ou o cliente que a rede está atendendo agora
       const autor = origem === 'rede' ? (this.rede && this.rede.autorBloco) : this._meuApelido();
       this._ovos.set(chave, { x, y, z, dono: autor || this._meuApelido(), tempo: 0 });
-    } else if (anterior === OVO) {
+    } else if (elementoDoOvo(anterior)) {
       this._ovos.delete(chave);
+    }
+  }
+
+  /**
+   * (Todos os computadores) Faíscas dos ovos ELEMENTAIS chocando perto de mim,
+   * na cor do elemento, e os estalos perto do fim. O de fogo já é feito pelo
+   * main.js (ovosChocando); aqui ficam só os de gelo, veneno e raio.
+   */
+  _faiscasOvosElementais(dt) {
+    this._tOvosElem += dt;
+    if (this._tOvosElem < 0.3) return;
+    this._tOvosElem = 0;
+    if (this._tEstaloOvo > 0) this._tEstaloOvo -= 0.3;
+    const loc = this._local, part = this.particulas;
+    if (!loc || !part || typeof part.emitir !== 'function' || typeof this.mundo.blocosProximos !== 'function') return;
+    const lista = this.mundo.blocosProximos(loc.posicao, 16, this._filtroOvo, 8, this._listaOvos);
+    for (let i = 0; i < lista.length; i++) {
+      const b = lista[i];
+      const nivel = typeof this.mundo.obterEstado === 'function' ? this.mundo.obterEstado(b[0], b[1], b[2]) : 0;
+      if (!nivel) continue;
+      const ef = EF_OVO_ELEMENTO[elementoDoOvo(b[3])];
+      if (!ef) continue;
+      ef.x = b[0] + 0.5; ef.y = b[1] + 0.8; ef.z = b[2] + 0.5;
+      ef.qtd = 1 + Math.floor(nivel / 5); // quanto mais perto de nascer, mais faíscas
+      part.emitir(ef);
+      const dx = b[0] + 0.5 - loc.posicao.x, dz = b[2] + 0.5 - loc.posicao.z;
+      if (nivel >= 13 && this._tEstaloOvo <= 0 && dx * dx + dz * dz < 144) {
+        this._tEstaloOvo = 3 + Math.random() * 2;
+        if (this.som && typeof this.som.chocar === 'function') this.som.chocar();
+      }
     }
   }
 
@@ -4356,27 +4837,32 @@ export class Mobs {
     const total = CONFIG.OVO_TEMPO_CHOCAR_S;
     for (const [chave, o] of this._ovos) {
       if (!this.mundo.estaPronto(o.x, o.z)) continue; // ninguém por perto: espera
-      if (this.mundo.obterBloco(o.x, o.y, o.z) !== B.OVO_DRAGAO) { this._ovos.delete(chave); continue; }
+      // (o bloco diz o elemento: ovo de fogo, gelo, veneno ou raio)
+      const idOvo = this.mundo.obterBloco(o.x, o.y, o.z);
+      if (!elementoDoOvo(idOvo)) { this._ovos.delete(chave); continue; }
       const quente = this._fogueiraPerto(o.x, o.y, o.z);
       if (quente) o.tempo += passo;
-      if (o.tempo >= total) { this._chocar(chave, o); continue; }
+      if (o.tempo >= total) { this._chocar(chave, o, elementoDoOvo(idOvo)); continue; }
       const nivel = quente ? Math.max(1, Math.min(15, 1 + Math.floor(o.tempo / total * 14))) : 0;
       const atual = typeof this.mundo.obterEstado === 'function' ? this.mundo.obterEstado(o.x, o.y, o.z) : nivel;
-      if (nivel !== atual) this.mundo.definirBloco(o.x, o.y, o.z, B.OVO_DRAGAO, 'local', nivel);
+      if (nivel !== atual) this.mundo.definirBloco(o.x, o.y, o.z, idOvo, 'local', nivel);
     }
   }
 
-  _chocar(chave, o) {
+  _chocar(chave, o, elemento = 'fogo') {
     this._ovos.delete(chave);
     this.mundo.definirBloco(o.x, o.y, o.z, B.AR, 'local', 0);
-    const id = this.criarMob('filhote_dragao', o.x + 0.5, o.y, o.z + 0.5, Math.random() * Math.PI * 2, { dono: o.dono });
+    // O filhote tem a cor do elemento do ovo (variante = índice em ELEMENTOS_DRAGAO)
+    const variante = Math.max(0, ELEMENTOS_DRAGAO.indexOf(elemento));
+    const id = this.criarMob('filhote_dragao', o.x + 0.5, o.y, o.z + 0.5, Math.random() * Math.PI * 2, { dono: o.dono, variante });
     const m = id ? this.porId.get(id) : null;
     if (m) {
       this._emitirCoracoes(m, 16);
       this._enviarDono(m, true);
     }
     if (this.som && typeof this.som.chocar === 'function' && this._pertoDeMim(o.x, o.y, o.z, 24)) this.som.chocar();
-    this._avisarDono(o.dono, 'Nasceu um filhote de dragão! Ele é seu. Coloque uma sela para montar.');
+    const DE = { fogo: '', gelo: ' de gelo', veneno: ' venenoso', raio: ' de raio' };
+    this._avisarDono(o.dono, 'Nasceu um filhote de dragão' + (DE[elemento] || '') + '! Ele é seu. Coloque uma sela para montar.');
   }
 
   // ----- Salvar (anfitrião) -----
@@ -4870,6 +5356,21 @@ export class Mobs {
         this._tAsas = 1.5;
         const s = this.som;
         if (s && typeof s.asas === 'function') s.asas();
+      }
+    }
+    // Dragões elementais: flocos de neve caindo, gotas de veneno pingando ou faíscas
+    const aura = def.elemento ? EF_AURA_DRAGAO[def.elemento] : null;
+    if (aura && !m.morrendo && dist < 64 && part && typeof part.emitir === 'function') {
+      m.tElem -= dt;
+      if (m.tElem <= 0) {
+        m.tElem = def.elemento === 'veneno' ? 0.18 : 0.1;
+        // o veneno pinga da boca (na frente do corpo); os outros saem do corpo todo
+        const frente = def.elemento === 'veneno' ? 3.2 : 0;
+        const ax = m.x - Math.sin(m.yaw) * frente, ay = m.y + def.altura * (def.elemento === 'veneno' ? 0.55 : 0.7), az = m.z - Math.cos(m.yaw) * frente;
+        if (!this._pertoDosOlhos(ax, ay, az, 2.5)) {
+          aura.x = ax; aura.y = ay; aura.z = az;
+          part.emitir(aura);
+        }
       }
     }
 

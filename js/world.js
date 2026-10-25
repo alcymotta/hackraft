@@ -46,8 +46,15 @@
 //                  (os 5 primeiros números são o formato da rede; só vêm os
 //                  blocos que mudaram de verdade, na ordem em que foram aplicados)
 //
+// Dragões elementais:
+//   - Cada Ninho do Dragão tem um elemento (fogo, gelo, veneno ou raio), escolhido
+//     pelo lugar e por hash da região (veja _elementoDoNinho). A área vem com
+//     `elemento` (areasEspeciais), e cada elemento tem os seus enfeites.
+//   - Água nos buracos: tirar um bloco do lado da água enche o buraco de água
+//     (e ela escorre até 3 blocos, nunca acima do nível do mar). Veja _deveEncher.
+//
 // Exporta: Mundo (contrato do CLAUDE.md), GeradorMundo, BIOMA, TABELA_MINERIOS,
-//          direcaoDoYaw(yaw), estadoTochaPelaNormal(normal)
+//          ELEMENTOS_DRAGAO, direcaoDoYaw(yaw), estadoTochaPelaNormal(normal)
 // =====================================================================
 
 import * as THREE from 'three';
@@ -177,6 +184,11 @@ const BL_OSSO = blocoPorNome('bloco_osso') ?? B.AREIA;
 const BL_BRASA = blocoPorNome('brasa') ?? B.FOGUEIRA ?? B.MINERIO_FOGO;
 const BL_MUSGO = blocoPorNome('pedra_musgosa') ?? B.PEDRA;
 const BL_DRACONIO = B.MINERIO_DRACONIO ?? B.PEDRA;
+// Enfeites dos ninhos dos dragões elementais (gelo e veneno)
+const BL_NEVE = B.NEVE ?? B.AREIA;
+const BL_MUSGO_TOXICO = B.MUSGO_TOXICO ?? B.FOLHAS;
+/** Os 4 elementos de dragão, na ordem do índice (o filhote usa como variante de cor) */
+export const ELEMENTOS_DRAGAO = ['fogo', 'gelo', 'veneno', 'raio'];
 // Direções da frente do baú (0 = -Z, 1 = +X, 2 = +Z, 3 = -X)
 const DIR_BAU_X = [0, 1, 0, -1];
 const DIR_BAU_Z = [-1, 0, 1, 0];
@@ -773,7 +785,57 @@ export class GeradorMundo {
     const r = sorteador(Math.floor(hash2D(s ^ 0x777, rx, rz) * 4294967296));
     const fases = [r() * 6.283, r() * 6.283, r() * 6.283];
     const decor = []; // [x, y, z, id, estado, soNaPedra]
+    // Qual dragão mora aqui (fogo, gelo, veneno ou raio). Usa um hash próprio,
+    // sem gastar números do sorteador `r`: o ninho de fogo continua igualzinho.
+    const elemento = this._elementoDoNinho(rx, rz, bx, bz, melhor);
+    let bau;
+    if (elemento === 'fogo') {
+      bau = this._decorNinhoFogo(bx, bz, yPlat, r, fases, decor);
+    } else {
+      bau = this._decorNinhoElemental(elemento, bx, bz, yPlat, r, fases, decor);
+    }
 
+    return {
+      tipo: 'ninho', elemento, bx, bz, yPlat, fases, decor, alcance: ALCANCE_AREA,
+      // O que os outros módulos veem (não altere: é compartilhado)
+      info: { tipo: 'ninho', elemento, x: bx + 0.5, y: yPlat + 1, z: bz + 0.5, raio: NINHO_RAIO, bau },
+    };
+  }
+
+  /**
+   * Elemento do dragão de um ninho, pelo lugar (sempre o mesmo para a mesma semente):
+   *   gelo   → pico muito alto (acima da linha da pedra pura, onde "neva")
+   *   veneno → perto de muita água (pântano) ou ninho baixo, num rochedo
+   *   raio   → platô (o chão em volta do pico é quase plano)
+   *   fogo   → os outros picos
+   * Para ter de todos em qualquer mundo, 45% das vezes o elemento é sorteado
+   * entre os 4 (por hash da região, sem Math.random).
+   */
+  _elementoDoNinho(rx, rz, bx, bz, h) {
+    const s = this.sementeAreas ^ 0x1e1e5a5a;
+    let agua = 0, hMin = h, hMax = h;
+    for (let k = 0; k < 16; k++) {
+      const a = k * Math.PI / 8;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      if (this.alturaEm(Math.round(bx + ca * 28), Math.round(bz + sa * 28)) < NIVEL_MAR) agua++;
+      if (this.alturaEm(Math.round(bx + ca * 14), Math.round(bz + sa * 14)) < NIVEL_MAR) agua++;
+      if ((k & 1) === 0) {
+        const hh = this.alturaEm(Math.round(bx + ca * 9), Math.round(bz + sa * 9));
+        if (hh < hMin) hMin = hh;
+        if (hh > hMax) hMax = hh;
+      }
+    }
+    let preferido;
+    if (h >= LINHA_PEDRA) preferido = 'gelo';
+    else if (agua >= 4 || h < NIVEL_MAR + 12) preferido = 'veneno';
+    else if (hMax - hMin <= 5) preferido = 'raio';
+    else preferido = 'fogo';
+    if (hash2D(s, rx, rz) < 0.55) return preferido;
+    return ELEMENTOS_DRAGAO[Math.floor(hash2D(s ^ 0x7f4a7c15, rx, rz) * 4) & 3];
+  }
+
+  /** Enfeites do ninho de fogo (o ninho original da Fase 8). Devolve a posição do baú. */
+  _decorNinhoFogo(bx, bz, yPlat, r, fases, decor) {
     // Ninho de troncos: um anel em volta do centro, com alguns buracos
     for (let dz = -4; dz <= 4; dz++) {
       for (let dx = -4; dx <= 4; dx++) {
@@ -817,12 +879,106 @@ export class GeradorMundo {
     // Baú de tesouro bem no meio do ninho
     const bau = [bx, yPlat + 1, bz];
     decor.push([bx, yPlat + 1, bz, B.BAU, Math.floor(r() * 4), 0]);
+    return bau;
+  }
 
-    return {
-      tipo: 'ninho', bx, bz, yPlat, fases, decor, alcance: ALCANCE_AREA,
-      // O que os outros módulos veem (não altere: é compartilhado)
-      info: { tipo: 'ninho', x: bx + 0.5, y: yPlat + 1, z: bz + 0.5, raio: NINHO_RAIO, bau },
-    };
+  /**
+   * Enfeites dos ninhos dos dragões elementais (mesma plataforma de pedra
+   * escura, costelas, dracônio e baú no meio; o resto muda com o elemento):
+   *   gelo   → anel de gelo, chão com neve, costelas de gelo e cristais de gelo
+   *   veneno → anel de folhas e musgo tóxico (que brilha), poças de água e ossos
+   *   raio   → pedras em pé com cristais de raio na ponta e um anel de pedra
+   * Devolve a posição do baú.
+   */
+  _decorNinhoElemental(elemento, bx, bz, yPlat, r, fases, decor) {
+    const ANEL = elemento === 'gelo' ? B.GELO : elemento === 'veneno' ? B.FOLHAS : B.PEDRA;
+    const COSTELA_BL = elemento === 'gelo' ? B.GELO : BL_OSSO;
+    // Anel do ninho (com buracos)
+    for (let dz = -4; dz <= 4; dz++) {
+      for (let dx = -4; dx <= 4; dx++) {
+        const d = Math.sqrt(dx * dx + dz * dz);
+        if (d < 2.3 || d > 3.3 || r() <= 0.2) continue;
+        let id = ANEL;
+        if (elemento === 'veneno' && r() < 0.4) id = BL_MUSGO_TOXICO;
+        decor.push([bx + dx, yPlat + 1, bz + dz, id, 0, 0]);
+      }
+    }
+    // Chão dentro do ninho e em volta (troca a pedra escura da plataforma)
+    for (let dz = -6; dz <= 6; dz++) {
+      for (let dx = -6; dx <= 6; dx++) {
+        const d = Math.sqrt(dx * dx + dz * dz);
+        if (d < 1 || d > 6.2) continue;
+        const sorte = r();
+        if (elemento === 'gelo') {
+          if (sorte < 0.45) decor.push([bx + dx, yPlat, bz + dz, sorte < 0.12 ? B.GELO : BL_NEVE, 0, 0]);
+        } else if (elemento === 'veneno') {
+          if (sorte < 0.22) decor.push([bx + dx, yPlat, bz + dz, BL_MUSGO_TOXICO, 0, 0]);
+        } else if (sorte < 0.06 && d > 3.5) {
+          decor.push([bx + dx, yPlat, bz + dz, B.MINERIO_RAIO ?? B.PEDRA, 0, 0]);
+        }
+      }
+    }
+    // Detalhes de cada elemento
+    if (elemento === 'gelo') {
+      // cristais de gelo no chão do ninho (brilham azul)
+      for (let k = 0; k < 3; k++) {
+        const a = r() * 6.283, d = 1.2 + r() * 0.9;
+        decor.push([bx + Math.round(Math.cos(a) * d), yPlat, bz + Math.round(Math.sin(a) * d), B.MINERIO_GELO ?? B.GELO, 0, 0]);
+      }
+      // montinhos de neve em cima da plataforma
+      for (let k = 0; k < 5; k++) {
+        const a = r() * 6.283, d = 4 + r() * 1.8;
+        decor.push([bx + Math.round(Math.cos(a) * d), yPlat + 1, bz + Math.round(Math.sin(a) * d), BL_NEVE, 0, 0]);
+      }
+    } else if (elemento === 'veneno') {
+      // poças de água escura no chão da plataforma
+      for (let k = 0; k < 3; k++) {
+        const a = r() * 6.283, d = 4 + r() * 1.5;
+        const px = bx + Math.round(Math.cos(a) * d), pz = bz + Math.round(Math.sin(a) * d);
+        decor.push([px, yPlat, pz, B.AGUA, 0, 0]);
+        decor.push([px + 1, yPlat, pz, B.AGUA, 0, 0]);
+      }
+    } else {
+      // "Pedras com raios": 6 pedras em pé na borda, com um cristal de raio na ponta
+      for (let k = 0; k < 6; k++) {
+        const a = fases[1] + k * (Math.PI / 3);
+        const px = bx + Math.round(Math.cos(a) * 5.4), pz = bz + Math.round(Math.sin(a) * 5.4);
+        const alt = 2 + Math.floor(r() * 2);
+        for (let h = 1; h <= alt; h++) decor.push([px, yPlat + h, pz, B.PEDRA, 0, 0]);
+        decor.push([px, yPlat + alt + 1, pz, B.MINERIO_RAIO ?? B.PEDRA, 0, 0]);
+      }
+    }
+    // Costelas (5 de 6: o vão é a entrada); o ninho de raio tem só 3 (as pedras ocupam a borda)
+    const COSTELA = [[6.2, 1], [6.2, 2], [5.8, 3], [5.2, 4], [4.4, 5], [3.6, 5]];
+    const nCostelas = elemento === 'raio' ? 3 : 5;
+    for (let k = 0; k < nCostelas; k++) {
+      const a = fases[2] + (elemento === 'raio' ? k * 2 + 0.5 : k) * (Math.PI / 3);
+      const ca = Math.cos(a), sa = Math.sin(a);
+      for (const [rr, hh] of COSTELA) {
+        decor.push([bx + Math.round(ca * rr), yPlat + hh, bz + Math.round(sa * rr), COSTELA_BL, 0, 0]);
+      }
+    }
+    // Ossos soltos (o de gelo tem pedaços de gelo no lugar)
+    for (let k = 0; k < 2; k++) {
+      const a = r() * 6.283, d = 3.8 + r() * 1.5;
+      const ox = bx + Math.round(Math.cos(a) * d), oz = bz + Math.round(Math.sin(a) * d);
+      const emX = r() < 0.5;
+      for (let i = -1; i <= 1; i++) decor.push([ox + (emX ? i : 0), yPlat + 1, oz + (emX ? 0 : i), COSTELA_BL, 0, 0]);
+    }
+    // Dracônio: como no ninho de fogo (no chão da plataforma e na rocha em volta)
+    for (let k = 0; k < 4; k++) {
+      const a = r() * 6.283, d = 3.6 + r() * 2.4;
+      decor.push([bx + Math.round(Math.cos(a) * d), yPlat, bz + Math.round(Math.sin(a) * d), BL_DRACONIO, 0, 0]);
+    }
+    for (let k = 0; k < 14; k++) {
+      const a = r() * 6.283, d = 2 + r() * (NINHO_RAIO + 4);
+      const y = yPlat - 1 - Math.floor(r() * 9);
+      decor.push([bx + Math.round(Math.cos(a) * d), y, bz + Math.round(Math.sin(a) * d), BL_DRACONIO, 0, 1]);
+    }
+    // Baú de tesouro bem no meio
+    const bau = [bx, yPlat + 1, bz];
+    decor.push([bx, yPlat + 1, bz, B.BAU, Math.floor(r() * 4), 0]);
+    return bau;
   }
 
   /** Covil da Hidra: num lugar baixo e plano da região, longe do ninho */
@@ -1293,6 +1449,21 @@ const MAX_RESERVA = 48; // chunks descarregados guardados para reaproveitar a me
 // Maior raio aceito pelo blocosProximos: a área que fica carregada em volta do jogador
 const RAIO_MAX_PROXIMOS = (CONFIG.DISTANCIA_RENDER + 3) * TAM;
 
+// --- Água entrando nos buracos ---
+// Quem tira um bloco do lado da água (o fundo de um lago, a parede de areia
+// de uma praia) não deve ficar com uma "bolha" de ar: o buraco enche. A água
+// também escorre para baixo e para os lados, mas só um pouquinho (no máximo
+// AGUA_CASCATA blocos a mais por buraco), para não inundar uma caverna
+// inteira nem "fluir para sempre". E nunca acima do nível do mar: dos lados,
+// ela só entra até NIVEL_MAR (ou se a água do lado estiver ABAIXO da
+// superfície de um lago mais alto, como o do covil da hidra).
+const AGUA_CASCATA = 3;       // blocos extras que a água escorre a partir do buraco
+const AGUA_LOTE_MAX = 96;     // num lote (fogo, meteoro...) no máximo isso de água escorrendo para FORA do lote
+// Para onde a água escorre: primeiro para baixo, depois para os 4 lados
+const ESC_X = new Int8Array([0, 1, -1, 0, 0]);
+const ESC_Y = new Int8Array([-1, 0, 0, 0, 0]);
+const ESC_Z = new Int8Array([0, 0, 0, 1, -1]);
+
 /** Está dentro do círculo de raio r (em chunks)? */
 function dentroDoRaio(dx, dz, r) {
   return dx * dx + dz * dz <= (r + 0.5) * (r + 0.5);
@@ -1390,6 +1561,8 @@ export class Mundo {
     this._acerto = { nx: 0, ny: 0, nz: 0, t: 0 }; // rascunho do raycast nos modelos
     this._reserva = [];
     this._totalFaces = 0;
+    // Água que entra no buraco (veja _deveEncher): fila do "escorrer" (x, y, z por posição)
+    this._filaAgua = new Int32Array(3 * (AGUA_CASCATA + 2));
   }
 
   // ----------------------------------------------------------------
@@ -1689,6 +1862,7 @@ export class Mundo {
   /**
    * Áreas especiais com o centro a até `raio` blocos (na horizontal) de
    * `perto` ({ x, z }): [{ tipo: 'ninho' | 'covil', x, y, z, raio, bau: [x, y, z] }].
+   *   O ninho tem também `elemento`: 'fogo' | 'gelo' | 'veneno' | 'raio'.
    *   x, z = centro da área; y = onde os pés ficam (em cima da plataforma do
    *   ninho ou da ilhota do covil); raio = tamanho aproximado; bau = posição
    *   do baú de tesouro.
@@ -1782,17 +1956,31 @@ export class Mundo {
     this._lote++;
     let mudou;
     let anterior = 0, estadoAnterior = 0, original = false;
+    let escorreu = null; // água que escorreu do buraco para os vizinhos (lote extra)
     try {
       const ch = this._garantirDados(x >> BITS, z >> BITS);
       const iLocal = (x & MASCARA) + (z & MASCARA) * TAM + y * AREA;
       anterior = ch.dados[iLocal];
       estadoAnterior = ch.estados[iLocal];
+      // Tirou um bloco do lado da água? O buraco vira água, não ar. Só quem fez
+      // a mudança decide (origem 'local'): a água sai pela rede como um bloco
+      // comum, então todos os computadores ficam iguais sem refazer a conta.
+      let encheu = false;
+      if (id === B.AR && origem === 'local' && anterior !== B.AGUA && anterior !== B.AR && this._deveEncher(x, y, z)) {
+        id = B.AGUA;
+        estado = 0;
+        encheu = true;
+      }
       mudou = anterior !== id || estadoAnterior !== estado;
       if (mudou) {
         // Era o bloco que o gerador criou (ninguém tinha mexido aqui antes)?
         // O baú de tesouro (baus.js) usa: quebrado sem abrir, ainda solta o tesouro.
         original = !this.modificacoes.has(x + ',' + y + ',' + z);
         this._aplicarMudanca(ch, x, y, z, iLocal, id, estado, anterior);
+        if (encheu) {
+          escorreu = [];
+          this._escorrerAgua(x, y, z, AGUA_CASCATA, escorreu);
+        }
       }
     } finally {
       this._lote--;
@@ -1804,6 +1992,13 @@ export class Mundo {
     const evento = { x, y, z, id, estado, anterior, estadoAnterior, origem, original };
     for (let i = 0; i < this.ouvintes.length; i++) {
       try { this.ouvintes[i](evento); } catch (e) { console.error('Erro num ouvinte de bloco:', e); }
+    }
+    // A água que escorreu vai num lote à parte (a rede manda como `blocos`)
+    if (escorreu && escorreu.length > 0) {
+      const ev2 = { lote: true, lista: escorreu, origem };
+      for (let i = 0; i < this.ouvintes.length; i++) {
+        try { this.ouvintes[i](ev2); } catch (e) { console.error('Erro num ouvinte de bloco:', e); }
+      }
     }
     return true;
   }
@@ -1845,6 +2040,8 @@ export class Mundo {
         this._aplicarMudanca(ch, x, y, z, iLocal, id, estado, anterior);
         mudancas.push([x, y, z, id, estado, anterior, estadoAnterior]);
       }
+      // Buracos do lado da água viram água (só quem fez a mudança decide; veja definirBloco)
+      if (origem === 'local' && mudancas.length > 0) this._encherBuracosDoLote(mudancas);
     } finally {
       this._lote--;
     }
@@ -1891,6 +2088,153 @@ export class Mundo {
     if (ddx !== 0) this._pendenteSeTiver(ch.cx + ddx, ch.cz);
     if (ddz !== 0) this._pendenteSeTiver(ch.cx, ch.cz + ddz);
     if (ddx !== 0 && ddz !== 0) this._pendenteSeTiver(ch.cx + ddx, ch.cz + ddz);
+  }
+
+  // ----------------------------------------------------------------
+  // Água entrando nos buracos (veja AGUA_CASCATA)
+  // ----------------------------------------------------------------
+
+  /** Tem água em (x, y, z)? Só olha chunks carregados (fora deles: não). */
+  _aguaEm(x, y, z) {
+    if (y < 0 || y >= ALTURA) return false;
+    const ch = this._chunkEm(x >> BITS, z >> BITS);
+    return !!ch && ch.dados[(x & MASCARA) + (z & MASCARA) * TAM + y * AREA] === B.AGUA;
+  }
+
+  /**
+   * O buraco em (x, y, z) deve encher de água?
+   *   - água EM CIMA: sim (fundo de lago, ilhota do covil...): o buraco está
+   *     sempre abaixo da superfície daquela água;
+   *   - água DO LADO: só até o nível do mar, ou se aquela água tiver mais água
+   *     em cima dela (o buraco está abaixo da superfície do lago dela).
+   * Assim a água nunca sobe acima da superfície do lago nem "vaza" para o ar.
+   */
+  _deveEncher(x, y, z) {
+    if (y < 1 || y >= ALTURA - 1) return false;
+    if (this._aguaEm(x, y + 1, z)) return true;
+    for (let k = 1; k < 5; k++) {
+      const nx = x + ESC_X[k], nz = z + ESC_Z[k];
+      if (!this._aguaEm(nx, y, nz)) continue;
+      if (y <= NIVEL_MAR || this._aguaEm(nx, y + 1, nz)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * A água do buraco (x0, y0, z0) escorre para o ar logo abaixo e dos lados,
+   * em largura (os vizinhos mais perto primeiro), até `max` blocos e nunca
+   * acima do NIVEL_MAR. Para os lados, só onde tem algo embaixo para a água
+   * "deitar" (nada de lâmina de água flutuando no ar de uma caverna).
+   * Grava no mundo e põe cada bloco novo em `saida` no formato do lote
+   * ([x, y, z, id, estado, anterior, estadoAnterior]).
+   * Devolve quantos blocos encheu. (Chame dentro de um _lote.)
+   */
+  _escorrerAgua(x0, y0, z0, max, saida) {
+    if (!(max > 0)) return 0;
+    const fila = this._filaAgua;
+    const cap = fila.length / 3;
+    let ini = 0, fim = 0, n = 0;
+    fila[0] = x0; fila[1] = y0; fila[2] = z0; fim = 1;
+    while (ini < fim && n < max) {
+      const x = fila[ini * 3], y = fila[ini * 3 + 1], z = fila[ini * 3 + 2];
+      ini++;
+      for (let d = 0; d < 5 && n < max; d++) {
+        const nx = x + ESC_X[d], ny = y + ESC_Y[d], nz = z + ESC_Z[d];
+        if (ny < 1 || ny > NIVEL_MAR) continue;
+        const ch = this._chunkEm(nx >> BITS, nz >> BITS);
+        if (!ch) continue;
+        const i = (nx & MASCARA) + (nz & MASCARA) * TAM + ny * AREA;
+        if (ch.dados[i] !== B.AR) continue;
+        if (d > 0 && ch.dados[i - AREA] === B.AR) continue; // para o lado, só com apoio embaixo
+        const estAnt = ch.estados[i];
+        this._aplicarMudanca(ch, nx, ny, nz, i, B.AGUA, 0, B.AR);
+        saida.push([nx, ny, nz, B.AGUA, 0, B.AR, estAnt]);
+        n++;
+        if (fim < cap) {
+          fila[fim * 3] = nx; fila[fim * 3 + 1] = ny; fila[fim * 3 + 2] = nz;
+          fim++;
+        }
+      }
+    }
+    return n;
+  }
+
+  /**
+   * (definirBlocos) Água nos buracos de um lote (fogo, porta, meteoro...):
+   *   1. A água que o lote tirou ABAIXO do nível do mar volta (um meteoro que
+   *      cai num lago abre a cratera, mas o lago entra nela: nada de bolha de ar).
+   *   2. Os blocos do lote que viraram ar do lado da água viram água, um
+   *      puxando o outro (em largura: o buraco que encheu enche o vizinho do
+   *      mesmo lote). Isso fica limitado ao próprio lote.
+   *   3. A partir de cada buraco, a água escorre um pouco para o ar que já
+   *      existia (até AGUA_CASCATA por buraco e AGUA_LOTE_MAX no lote todo).
+   * Mexe na própria lista `mudancas` (o buraco passa a dizer AGUA) e
+   * acrescenta no fim os blocos para onde a água escorreu.
+   */
+  _encherBuracosDoLote(mudancas) {
+    const n = mudancas.length;
+    let lista = null; // entradas do lote que viraram ar (criada só se precisar)
+    let voltou = 0;   // quantas águas voltaram (essas entradas não mudaram nada no fim)
+    for (let k = 0; k < n; k++) {
+      const mu = mudancas[k];
+      if (mu[3] !== B.AR || mu[5] === B.AR) continue;
+      if (mu[5] === B.AGUA) {
+        // 1) água tirada: volta se estiver até o nível do mar (acima, continua ar)
+        if (mu[1] <= NIVEL_MAR && this._encherEntrada(mu)) voltou++;
+        continue;
+      }
+      (lista || (lista = [])).push(mu);
+    }
+    // A água que voltou ficou igual ao que era: tira da lista (não precisa ir pela rede)
+    if (voltou > 0) {
+      let j = 0;
+      for (let k = 0; k < mudancas.length; k++) {
+        const mu = mudancas[k];
+        if (mu[3] === mu[5] && mu[4] === mu[6]) continue;
+        mudancas[j++] = mu;
+      }
+      mudancas.length = j;
+    }
+    if (!lista) return;
+    // 2) Começa pelos buracos que já encostam na água e vai passando para os vizinhos
+    const fila = [];
+    for (let k = 0; k < lista.length; k++) {
+      const mu = lista[k];
+      if (this._deveEncher(mu[0], mu[1], mu[2])) fila.push(mu);
+    }
+    if (fila.length === 0) return; // nada perto da água (o caso comum): pronto
+    const buracos = new Map();      // "x,y,z" → entrada, para achar os vizinhos do mesmo lote
+    for (let k = 0; k < lista.length; k++) buracos.set(lista[k][0] + ',' + lista[k][1] + ',' + lista[k][2], lista[k]);
+    let orcamento = AGUA_LOTE_MAX;
+    while (fila.length > 0) {
+      const mu = fila.pop();
+      if (mu[3] !== B.AR) continue;               // já encheu
+      const x = mu[0], y = mu[1], z = mu[2];
+      if (!this._encherEntrada(mu)) continue;     // (outra entrada pode ter mudado o bloco)
+      for (let d = 0; d < 6; d++) {
+        const v = buracos.get((x + DIR_X[d]) + ',' + (y + DIR_Y[d]) + ',' + (z + DIR_Z[d]));
+        if (v && v[3] === B.AR && this._deveEncher(v[0], v[1], v[2])) fila.push(v);
+      }
+      // 3) escorre um pouco para o ar de fora do lote
+      if (orcamento > 0) orcamento -= this._escorrerAgua(x, y, z, Math.min(AGUA_CASCATA, orcamento), mudancas);
+    }
+    // Um buraco do lote pode ter recebido a água que escorreu de outro: a entrada dele diz AGUA também
+    for (const mu of buracos.values()) {
+      if (mu[3] === B.AR && this._aguaEm(mu[0], mu[1], mu[2])) { mu[3] = B.AGUA; mu[4] = 0; }
+    }
+  }
+
+  /** Põe água no lugar da entrada `mu` do lote (que agora é ar) e corrige a entrada. Devolve true se encheu. */
+  _encherEntrada(mu) {
+    const x = mu[0], y = mu[1], z = mu[2];
+    const ch = this._chunkEm(x >> BITS, z >> BITS);
+    if (!ch) return false;
+    const i = (x & MASCARA) + (z & MASCARA) * TAM + y * AREA;
+    if (ch.dados[i] !== B.AR) return false;
+    this._aplicarMudanca(ch, x, y, z, i, B.AGUA, 0, B.AR);
+    mu[3] = B.AGUA;
+    mu[4] = 0;
+    return true;
   }
 
   /** Registra uma função chamada a cada bloco alterado (ou lote). Devolve uma função que cancela. */

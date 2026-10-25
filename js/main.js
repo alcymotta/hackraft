@@ -197,6 +197,8 @@ async function iniciar() {
   let impedirSalvar = false; // ligado no "Novo mundo", senão o mundo velho voltaria
   let ultimoAvisoSalvar = -Infinity; // quando avisamos do save cheio pela última vez
   let aparenciaBase = null; // cores da skin base deste navegador (definidas ao entrar no jogo)
+  let modoMundo = 'sobrevivencia'; // 'sobrevivencia' | 'criativo' | 'hardcore' (do save ou do anfitrião)
+  let fimDeJogoMostrado = false;   // Hardcore: a tela "Fim de jogo" já apareceu
 
   // ----- Aparência (cores da skin + equipamento) -----
 
@@ -255,7 +257,8 @@ async function iniciar() {
   function salvar() {
     if (!podeSalvar()) return false;
     const ok = salvarJogo({
-      versao: 9,
+      versao: 10,
+      modoMundo, // 'sobrevivencia' | 'criativo' | 'hardcore'
       // Fase 11: montarias e pets domados, e os ovos de dragão chocando
       montarias: jogo.mobs && typeof jogo.mobs.exportarMontarias === 'function' ? jogo.mobs.exportarMontarias() : [],
       ovos: jogo.mobs && typeof jogo.mobs.exportarOvos === 'function' ? jogo.mobs.exportarOvos() : [],
@@ -519,9 +522,49 @@ async function iniciar() {
       };
     }
 
+    // ----- Tipo de mundo (Sobrevivência, Criativo ou Hardcore) -----
+    ui.definirModoMundo(modoMundo);
+    if (modoMundo === 'criativo') {
+      // Mundo Criativo: todos voam, têm blocos infinitos e o /criativo não desliga
+      jogador.criativoTravado = true;
+      jogador.definirCriativo(true);
+    }
+
+    /** Hardcore: todos caíram. O anfitrião apaga o mundo; todos veem "Fim de jogo". */
+    const fimDeJogo = () => {
+      if (fimDeJogoMostrado) return;
+      fimDeJogoMostrado = true;
+      if (rede.modo !== 'cliente') {
+        impedirSalvar = true; // nada de salvar de novo (nem ao fechar a página)
+        apagarJogo();
+        rede.enviarFimDeJogo();
+      }
+      ui.mostrarFimDeJogo('Todos caíram. O mundo Hardcore foi apagado.', () => {
+        impedirSalvar = true;
+        if (rede) rede.encerrar();
+        location.reload();
+      });
+    };
+    rede.aoFimDeJogo(fimDeJogo);
+
+    // Fui reanimado por outro jogador: volto no lugar onde caí, com metade da vida
+    rede.aoReanimado((por) => {
+      if (!jogador.morto || !jogador.caido) return;
+      jogador.reviver();
+      ui.esconderCaido(true);
+      ui.mostrarMensagem((por || 'Alguém') + ' te reanimou!');
+    });
+
     // ----- Vida: ao morrer, mostra a tela e volta para casa com a vida cheia -----
     jogador.atualizarHud(); // corações e barra de XP
     jogador.aoMorrer(() => {
+      // Hardcore: não renasce. Fica caído até alguém reanimar (ou fim de jogo se todos caírem)
+      if (modoMundo === 'hardcore') {
+        jogador.caido = true;
+        if (rede.modo !== 'cliente' && rede.todosCaidos()) fimDeJogo();
+        else ui.mostrarCaido({ aoSair: sairParaMenu });
+        return;
+      }
       ui.mostrarMorte({
         aoRenascer: () => {
           const [cx, cy, cz] = obterCasa();
@@ -753,10 +796,125 @@ async function iniciar() {
       ].join('\n');
     }
 
+    // ----- Hardcore: reanimar, corpos caídos e fim de jogo -----
+    const T_REANIMAR = CONFIG.REANIMAR_TEMPO_S;
+    const reanim = { id: null, tempo: 0, esperarSoltar: false };
+    let tempoFim = 0;
+    let corpoLocalDeitado = false;
+
+    /** O corpo caído mais perto de mim (até REANIMAR_DIST blocos), ou null */
+    const corpoPerto = () => {
+      let melhor = null;
+      let melhorD = CONFIG.REANIMAR_DIST * CONFIG.REANIMAR_DIST;
+      const p = jogador.posicao;
+      for (const r of remotos.remotos.values()) {
+        if (!r.recebeu || !rede.estaMorto(r.id)) continue;
+        const q = r.personagem.grupo.position;
+        const dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
+        const d = dx * dx + dy * dy + dz * dz;
+        if (d <= melhorD) { melhorD = d; melhor = r; }
+      }
+      return melhor;
+    };
+
+    /** Segurar o botão direito (mão vazia) perto de um corpo por REANIMAR_TEMPO_S segundos */
+    const atualizarReanimar = (dt) => {
+      let corpo = null;
+      const segurando = jogador.botoes[2];
+      if (!segurando) reanim.esperarSoltar = false;
+      if (modoMundo === 'hardcore' && jogador.ativo && segurando && !reanim.esperarSoltar &&
+          !jogador.montaria && !inventario.itemSelecionado()) {
+        corpo = corpoPerto();
+      }
+      if (!corpo) {
+        if (reanim.id !== null) { reanim.id = null; reanim.tempo = 0; ui.mostrarReanimando(null); }
+        jogador.bloqueioDireito = false;
+        return;
+      }
+      if (reanim.id !== corpo.id) { reanim.id = corpo.id; reanim.tempo = 0; }
+      reanim.tempo += dt;
+      jogador.bloqueioDireito = true; // o botão direito só serve para reanimar agora
+      ui.mostrarReanimando(reanim.tempo / T_REANIMAR, corpo.apelido);
+      if (reanim.tempo >= T_REANIMAR) {
+        if (rede.reanimar(corpo.apelido)) ui.mostrarMensagem('Você reanimou ' + corpo.apelido + '!');
+        reanim.id = null; reanim.tempo = 0;
+        reanim.esperarSoltar = true; // só reanima de novo se soltar e apertar outra vez
+        ui.mostrarReanimando(null);
+        jogador.bloqueioDireito = false;
+      }
+    };
+
+    /** Antes de mover os bonecos remotos: tira o "levantinho" que demos aos corpos deitados */
+    const antesDosRemotos = () => {
+      for (const r of remotos.remotos.values()) {
+        if (r.dyCaido) { r.personagem.grupo.position.y -= r.dyCaido; r.dyCaido = 0; }
+      }
+    };
+
+    /** Depois: deita quem está caído (e escreve "(caído)" no nome) e levanta quem foi reanimado */
+    const depoisDosRemotos = () => {
+      for (const r of remotos.remotos.values()) {
+        if (!r.recebeu) continue;
+        const caido = rede.estaMorto(r.id);
+        const g = r.personagem.grupo;
+        if (caido) {
+          g.rotation.order = 'YXZ';        // primeiro deita (x), depois gira para onde olhava (y)
+          g.rotation.x = Math.PI / 2;      // de costas no chão, com a cabeça para trás
+          g.position.y += 0.25; r.dyCaido = 0.25; // a espessura do corpo não afunda no chão
+          r.etiqueta.sprite.position.y = g.position.y + 0.9;
+        } else if (g.rotation.x !== 0) {
+          g.rotation.x = 0;
+        }
+        if (!!r.etiquetaCaido !== caido && typeof remotos._criarEtiqueta === 'function') {
+          // Troca a etiqueta do nome: "<apelido> (caído)"
+          r.etiquetaCaido = caido;
+          const nova = remotos._criarEtiqueta(caido ? r.apelido + ' (caído)' : r.apelido);
+          nova.sprite.visible = true;
+          scene.add(nova.sprite);
+          scene.remove(r.etiqueta.sprite);
+          r.etiqueta.sprite.material.map.dispose();
+          r.etiqueta.sprite.material.dispose();
+          r.etiqueta = nova;
+          if (caido) nova.sprite.position.y = g.position.y + 0.9;
+        }
+      }
+    };
+
+    /** Eu caído (Hardcore): meu corpo deitado e a câmera olhando de cima */
+    const corpoECameraLocal = (dt) => {
+      const g = jogador.personagem.grupo;
+      if (jogador.caido) {
+        const p = jogador.posicao;
+        // A câmera sobe até 4,5 blocos, parando antes de um teto
+        let alt = 1.5;
+        while (alt < 4.5 && !SOLIDO[mundo.obterBloco(p.x, p.y + alt + 0.5, p.z)]) alt += 0.5;
+        camera.position.set(p.x, p.y + alt, p.z);
+        camera.rotation.set(-Math.PI / 2, jogador.yaw, 0); // olhando para baixo
+        g.visible = true;
+        g.rotation.order = 'YXZ';
+        g.rotation.set(Math.PI / 2, jogador.yaw, 0);
+        g.position.set(p.x, p.y + 0.25, p.z);
+        corpoLocalDeitado = true;
+      } else if (corpoLocalDeitado) {
+        g.rotation.x = 0;
+        corpoLocalDeitado = false;
+      }
+      // Fim de jogo: o anfitrião (ou quem joga sozinho) confere de vez em quando
+      if (modoMundo === 'hardcore' && jogador.morto && rede.modo !== 'cliente' && !fimDeJogoMostrado) {
+        tempoFim += dt;
+        if (tempoFim >= 0.25) {
+          tempoFim = 0;
+          if (rede.todosCaidos()) fimDeJogo();
+        }
+      }
+    };
+
     renderer.setAnimationLoop(() => {
       const dt = Math.min(relogio.getDelta(), 0.05);
 
+      atualizarReanimar(dt);
       jogador.atualizar(dt);
+      corpoECameraLocal(dt);
       poderes.atualizar(dt);
       meteoro.atualizar(dt);
       if (mobs) mobs.atualizar(dt);
@@ -765,7 +923,9 @@ async function iniciar() {
       if (typeof mundo.blocosProximos === 'function') { fogoDasTochas(dt); fogoDasForjas(dt); fogoDasFogueiras(dt); }
       itensChao.atualizar(dt);
       rede.atualizar(dt);
+      antesDosRemotos();
       remotos.atualizar(dt);
+      depoisDosRemotos();
       // Fase 11: cada cavaleiro (eu na 3ª pessoa e os outros) sentado no assento da montaria
       if (mobs) mobs.posicionarCavaleiros(remotos, jogador.personagem);
       if (typeof mundo.blocosProximos === 'function') ovosChocando(dt);
@@ -807,7 +967,7 @@ async function iniciar() {
   }
 
   // ----- "Criar sala": anfitrião (ou sozinho, sem internet) -----
-  async function aoCriarSala(apelido) {
+  async function aoCriarSala(apelido, modoEscolhido) {
     if (montando || jogo) return;
     montando = true;
     try {
@@ -820,7 +980,11 @@ async function iniciar() {
         console.warn('Hackraft: multiplayer indisponível, jogando sozinho.', erro);
       }
 
-      const estado = carregarJogo(); // versão 1 a 4 (ou null)
+      const estado = carregarJogo(); // versão 1 a 10 (ou null)
+      // Tipo do mundo: o do save (mundo antigo = sobrevivência) ou o escolhido na tela inicial
+      modoMundo = estado ? estado.modoMundo
+        : (['sobrevivencia', 'criativo', 'hardcore'].includes(modoEscolhido) ? modoEscolhido : 'sobrevivencia');
+      rede.modoMundo = modoMundo; // vai no bemvindo para quem entrar
       const semente = estado && estado.semente !== undefined
         ? estado.semente
         : Math.floor(Math.random() * 2147483647);
@@ -893,6 +1057,7 @@ async function iniciar() {
 
     rede = novaRede;
     try {
+      modoMundo = dados.modoMundo || 'sobrevivencia'; // o tipo de mundo é o do anfitrião
       await montarJogo({
         apelido,
         semente: dados.semente,
@@ -948,7 +1113,12 @@ async function iniciar() {
 
   // ----- Pronto: mostra a tela inicial -----
   ui.esconderCarregando();
-  ui.mostrarTelaInicial({ aoCriarSala, aoEntrar, aoNovoMundo: novoMundo, aoSair: sairParaMenu });
+  // Se já existe um mundo salvo, a tela inicial mostra o tipo dele (para outro tipo: Novo mundo)
+  const salvoInicial = carregarJogo();
+  ui.mostrarTelaInicial({
+    aoCriarSala, aoEntrar, aoNovoMundo: novoMundo, aoSair: sairParaMenu,
+    modoSalvo: salvoInicial ? salvoInicial.modoMundo : null,
+  });
 }
 
 iniciar().catch(mostrarErro);
