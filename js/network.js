@@ -209,6 +209,30 @@
 //   e os itens com melhoria (+1 a +5, ex.: 'espada_ferro+2') aceitos em tudo:
 //   quem confere os itens agora é o obterItem (items.js), e não o ITENS.has.
 //
+// PROTOCOLO VERSÃO 8 (Fase 11, montarias e pet):
+//   Cliente → anfitrião
+//     domar           { id, item }   botão direito com o item de domar (o item já saiu
+//                     do inventário; se o anfitrião recusar, ele volta com `ganhou`)
+//     montar          { id }         montei na minha montaria (o anfitrião confirma ou
+//                     desfaz pelo `donoMob`). Montado, a minha `pos` é a da montaria.
+//     desmontar       { }
+//     equiparMontaria { id, item }   'sela' ou 'armadura_montaria_*' (o que já estava
+//                     volta com `ganhou`)
+//     apito           { }            chama as minhas montarias e o pet
+//     sentar          { id }         Shift + botão direito no meu cachorro
+//     (no máximo 8 pedidos destes por segundo por jogador)
+//   Anfitrião → clientes
+//     donoMob     { id, dono, sela, arm, mont, sent, novo }   (para todos)
+//                 dono = apelido (ou null), arm = 'ferro' | 'ouro' | 'diamante' | null,
+//                 mont = id de quem está montado (ou null), sent = o pet está sentado,
+//                 novo = acabou de ser domado (corações)
+//     domarEstado { id, estado, conf, motivo, mob }   (só para quem está domando)
+//                 estado = 'comecou' | 'progresso' | 'domado' | 'falhou' | 'recusado'
+//     avisoMob    { texto }   (só para um jogador: "Seu cavalo desmaiou!")
+//   O `mobNovo` ganhou `extra` = { v (pelagem), dono, sela, arm, mont, sent } (ou
+//   null) e cada mob do `bemvindo` ganhou esse mesmo `extra` no 8º lugar.
+//   Os flags do `mobs` ganharam: 17 domado, 18 montado, 19 sentado, 20 desmaiado.
+//
 // LUA VERMELHA (Fase 8): o anfitrião (ou quem joga sozinho) sorteia ao
 //   anoitecer (1 em 8, CHANCE_LUA_VERMELHA) e manda `luaVermelha`. Todos
 //   chamam ceu.definirLuaVermelha e mostram o aviso no chat. Para forçar
@@ -268,7 +292,7 @@ import { Equipamento } from './equipamento.js';
 import { quantoCabe } from './itens_chao.js';
 
 const PREFIXO_ID = 'hackraft-';
-const VERSAO_PROTOCOLO = 7;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5, 5 = Fase 6, 6 = Fase 7, 7 = Fase 8)
+const VERSAO_PROTOCOLO = 8;          // mude quando o formato das mensagens mudar (2 = Fase 3, 3 = Fase 4, 4 = Fase 5, 5 = Fase 6, 6 = Fase 7, 7 = Fase 8, 8 = Fase 11)
 const MAX_QTD_ITEM = 64;             // maior pilha aceita numa mensagem de item
 const VEL_MAX_ITEM = 20;             // maior velocidade aceita para um item solto
 const DIST_SOLTAR = 8;               // o cliente só solta itens até 8 blocos de onde está
@@ -745,12 +769,33 @@ function lerEstadoMobs(dados) {
 }
 
 /** Mob novo (mensagem mobNovo ou item da lista do bemvindo) conferido, ou null */
-function lerMobNovo(id, mob, x, y, z, yaw, vida) {
+function lerMobNovo(id, mob, x, y, z, yaw, vida, extra = null) {
   if (!idMobValido(id) || !nomeMobValido(mob) || !posicaoValida(x, y, z)) return null;
   return {
     id, mob, x, y, z,
     yaw: ehNumero(yaw) ? yaw : 0,
     vida: ehNumero(vida) ? Math.min(1, Math.max(0, vida)) : 1,
+    extra: lerExtraMob(extra),
+  };
+}
+
+const MATERIAIS_MONTARIA = new Set(['ferro', 'ouro', 'diamante']);
+const PEDIDOS_MONTARIA_POR_SEGUNDO = 8;
+
+/**
+ * (Fase 11) Dono, sela, armadura, cavaleiro e pelagem de um mob, conferidos:
+ * { v, dono, sela, arm, mont, sent, novo } ou null.
+ */
+function lerExtraMob(e) {
+  if (!e || typeof e !== 'object') return null;
+  return {
+    v: Number.isInteger(e.v) && e.v >= 0 && e.v < 16 ? e.v : 0,
+    dono: typeof e.dono === 'string' && e.dono.length >= 1 && e.dono.length <= 40 ? e.dono : null,
+    sela: e.sela === true,
+    arm: typeof e.arm === 'string' && MATERIAIS_MONTARIA.has(e.arm) ? e.arm : null,
+    mont: typeof e.mont === 'string' && e.mont.length >= 1 && e.mont.length <= 100 ? e.mont : null,
+    sent: e.sent === true,
+    novo: e.novo === true,
   };
 }
 
@@ -944,6 +989,9 @@ export class Rede {
     this.luaVermelha = false;         // está acontecendo agora?
     this._eraNoite = null;            // (anfitrião/sozinho) noite no quadro anterior: para perceber o anoitecer
     this._luaPendente = null;         // (cliente) chegou antes de o céu existir
+
+    // --- Montarias (Fase 11) ---
+    this.autorBloco = null;           // (anfitrião) apelido de quem mandou o bloco que está sendo aplicado agora
 
     this._cancelarOuvinteBloco = null;
     this._aoFecharPagina = null;
@@ -1173,6 +1221,8 @@ export class Rede {
       amN: 0,
       apIni: 0,               // limite de acertos de poder `atacarMob` (Fase 8)
       apN: 0,
+      mtIni: 0,               // limite de pedidos de montaria (Fase 11)
+      mtN: 0,
     };
     this.clientes.set(cli.id, cli);
     conn.on('data', (msg) => this._dadosDoCliente(cli, msg));
@@ -1247,6 +1297,14 @@ export class Rede {
           return;
         case 'atacarMob':
           if (cli.pronto) this._atacarMobDoCliente(cli, msg);
+          return;
+        case 'domar':
+        case 'montar':
+        case 'desmontar':
+        case 'equiparMontaria':
+        case 'apito':
+        case 'sentar':
+          if (cli.pronto) this._montariaDoCliente(cli, msg);
           return;
         case 'tchau':
           this._clienteSaiu(cli);
@@ -1583,7 +1641,10 @@ export class Rede {
     const x = msg.x, y = msg.y, z = msg.z, id = msg.id;
     const e = lerEstadoBloco(msg.e);
     if (e < 0 || !blocoValido(x, y, z, id)) return;
-    const atual = this._aplicarBlocoDaRede(x, y, z, id, e); // [id, estado] que ficou
+    // (Fase 11) o Mobs lê `autorBloco` para saber de quem é um ovo de dragão colocado
+    this.autorBloco = cli.apelido;
+    let atual; // [id, estado] que ficou
+    try { atual = this._aplicarBlocoDaRede(x, y, z, id, e); } finally { this.autorBloco = null; }
     // Manda para TODOS, inclusive para quem mudou (é a confirmação dele)
     this._avisarTodos({ tipo: 'bloco', x, y, z, id: atual[0], e: atual[1], de: cli.id });
   }
@@ -1592,7 +1653,9 @@ export class Rede {
   _blocosDoCliente(cli, msg) {
     const lista = lerListaBlocos(msg.lista);
     if (!lista) return;
-    const final = this._aplicarBlocosDaRede(lista);
+    this.autorBloco = cli.apelido;
+    let final;
+    try { final = this._aplicarBlocosDaRede(lista); } finally { this.autorBloco = null; }
     this._avisarTodos({ tipo: 'blocos', lista: final, de: cli.id });
   }
 
@@ -1661,6 +1724,9 @@ export class Rede {
     if (this.clientes.get(cli.id) !== cli) return; // já tratado
     this.clientes.delete(cli.id);
     if (!cli.pronto) return;
+    if (this.mobs && typeof this.mobs.jogadorSaiu === 'function') {
+      try { this.mobs.jogadorSaiu(cli.id); } catch (e) { console.warn('Hackraft: montarias de quem saiu', e); }
+    }
     this._guardarPosicao(cli);
     const aviso = { tipo: 'saiu', id: cli.id };
     for (const c of this.clientes.values()) {
@@ -1843,6 +1909,14 @@ export class Rede {
         case 'projetilMob': this._projetilDoAnfitriao(msg); return;
         case 'projetilFim': this._projetilFimDoAnfitriao(msg); return;
         case 'luaVermelha': this._luaDoAnfitriao(msg); return;
+        case 'donoMob': this._donoMobDoAnfitriao(msg); return;
+        case 'domarEstado': this._domarEstadoDoAnfitriao(msg); return;
+        case 'avisoMob':
+          if (this.ligado && this.mobs && typeof this.mobs.receberAvisoMob === 'function') {
+            const t = textoCurto(msg.texto, 160);
+            if (t) this.mobs.receberAvisoMob(t);
+          }
+          return;
         case 'xp':
           if (this.ligado && this.mobs && Number.isInteger(msg.qtd) && msg.qtd > 0 && msg.qtd <= XP_MAX) {
             this.mobs.receberXp(msg.qtd);
@@ -1909,7 +1983,7 @@ export class Rede {
     if (Array.isArray(msg.mobs)) {
       for (const d of msg.mobs.slice(0, MAX_MOBS_REDE)) {
         if (!Array.isArray(d) || d.length < 5) continue;
-        const mob = lerMobNovo(d[0], d[1], d[2], d[3], d[4], d[5], d[6]);
+        const mob = lerMobNovo(d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
         if (mob) this._mobsPendentes.set(mob.id, mob);
       }
     }
@@ -2591,10 +2665,12 @@ export class Rede {
     msg.dados = null;
   }
 
-  /** (Anfitrião) Nasceu um mob */
-  enviarMobNovo(id, mob, x, y, z, yaw, vida = 1) {
+  /** (Anfitrião) Nasceu um mob. `extra` (Fase 11): { v, dono, sela, arm, mont, sent } ou null */
+  enviarMobNovo(id, mob, x, y, z, yaw, vida = 1, extra = null) {
     if (this.modo !== 'anfitriao' || this.encerrado) return;
-    this._avisarTodos({ tipo: 'mobNovo', id, mob, x, y, z, yaw, vida });
+    const msg = { tipo: 'mobNovo', id, mob, x, y, z, yaw, vida };
+    if (extra) msg.extra = extra;
+    this._avisarTodos(msg);
   }
 
   /** (Anfitrião) O mob saiu do jogo (morreu = toca a animação de morte) */
@@ -2655,6 +2731,142 @@ export class Rede {
     }
     const j = this.jogadores.get(id);
     return !!(j && j.estado && j.estado.morto);
+  }
+
+  // ------------------------------------------------------------------
+  // Montarias e pet (Fase 11)
+  // ------------------------------------------------------------------
+
+  /**
+   * (Anfitrião) A última posição que o jogador `id` mandou, do jeito que chegou
+   * ({ x, y, z, yaw, pitch, noAr, ... }), ou null. A montaria de quem está
+   * montado segue esta posição (o boneco na tela é suavizado e sobe para o assento).
+   */
+  estadoJogador(id) {
+    if (this.modo === 'anfitriao') {
+      const c = this.clientes.get(id);
+      return c && c.pronto && c.temEstado ? c.estado : null;
+    }
+    const j = this.jogadores.get(id);
+    return j && j.temEstado ? j.estado : null;
+  }
+
+  /** (Anfitrião) Casa de um jogador pelo apelido ([x, y, z]) ou null (para onde volta a montaria desmaiada) */
+  casaDe(apelido) {
+    if (apelido === this.apelido) return this.casa ? this.casa.slice() : null;
+    const d = this.dadosJogadores.get(apelido);
+    return d && d.casa ? d.casa.slice() : null;
+  }
+
+  /** (Anfitrião ou sozinho) Dá um item a um jogador: eu mesmo, ou um cliente (mensagem `ganhou`) */
+  darItem(idJogador, item, qtd) {
+    if (!itemValido(item) || !Number.isInteger(qtd) || qtd < 1 || this.modo === 'cliente') return false;
+    if (idJogador === this._idLocal()) { this._receberItem(item, qtd); return true; }
+    const c = this.clientes.get(idJogador);
+    if (!c || !c.pronto) return false;
+    for (let resto = qtd; resto > 0; resto -= MAX_QTD_ITEM) {
+      this._enviar(c.conn, { tipo: 'ganhou', item, qtd: Math.min(resto, MAX_QTD_ITEM) });
+    }
+    return true;
+  }
+
+  /** (Anfitrião) Dono, sela, armadura, cavaleiro e "sentado" de um mob mudaram: avisa todos */
+  enviarDonoMob(id, d) {
+    if (this.modo !== 'anfitriao' || this.encerrado || !this.temClientes) return;
+    this._avisarTodos({
+      tipo: 'donoMob', id, dono: d.dono || null, sela: !!d.sela, arm: d.arm || null,
+      mont: d.mont || null, sent: !!d.sent, novo: !!d.novo,
+    });
+  }
+
+  /** (Anfitrião) Como vai a doma: só para quem está domando */
+  enviarDomarEstado(idJogador, d) {
+    if (this.modo !== 'anfitriao' || this.encerrado) return;
+    const c = this.clientes.get(idJogador);
+    if (!c || !c.pronto) return;
+    this._enviar(c.conn, { tipo: 'domarEstado', id: d.id, estado: d.estado, conf: d.conf, motivo: d.motivo || '', mob: d.mob || '' });
+  }
+
+  /** (Anfitrião) Aviso só para um jogador ("Seu cavalo desmaiou!") */
+  enviarAvisoMob(idJogador, texto) {
+    if (this.modo !== 'anfitriao' || this.encerrado) return;
+    const c = this.clientes.get(idJogador);
+    if (c && c.pronto) this._enviar(c.conn, { tipo: 'avisoMob', texto: String(texto).slice(0, 160) });
+  }
+
+  // (Cliente) pedidos ao anfitrião
+  enviarDomar(id, item) { return this._pedidoMontaria({ tipo: 'domar', id, item }); }
+  enviarMontar(id) { return this._pedidoMontaria({ tipo: 'montar', id }); }
+  enviarDesmontar() { return this._pedidoMontaria({ tipo: 'desmontar' }); }
+  enviarEquiparMontaria(id, item) { return this._pedidoMontaria({ tipo: 'equiparMontaria', id, item }); }
+  enviarApito() { return this._pedidoMontaria({ tipo: 'apito' }); }
+  enviarSentar(id) { return this._pedidoMontaria({ tipo: 'sentar', id }); }
+
+  _pedidoMontaria(msg) {
+    if (this.modo !== 'cliente' || this._caiu || this.encerrado) return false;
+    this._enviar(this.conexaoAnfitriao, msg);
+    if (msg.tipo === 'domar' || msg.tipo === 'equiparMontaria') this._estadoLogo = true; // o inventário mudou
+    return true;
+  }
+
+  /** (Anfitrião) Pedido de montaria de um cliente: confere e entrega ao Mobs */
+  _montariaDoCliente(cli, m) {
+    const mobs = this.mobs;
+    if (!mobs || !this._efeitoPermitido(cli, 'mtIni', 'mtN', PEDIDOS_MONTARIA_POR_SEGUNDO)) {
+      // ignorado: se era um item, ele volta (o cliente já tinha tirado do inventário)
+      if ((m.tipo === 'domar' || m.tipo === 'equiparMontaria') && itemValido(m.item)) this.darItem(cli.id, m.item, 1);
+      return;
+    }
+    try {
+      switch (m.tipo) {
+        case 'domar':
+          if (!idMobValido(m.id) || !itemValido(m.item)) return;
+          mobs.pedidoDomar(cli.id, cli.apelido, m.id, m.item);
+          return;
+        case 'montar':
+          if (idMobValido(m.id)) mobs.pedidoMontar(cli.id, cli.apelido, m.id);
+          return;
+        case 'desmontar':
+          mobs.pedidoDesmontar(cli.id);
+          return;
+        case 'equiparMontaria':
+          if (!idMobValido(m.id) || !itemValido(m.item)) return;
+          if (m.item !== 'sela' && !/^armadura_montaria_(ferro|ouro|diamante)$/.test(m.item)) { this.darItem(cli.id, m.item, 1); return; }
+          mobs.pedidoEquipar(cli.id, cli.apelido, m.id, m.item);
+          return;
+        case 'apito':
+          mobs.pedidoApito(cli.id, cli.apelido);
+          return;
+        case 'sentar':
+          if (idMobValido(m.id)) mobs.pedidoSentar(cli.id, cli.apelido, m.id);
+          return;
+        default:
+      }
+    } catch (e) {
+      console.warn('Hackraft: pedido de montaria ignorado', e);
+    }
+  }
+
+  /** (Cliente) Dono/sela/armadura/cavaleiro de um mob */
+  _donoMobDoAnfitriao(msg) {
+    if (!this.ligado || !this.mobs || typeof this.mobs.receberDono !== 'function' || !idMobValido(msg.id)) return;
+    const d = lerExtraMob(msg);
+    if (!d) return;
+    try { this.mobs.receberDono(msg.id, d); } catch (e) { console.warn('Hackraft: donoMob ignorado', e); }
+  }
+
+  /** (Cliente) Como vai a minha doma */
+  _domarEstadoDoAnfitriao(msg) {
+    if (!this.ligado || !this.mobs || typeof this.mobs.receberEstadoDoma !== 'function') return;
+    const estados = ['comecou', 'progresso', 'domado', 'falhou', 'recusado'];
+    if (!estados.includes(msg.estado)) return;
+    this.mobs.receberEstadoDoma({
+      id: idMobValido(msg.id) ? msg.id : 0,
+      estado: msg.estado,
+      conf: ehNumero(msg.conf) ? Math.max(0, Math.min(1, msg.conf)) : 0,
+      motivo: textoCurto(msg.motivo, 160),
+      mob: nomeMobValido(msg.mob) ? msg.mob : '',
+    });
   }
 
   // ------------------------------------------------------------------
@@ -2748,7 +2960,7 @@ export class Rede {
   /** (Cliente) Entrega um mob novo ao Mobs (erros do Mobs não derrubam a rede) */
   _entregarMobNovo(d) {
     try {
-      this.mobs.receberNovo(d.id, d.mob, d.x, d.y, d.z, d.yaw, d.vida);
+      this.mobs.receberNovo(d.id, d.mob, d.x, d.y, d.z, d.yaw, d.vida, d.extra);
     } catch (e) {
       console.warn('Hackraft: mob novo ignorado', e);
     }
@@ -2762,7 +2974,7 @@ export class Rede {
   }
 
   _mobNovoDoAnfitriao(msg) {
-    const d = lerMobNovo(msg.id, msg.mob, msg.x, msg.y, msg.z, msg.yaw, msg.vida);
+    const d = lerMobNovo(msg.id, msg.mob, msg.x, msg.y, msg.z, msg.yaw, msg.vida, msg.extra);
     if (!d) return;
     if (!this.mobs) {
       if (this._mobsPendentes.size < MAX_MOBS_REDE * 4) this._mobsPendentes.set(d.id, d);

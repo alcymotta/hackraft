@@ -16,6 +16,14 @@
 // Fases 8 a 10: XP e níveis (mais vida e força), efeitos (veneno, lento e
 // fogo), a forja (botão direito no bloco FORJA) e os bônus das roupas
 // (pulo, queda segura, nado e duração dos poderes).
+//
+// Fase 11 (montarias): R monta na sua montaria com sela (até 3 blocos) e
+// desce. Montado, QUEM ANDA É O JOGADOR, mas com a caixa, a velocidade e o
+// pulo da montaria (os Mobs fazem o bicho acompanhar). A aranha sobe paredes,
+// o filhote de dragão voa segurando Espaço (10 s, depois descansa 20 s), a
+// câmera fica mais alta e não há dano de queda. O botão direito num bicho
+// doma, dá osso, põe sela/armadura, monta e manda o pet sentar (com Shift);
+// com o apito na mão, chama as montarias.
 // =====================================================================
 
 import * as THREE from 'three';
@@ -140,6 +148,16 @@ export class Jogador {
     this.distPasso = 0;
     this.submerso = false;
     this.velHorizontal = 0;
+
+    // Montaria (Fase 11): { id, tipo, p (números da montaria), nome } enquanto montado
+    this.montaria = null;
+    this._meia = METADE_LARGURA;       // meia largura da caixa de colisão (montado: a da montaria)
+    this._alt = ALTURA;                // altura da caixa (montado: montaria + cavaleiro)
+    this._bateuParede = false;         // bateu numa parede andando (a aranha sobe; os outros pulam o degrau)
+    this._vooEnergia = CONFIG.FILHOTE_VOO_S; // segundos de voo que o filhote ainda tem
+    this._vooRecarga = 0;              // descansando: segundos até poder voar de novo
+    this._voandoFilhote = false;
+    this._tUiMontaria = 0;
 
     // Objetos reaproveitados (evita criar lixo a cada quadro)
     this._olhos = new THREE.Vector3();
@@ -426,6 +444,7 @@ export class Jogador {
   }
 
   _morrer() {
+    if (this.montaria) this.desmontar(); // morreu montado: cai da montaria
     this.morto = true;
     this.vida = 0;
     this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
@@ -505,6 +524,8 @@ export class Jogador {
         return;
       }
       if (this.morto) return;   // morto: não registra teclas
+      // R: monta na sua montaria (com sela, até 3 blocos) ou desce (Fase 11)
+      if (e.code === 'KeyR' && !e.repeat && this.ativo) this._alternarMontaria();
       this.teclas[e.code] = true;
       // Evita que o espaço "aperte" algum botão da página
       if (e.code === 'Space' && this.ativo) e.preventDefault();
@@ -569,16 +590,18 @@ export class Jogador {
    * face do bloqueio mais próxima, ou NaN se não bate em nada.
    */
   _bloqueio(px, py, pz, eixo, d) {
-    const x0 = Math.floor(px - METADE_LARGURA + EPS);
-    const x1 = Math.floor(px + METADE_LARGURA - EPS);
+    // A caixa é a do jogador, ou a da montaria quando ele está montado (Fase 11)
+    const META = this._meia, ALT = this._alt;
+    const x0 = Math.floor(px - META + EPS);
+    const x1 = Math.floor(px + META - EPS);
     const y0 = Math.floor(py + EPS);
-    const y1 = Math.floor(py + ALTURA - EPS);
-    const z0 = Math.floor(pz - METADE_LARGURA + EPS);
-    const z1 = Math.floor(pz + METADE_LARGURA - EPS);
+    const y1 = Math.floor(py + ALT - EPS);
+    const z0 = Math.floor(pz - META + EPS);
+    const z1 = Math.floor(pz + META - EPS);
     const mundo = this.mundo;
-    const jx0 = px - METADE_LARGURA, jx1 = px + METADE_LARGURA;
-    const jy0 = py, jy1 = py + ALTURA;
-    const jz0 = pz - METADE_LARGURA, jz1 = pz + METADE_LARGURA;
+    const jx0 = px - META, jx1 = px + META;
+    const jy0 = py, jy1 = py + ALT;
+    const jz0 = pz - META, jz1 = pz + META;
     let melhor = NaN;
     for (let y = y0; y <= y1; y++) {
       for (let z = z0; z <= z1; z++) {
@@ -596,9 +619,9 @@ export class Jogador {
           if (!eixo) return true;
           // Posição do jogador encostado na face
           let cand;
-          if (eixo === 'x') cand = d > 0 ? x + c[0] - METADE_LARGURA : x + c[3] + METADE_LARGURA;
-          else if (eixo === 'z') cand = d > 0 ? z + c[2] - METADE_LARGURA : z + c[5] + METADE_LARGURA;
-          else cand = d > 0 ? y + c[1] - ALTURA : y + c[4];
+          if (eixo === 'x') cand = d > 0 ? x + c[0] - META : x + c[3] + META;
+          else if (eixo === 'z') cand = d > 0 ? z + c[2] - META : z + c[5] + META;
+          else cand = d > 0 ? y + c[1] - ALT : y + c[4];
           if (Number.isNaN(melhor) || (d > 0 ? cand < melhor : cand > melhor)) melhor = cand;
         }
       }
@@ -654,6 +677,7 @@ export class Jogador {
     const face = this._bloqueio(novo, p.y, p.z, 'x', d > 0 ? 1 : -1);
     if (!Number.isNaN(face)) p.x = face;
     this.velocidade.x = 0;
+    this._bateuParede = true;
   }
 
   _moverZ(d) {
@@ -667,6 +691,7 @@ export class Jogador {
     const face = this._bloqueio(p.x, p.y, novo, 'z', d > 0 ? 1 : -1);
     if (!Number.isNaN(face)) p.z = face;
     this.velocidade.z = 0;
+    this._bateuParede = true;
   }
 
   // ------------------------------------------------------------------
@@ -686,11 +711,15 @@ export class Jogador {
       this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
     }
 
+    // Montado (Fase 11): a montaria ainda existe e ainda é minha? (pode ter desmaiado)
+    if (this.montaria) this._conferirMontaria(dt);
+
     // Só mexe na física se o chão sob o jogador já existe
     if (mundo.estaPronto(p.x, p.z)) {
       const yAntes = p.y;
       this._fisica(dt, ativo);
-      this._verificarQueda(this.voando || !!this._mods.voar, yAntes);
+      // (montado não leva dano de queda: a montaria aguenta)
+      this._verificarQueda(this.voando || !!this._mods.voar || !!this.montaria, yAntes);
     } else {
       this.velocidade.set(0, 0, 0);
       this._caindo = false;
@@ -757,20 +786,27 @@ export class Jogador {
     const comp = Math.hypot(dx, dz);
     if (comp > 0) { dx /= comp; dz /= comp; }
 
+    // Montado (Fase 11): a velocidade, o pulo e a caixa são os da montaria
+    const mont = this.montaria ? this.montaria.p : null;
+
     // Modo voo: física própria (sem gravidade, sem passos)
-    if (this.voando || this._mods.voar) {
+    if (!mont && (this.voando || this._mods.voar)) {
       this._fisicaVoando(dt, ativo, dx, dz);
       return;
     }
+    // Filhote de dragão: segurando Espaço no ar, voa
+    if (mont && mont.voa && this._fisicaFilhote(dt, ativo, dx, dz, pulando)) return;
 
     // Velocidade básica × bônus da roupa (ninja: +10%)
     // Lento (efeito) corta pela metade; a roupa de pirata acelera o nado
-    const vel = (naAgua ? CONFIG.VEL_NADAR * (1 + this.bonus.nado) : (correndo ? CONFIG.VEL_CORRER : CONFIG.VEL_ANDAR)) *
-      (1 + this.bonus.velocidade) * (this._mods.velocidade || 1) *
-      (this.efeitos.lento > 0 ? CONFIG.EFEITO_LENTO_FATOR : 1);
+    const lento = this.efeitos.lento > 0 ? CONFIG.EFEITO_LENTO_FATOR : 1;
+    const vel = mont
+      ? mont.vel * (naAgua ? 0.45 : 1) * lento
+      : (naAgua ? CONFIG.VEL_NADAR * (1 + this.bonus.nado) : (correndo ? CONFIG.VEL_CORRER : CONFIG.VEL_ANDAR)) *
+        (1 + this.bonus.velocidade) * (this._mods.velocidade || 1) * lento;
     const alvoX = dx * vel;
     const alvoZ = dz * vel;
-    const acel = (naAgua ? CONFIG.ACEL_AGUA : (this.noChao ? CONFIG.ACEL_CHAO : CONFIG.ACEL_AR)) * dt;
+    const acel = (naAgua ? CONFIG.ACEL_AGUA : (this.noChao ? CONFIG.ACEL_CHAO : CONFIG.ACEL_AR)) * dt * (mont ? 1.5 : 1);
 
     // Aproxima a velocidade horizontal da desejada, de forma suave
     const difX = alvoX - v.x;
@@ -797,15 +833,24 @@ export class Jogador {
           v.y += (CONFIG.VEL_SUBIR_AGUA * (1 + this.bonus.nado) - v.y) * Math.min(1, 8 * dt);
         }
       }
+    } else if (mont && mont.sobeParede && this._bateuParede && frente > 0) {
+      // Aranha montada andando contra a parede: sobe por ela
+      v.y = 3.2;
+      this.noChao = false;
     } else {
       v.y -= CONFIG.GRAVIDADE * dt;
       if (v.y < -CONFIG.VEL_MAX_QUEDA) v.y = -CONFIG.VEL_MAX_QUEDA;
       if (pulando && this.noChao) {
-        v.y = CONFIG.VEL_PULO * (this._mods.pulo || 1) * (1 + this.bonus.pulo); // astronauta pula mais
+        v.y = mont ? mont.vyPulo : CONFIG.VEL_PULO * (this._mods.pulo || 1) * (1 + this.bonus.pulo); // astronauta pula mais
+        this.noChao = false;
+      } else if (mont && this.noChao && this._bateuParede && frente !== 0) {
+        // Montaria encostada num degrau de 1 bloco: sobe sozinha (pulinho)
+        v.y = CONFIG.VEL_PULO;
         this.noChao = false;
       }
     }
 
+    this._bateuParede = false;
     this._moverComColisao(dt);
 
     this.velHorizontal = Math.hypot(v.x, v.z);
@@ -902,7 +947,7 @@ export class Jogador {
     const p = this.posicao;
     const cam = this.camera;
     const olhos = this._olhos;
-    olhos.set(p.x, p.y + CONFIG.ALTURA_OLHOS, p.z);
+    olhos.set(p.x, p.y + (this.montaria ? this.montaria.p.olhos : CONFIG.ALTURA_OLHOS), p.z);
 
     // Direção do olhar
     const cp = Math.cos(this.pitch);
@@ -966,7 +1011,8 @@ export class Jogador {
     const mods = this._mods;
     let golpeMob = null;
     if (this.botoes[0] && !mods.ataque && this.mobs && typeof this.mobs.raycastMob === 'function') {
-      const m = this.mobs.raycastMob(this._olhos, this._dir, CONFIG.ALCANCE_ATAQUE);
+      // (montarias e pets domados não levam golpe: o raio passa por eles)
+      const m = this.mobs.raycastMob(this._olhos, this._dir, CONFIG.ALCANCE_ATAQUE, true);
       if (m && (!alvo || !(alvo.t < m.t))) golpeMob = m;
     }
 
@@ -1016,8 +1062,18 @@ export class Jogador {
       this._limparQuebra();
     }
 
-    // ----- Comer (botão direito segurado com uma comida na mão) -----
     const shift = !!(this.teclas.ShiftLeft || this.teclas.ShiftRight);
+
+    // ----- Montarias e pet (Fase 11): botão direito num bicho, ou o apito -----
+    if (this._cliqueDireito && this.mobs && typeof this.mobs.interagir === 'function' && this._interagirComMob(alvo, shift)) {
+      this._cliqueDireito = false;
+      this.botoes[2] = false;          // segurar o botão não repete (nem come, nem coloca bloco)
+      this.tempoColocar = CONFIG.INTERVALO_COLOCAR;
+      this._pararComer();
+      return;
+    }
+
+    // ----- Comer (botão direito segurado com uma comida na mão) -----
     const mirandoInterativo = !!(alvo && BLOCOS[alvo.id] && BLOCOS[alvo.id].interativo && !shift);
     this._atualizarComer(dt, mirandoInterativo);
 
@@ -1376,9 +1432,9 @@ export class Jogador {
     if (SOLIDO[def.bloco]) {
       const p = this.posicao;
       const altura = modelo === 'porta' ? 2 : 1;
-      const cruza = x < p.x + METADE_LARGURA && x + 1 > p.x - METADE_LARGURA &&
-                    y < p.y + ALTURA && y + altura > p.y &&
-                    z < p.z + METADE_LARGURA && z + 1 > p.z - METADE_LARGURA;
+      const cruza = x < p.x + this._meia && x + 1 > p.x - this._meia &&
+                    y < p.y + this._alt && y + altura > p.y &&
+                    z < p.z + this._meia && z + 1 > p.z - this._meia;
       if (cruza) return;
     }
 
@@ -1410,6 +1466,176 @@ export class Jogador {
       this.tempoColocar = CONFIG.INTERVALO_COLOCAR;
       this.personagem.animarGolpe();
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Montarias (Fase 11)
+  // ------------------------------------------------------------------
+
+  /**
+   * Botão direito com um bicho na mira (mais perto que o bloco): pergunta aos
+   * Mobs o que fazer (domar, osso, sela, armadura, montar, sentar). Com o
+   * apito na mão, chama as montarias. Devolve true se o clique foi usado.
+   */
+  _interagirComMob(alvo, shift) {
+    const sel = this.inventario.itemSelecionado();
+    const item = sel ? sel.item : null;
+    if (item === 'apito') {
+      this.mobs.apito();
+      this.personagem.animarGolpe();
+      return true;
+    }
+    const mm = this.mobs.raycastMob(this._olhos, this._dir, CONFIG.ALCANCE_ATAQUE);
+    if (!mm || (alvo && alvo.t < mm.t)) return false;
+    const id = mm.id; // (o resultado do raycast é um objeto reaproveitado)
+    const r = this.mobs.interagir(id, item, shift);
+    if (!r) return false;
+    if (r.gastar > 0 && !this.criativo) this.inventario.remover(this.inventario.selecionado, r.gastar);
+    if (r.msg) this.ui.mostrarMensagem(r.msg);
+    if (r.acao === 'montar') this._montarEm(id);
+    if (r.acao) this.personagem.animarGolpe();
+    return true;
+  }
+
+  /** R: monta na montaria sua mais perto (com sela) ou desce */
+  _alternarMontaria() {
+    if (this.montaria) { this.desmontar(); return; }
+    if (!this.mobs || typeof this.mobs.montariaPerto !== 'function') return;
+    const m = this.mobs.montariaPerto(CONFIG.MONTAR_DIST);
+    if (!m) {
+      this.ui.mostrarMensagem('Nenhuma montaria sua por perto (chegue a até 3 blocos).');
+      return;
+    }
+    this._montarEm(m.id);
+  }
+
+  /** Monta na montaria `id`: o jogador vai para o lugar dela e passa a usar a caixa e a velocidade dela */
+  _montarEm(id) {
+    if (this.montaria || !this.mobs) return false;
+    const r = this.mobs.montar(id);
+    if (!r || !r.ok) { if (r && r.msg) this.ui.mostrarMensagem(r.msg); return false; }
+    const p = this.mobs.paramsMontaria(r.tipo);
+    const m = this.mobs.obterMob(id);
+    if (!p || !m) { this.mobs.desmontar(); return false; }
+    this.montaria = { id, tipo: r.tipo, p, nome: r.nome || p.nome };
+    this.voando = false;               // sai do /voar
+    this._meia = p.meia;
+    this._alt = p.altura;
+    this.teletransportar(m.x, m.y, m.z);
+    this._sairDeDentroDoBloco();
+    this._vooEnergia = CONFIG.FILHOTE_VOO_S;
+    this._vooRecarga = 0;
+    this._voandoFilhote = false;
+    this._limparQuebra();
+    this._pararComer();
+    this.ui.mostrarMensagem('Montado! Aperte R para descer.' + (p.voa ? ' Segure Espaço para voar.' : ''));
+    return true;
+  }
+
+  /**
+   * Desce da montaria e fica ao lado dela. `avisar` = false quando quem mandou
+   * descer foi o anfitrião (a montaria desmaiou, ou ele não deixou montar).
+   */
+  desmontar(avisar = true) {
+    if (!this.montaria) return;
+    const p = this.montaria.p;
+    if (avisar && this.mobs) this.mobs.desmontar();
+    this.montaria = null;
+    this._meia = METADE_LARGURA;
+    this._alt = ALTURA;
+    this._voandoFilhote = false;
+    // Ao lado (esquerda, direita ou atrás); sem espaço, em cima da montaria
+    const pos = this.posicao;
+    const x0 = pos.x, y0 = pos.y, z0 = pos.z;
+    const dist = p.meia + METADE_LARGURA + 0.2;
+    const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+    let achou = false;
+    for (const [dx, dz] of [[-c, s], [c, -s], [s, c]]) {
+      const x = x0 + dx * dist, z = z0 + dz * dist;
+      for (const subir of [0, 1]) {
+        if (!this._colide(x, y0 + subir, z)) { pos.set(x, y0 + subir, z); achou = true; break; }
+      }
+      if (achou) break;
+    }
+    if (!achou) pos.set(x0, y0 + p.assento, z0);
+    this.velocidade.set(0, 0, 0);
+    this._caindo = false;
+    this._yTopo = pos.y;
+    if (this.ui.mostrarMontaria) this.ui.mostrarMontaria(null);
+  }
+
+  /** (Todo quadro, montado) A montaria ainda é minha? E o painel com a vida dela (e o voo do filhote). */
+  _conferirMontaria(dt) {
+    const mobs = this.mobs;
+    const m = mobs ? mobs.obterMob(this.montaria.id) : null;
+    if (!m || this.morto || mobs.minhaMontaria !== m) {
+      // A montaria desmaiou, sumiu ou o anfitrião desfez: cai dela
+      this.desmontar(false);
+      return;
+    }
+    this._tUiMontaria -= dt;
+    if (this._tUiMontaria > 0 || !this.ui.mostrarMontaria) return;
+    this._tUiMontaria = 0.15;
+    const p = this.montaria.p;
+    this.ui.mostrarMontaria({
+      nome: m.nomeDono || this.montaria.nome,
+      vida: m.vidaFrac,
+      voo: p.voa ? (this._vooRecarga > 0
+        ? { frac: 1 - this._vooRecarga / CONFIG.FILHOTE_RECARGA_S, descansando: true }
+        : { frac: this._vooEnergia / CONFIG.FILHOTE_VOO_S, descansando: false }) : null,
+    });
+  }
+
+  /**
+   * Filhote de dragão montado: segurando Espaço no ar, voa (o primeiro toque
+   * pula). Sem Espaço, plana devagar; Shift desce. A energia dura 10 s e,
+   * quando acaba, ele descansa 20 s. Devolve true se cuidou da física deste quadro.
+   */
+  _fisicaFilhote(dt, ativo, dx, dz, pulando) {
+    if (this._vooRecarga > 0) {
+      this._vooRecarga -= dt;
+      if (this._vooRecarga <= 0) { this._vooRecarga = 0; this._vooEnergia = CONFIG.FILHOTE_VOO_S; }
+      this._voandoFilhote = false;
+      return false; // descansando: anda como as outras montarias
+    }
+    if (!this._voandoFilhote) {
+      // no chão a energia volta aos pouquinhos
+      if (this.noChao) this._vooEnergia = Math.min(CONFIG.FILHOTE_VOO_S, this._vooEnergia + dt * 0.5);
+      if (!(pulando && !this.noChao && this._vooEnergia > 0)) return false;
+      this._voandoFilhote = true;
+    }
+    this._vooEnergia -= dt;
+    if (this._vooEnergia <= 0) {
+      this._vooEnergia = 0;
+      this._voandoFilhote = false;
+      this._vooRecarga = CONFIG.FILHOTE_RECARGA_S;
+      this.ui.mostrarMensagem('O filhote cansou! Ele precisa descansar 20 s para voar de novo.');
+      return false;
+    }
+    const v = this.velocidade;
+    const t = this.teclas;
+    const vel = this.montaria.p.vel * 1.15 * (this.efeitos.lento > 0 ? CONFIG.EFEITO_LENTO_FATOR : 1);
+    const acel = CONFIG.ACEL_VOAR * dt;
+    const alvoX = dx * vel, alvoZ = dz * vel;
+    const difX = alvoX - v.x, difZ = alvoZ - v.z;
+    const difLen = Math.hypot(difX, difZ);
+    if (difLen <= acel) { v.x = alvoX; v.z = alvoZ; } else { v.x += (difX / difLen) * acel; v.z += (difZ / difLen) * acel; }
+    const desce = ativo && !!(t.ShiftLeft || t.ShiftRight);
+    const alvoY = pulando ? 6 : (desce ? -7 : -1.2);
+    v.y += (alvoY - v.y) * Math.min(1, 6 * dt);
+    // Não entra num chunk que ainda não carregou; limite de altura
+    const pp = this.posicao, mundo = this.mundo;
+    if (v.x !== 0 && !mundo.estaPronto(pp.x + Math.sign(v.x) * 2, pp.z)) v.x = 0;
+    if (v.z !== 0 && !mundo.estaPronto(pp.x, pp.z + Math.sign(v.z) * 2)) v.z = 0;
+    const yMax = CONFIG.ALTURA_MUNDO + 20;
+    if (pp.y >= yMax && v.y > 0) v.y = 0;
+    this._bateuParede = false;
+    this._moverComColisao(dt);
+    if (pp.y > yMax) pp.y = yMax;
+    if (this.noChao && !pulando) this._voandoFilhote = false; // pousou
+    this.velHorizontal = Math.hypot(v.x, v.z);
+    this.distPasso = 0;
+    return true;
   }
 
   // ------------------------------------------------------------------

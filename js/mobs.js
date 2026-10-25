@@ -79,6 +79,38 @@
 //   queimam no sol. A barra grande no topo (ui.mostrarBarraChefao) aparece
 //   para quem está a até 64 blocos. XP do chefão: todos a até 64 blocos.
 //
+// FASE 11: MONTARIAS E PET
+//   cavalo (planícies, de dia), lobo_gigante (florestas, à noite; só ataca
+//   quem bate nele), aranha_montaria (a aranha gigante domada), filhote_dragao
+//   (nasce do ovo) e cachorro (pet raro das planícies).
+//   - DOMAR: com o item certo na mão, botão direito no bicho calmo. A barra de
+//     "confiança" enche em 5 s; levar dano ou o jogador se afastar mais de 4
+//     blocos faz falhar (o item é gasto). O cachorro pede 3 ossos (cada um
+//     enche 1/3). A aranha gigante só aceita abaixo de 30% de vida (e vira
+//     aranha_montaria). Quem decide é o anfitrião (mensagem `domar`).
+//   - Domado, o mob tem `dono` (apelido), nome acima ("Cavalo de Pai"), não
+//     some longe, não queima no sol, não leva dano dos jogadores e não é alvo
+//     dos monstros (só quando o lobo ou o cachorro atacam um deles).
+//   - MONTAR (R, até 3 blocos, precisa de sela): quem anda é o jogador (o
+//     player.js usa a caixa e a velocidade da montaria) e a montaria vai junto
+//     (`montadoPor`). O anfitrião copia a posição que o cavaleiro manda. O
+//     golpe de um monstro no cavaleiro vai para a montaria (a armadura de
+//     montaria protege). Sem vida, a montaria desmaia, o cavaleiro cai e ela
+//     volta para a casa do dono em 60 s.
+//   - CACHORRO: segue o dono (2 a 4 blocos; teleporta além de 24), senta
+//     quando o dono para (ou com Shift + botão direito) e morde (4) os
+//     monstros que atacam o dono. O lobo domado faz o mesmo e, montado, morde
+//     os monstros que chegam perto.
+//   - APITO: chama as montarias e o pet (teleporta quem está a mais de 30 blocos).
+//   - OVO DE DRAGÃO: colocado a até 3 blocos de uma FOGUEIRA, choca em 300 s e
+//     nasce um filhote_dragao do dono do ovo. O progresso vai no estado do
+//     bloco (1 a 15), assim todos veem as faíscas e ouvem os estalos.
+//   - Rede (protocolo 8): `domar`, `montar`, `desmontar`, `equiparMontaria`,
+//     `apito`, `sentar` (cliente → anfitrião); `donoMob` e `domarEstado`
+//     (anfitrião → clientes); a variante (pelagem) vai no `mobNovo`.
+//   - Save (versão 9): exportarMontarias()/carregarMontarias(),
+//     exportarOvos()/carregarOvos().
+//
 // DESEMPENHO
 //   - Até 40 mobs e 64 projéteis. Nada de criar objetos a cada quadro: mobs,
 //     modelos, projéteis e malhas são reaproveitados (pools), listas também.
@@ -99,7 +131,7 @@
 import * as THREE from 'three';
 import { CONFIG, CICLO_SEGUNDOS } from './config.js';
 import { B, BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
-import { ITENS, obterItem } from './items.js';
+import { ITENS, obterItem, ITENS_DOMAR } from './items.js';
 import { BIOMA } from './world.js';
 
 // Os modelos (bonecos) vêm de modelos_mobs.js. Se o arquivo faltar ou der
@@ -193,6 +225,56 @@ const F_ENVENENADO = 128;
 const F_CABECA = [1 << 12, 1 << 13, 1 << 14];
 const F_SOPRANDO = 1 << 15;
 const F_POUSADO = 1 << 16;
+// Fase 11: domado (tem dono), alguém montado, sentado (pet) e desmaiado
+const F_DOMADO = 1 << 17;
+const F_MONTADO = 1 << 18;
+const F_SENTADO = 1 << 19;
+const F_DESMAIADO = 1 << 20;
+
+// Fase 11: montarias e pet
+const QUADRIL_JOGADOR = 12 * 1.8 / 32; // altura do quadril do boneco (12 pixels da skin): sentado, ele fica no assento
+const MEIA_LARGURA_MONTADO_MAX = 0.45; // montado, a caixa de colisão é no máximo 0,9 de largura (passa em vão de 1 bloco)
+const DIST_ETIQUETA = 24;             // o nome do dono aparece até essa distância
+const DIST_PET_SEGUE = 4;             // o cachorro anda até o dono quando fica mais longe que isso
+const DIST_GUARDA = 8;                // o lobo domado (parado) ataca monstros até aqui dele
+const DIST_GUARDA_DONO = 16;          // ...se o dono estiver a até isso
+const TEMPO_DONO_PARADO = 2;          // o cachorro senta sozinho com o dono parado por isso
+const RECARGA_MORDIDA = 1;            // segundos entre duas mordidas do pet/lobo
+const TEMPO_RAIVA_LOBO = 15;          // o lobo selvagem fica bravo com quem bateu por isso
+const TEMPO_CHAMADO = 12;             // o apito: quem está perto anda até o jogador por até isso
+const NOME_CURTO = { cavalo: 'Cavalo', lobo_gigante: 'Lobo', aranha_montaria: 'Aranha', filhote_dragao: 'Dragãozinho', cachorro: 'Cachorro' };
+const DEFESA_MONTARIA_POR_PONTO = 0.06; // cada ponto de defesa da armadura de montaria tira 6% do dano (ferro 4 = 24%, diamante 10 = 60%)
+const REGEN_DOMADO_POR_S = 0.1;       // montarias e pets recuperam 1 de vida a cada 10 s
+// Corações quando um bicho é domado (e a cada osso que o cachorro ganha)
+const EF_CORACAO = {
+  x: 0, y: 0, z: 0, qtd: 10, cores: ['#ff4a6a', '#ff8aa0', '#ffd0dc'],
+  velocidade: 1.1, vy: 1.6, espalhar: 0.5, gravidade: -0.8, vida: 1.3, tamanho: 0.15, aditivo: false,
+};
+
+/** Plaquinha com um texto (o nome do dono acima da montaria), criada só quando o nome muda */
+function criarSpriteTexto(texto) {
+  const fonte = 'bold 40px sans-serif';
+  const c = document.createElement('canvas');
+  let g = c.getContext('2d');
+  g.font = fonte;
+  const w = Math.ceil(g.measureText(texto).width) + 28, h = 56;
+  c.width = w; c.height = h;
+  g = c.getContext('2d');
+  g.font = fonte;
+  g.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = '#ffe9a8';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(texto, w / 2, h / 2 + 2);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  const alt = 0.3;
+  s.scale.set(alt * w / h, alt, 1);
+  s.renderOrder = 2;
+  return s;
+}
 
 const EPS = 0.001;
 const EIXO_X = 1, EIXO_Y = 2, EIXO_Z = 3;
@@ -271,6 +353,10 @@ export const ORDEM_TIPOS = [];
  *    chanceRoupa (0 a 1), roupaGarantida, biomaSuperficie ('floresta'),
  *    soNoite, acompanhante ({ tipo, chance }), familia ('orc'), giro (rad/s),
  *    somAtaque (toca som.mob(tipo, 'ataque') ao bater)
+ *  - Fase 11: variantes (quantas pelagens o modelo tem), soSuperficie,
+ *    neutro (só ataca quem bate nele: o lobo), pet (segue o dono),
+ *    montaria ({ vel, pulo (blocos), sobeParede, voa, mordida }),
+ *    domar ({ item, vezes (o cachorro: 3 ossos), vidaMaxFrac (aranha: 0,3), vira (tipo depois de domado) })
  */
 export function registrarTipoMob(nome, def) {
   const d = {
@@ -312,6 +398,13 @@ export function registrarTipoMob(nome, def) {
     familia: def.familia ?? null,
     giro: def.giro ?? VEL_GIRO,
     somAtaque: def.somAtaque ?? false,
+    // Fase 11
+    variantes: def.variantes ?? 0,
+    soSuperficie: def.soSuperficie ?? false,
+    neutro: def.neutro ?? false,
+    pet: def.pet ?? false,
+    montaria: def.montaria ?? null,
+    domar: def.domar ?? null,
     indice: 0,
   };
   let i = ORDEM_TIPOS.indexOf(nome);
@@ -361,6 +454,8 @@ registrarTipoMob('aranha_gigante', {
   nasce: 'escuro', peso: 0.7, biomaSuperficie: 'floresta', corReserva: '#2a2020', somAtaque: true,
   efeitoAtaque: { efeito: 'veneno', segundos: 2 },
   drops: [{ item: 'fio_seda', min: 2, max: 4, chance: 1 }, { item: 'seda_rara', min: 1, max: 1, chance: 0.1 }],
+  // Fase 11: enfraquecida (abaixo de 30% de vida), aceita o fio de seda mágico e vira montaria
+  domar: { item: ITENS_DOMAR.aranha_montaria || 'fio_seda_magico', vidaMaxFrac: 0.3, vira: 'aranha_montaria' },
 });
 registrarTipoMob('orc_guerreiro', {
   nome: 'Orc guerreiro', vidaMax: 45, velocidade: 2.6, dano: 7, alcance: 1.0, visao: 20,
@@ -395,6 +490,41 @@ registrarTipoMob('hidra', {
     { item: 'espada_hidra', min: 1, max: 1, chance: 0.5 },
     { item: 'cristal_verde', min: 3, max: 3, chance: 1 },
   ],
+});
+
+// ----- Fase 11: montarias e o pet (sempre depois dos outros: o índice vai pela rede) -----
+// A velocidade de cada montaria é a de quando alguém está montado (o jogador controla).
+// `pulo` é a altura do pulo em blocos.
+registrarTipoMob('cavalo', {
+  nome: 'Cavalo', vidaMax: 30, velocidade: 1.5, velFuga: 6, altura: 1.65, raio: 0.6, xp: 2,
+  nasce: 'grama', peso: 0.8, grupo: [2, 4], biomaSuperficie: 'planicie', variantes: 4, giro: 6,
+  corReserva: '#8a5630', montaria: { vel: 9, pulo: 2.5 },
+  domar: { item: ITENS_DOMAR.cavalo || 'maca_dourada' },
+});
+registrarTipoMob('lobo_gigante', {
+  // Neutro: passeia como um animal, mas morde (5) quem bater nele, por um tempo
+  nome: 'Lobo gigante', vidaMax: 34, velocidade: 1.8, velFuga: 5, dano: 5, alcance: 0.9, visao: 16,
+  altura: 1.32, raio: 0.55, xp: 6, neutro: true, comportamento: 'lobo', somAtaque: true,
+  // (peso alto: muitos sorteios caem fora da floresta e são descartados; na floresta, à noite, ~1 em cada 5 bichos)
+  nasce: 'escuro', soNoite: true, soSuperficie: true, biomaSuperficie: 'floresta', peso: 2.5, grupo: [1, 2],
+  queimaNoSol: false, corReserva: '#4b4e57',
+  montaria: { vel: 11, pulo: 1.6, mordida: true },
+  domar: { item: ITENS_DOMAR.lobo_gigante || 'osso_encantado' },
+});
+registrarTipoMob('aranha_montaria', {
+  // A caixa de colisão é a da aranha gigante (o boneco é maior: as pernas ficam de fora)
+  nome: 'Aranha montaria', vidaMax: 40, velocidade: 2, altura: 1.3, raio: 0.95, xp: 0,
+  sobeParede: true, nasce: null, corReserva: '#5c4b52', som: 'aranha_montaria',
+  montaria: { vel: 8, pulo: 1.3, sobeParede: true },
+});
+registrarTipoMob('filhote_dragao', {
+  nome: 'Filhote de dragão', vidaMax: 40, velocidade: 2, altura: 1.45, raio: 0.65, xp: 0,
+  nasce: null, corReserva: '#d8532a', montaria: { vel: 10, pulo: 1.3, voa: true },
+});
+registrarTipoMob('cachorro', {
+  nome: 'Cachorro', vidaMax: 20, velocidade: 1.6, velFuga: 5, altura: 0.72, raio: 0.32, xp: 1,
+  nasce: 'grama', peso: 0.7, grupo: [1, 1], biomaSuperficie: 'planicie', variantes: 3, pet: true,
+  corReserva: '#c4843e', domar: { item: 'osso', vezes: 3 },
 });
 
 // =====================================================================
@@ -623,6 +753,8 @@ registrarComportamento('animal', (mobs, m, dt) => {
 /** Monstro: procura um jogador, persegue e bate; sem ninguém, vaga devagar */
 registrarComportamento('monstro', (mobs, m, dt) => {
   const def = m.def;
+  // Fase 11: um cachorro ou lobo mordeu este monstro: ele revida no bicho por uns segundos
+  if (m.alvoMob && mobs._revidar(m, dt)) return;
   const alvo = mobs._escolherAlvo(m, dt);
   if (!alvo) {
     passear(mobs, m, dt, def.velocidade * 0.45);
@@ -1004,6 +1136,75 @@ registrarComportamento('hidra', (mobs, m, dt) => {
   }
 });
 
+/**
+ * Lobo gigante selvagem (Fase 11): passeia como um animal. Se alguém bater
+ * nele, fica bravo por 15 s e persegue e morde (como um monstro).
+ */
+registrarComportamento('lobo', (mobs, m, dt) => {
+  if (m.tBravo > 0) {
+    m.tBravo -= dt;
+    COMPORTAMENTOS.monstro(mobs, m, dt);
+    if (m.tBravo <= 0) { m.alvoId = null; m.estado = 'passear'; m.tEstado = 0; }
+    return;
+  }
+  passear(mobs, m, dt, m.def.velocidade);
+});
+
+/**
+ * Montaria domada e parada (Fase 11): fica quietinha onde o dono deixou
+ * (só vira a cabeça de vez em quando). Chamada pelo apito, anda até o dono.
+ * O lobo domado ainda guarda: morde os monstros perto dele com o dono por perto.
+ */
+registrarComportamento('montaria', (mobs, m, dt) => {
+  if (m.def.montaria && m.def.montaria.mordida && mobs._guardar(m, dt)) return;
+  if (mobs._seguirChamado(m, dt)) return;
+  m.estado = 'parado';
+  m.querVel = 0;
+  m.tEstado -= dt;
+  if (m.tEstado <= 0) {
+    m.tEstado = 4 + Math.random() * 6;
+    m.yawAlvo = m.yaw + (Math.random() - 0.5) * 1.4; // olha um pouco para o lado
+  }
+});
+
+/**
+ * Pet (cachorro domado): segue o dono, senta quando ele para (ou quando
+ * mandam, com Shift + botão direito) e morde os monstros que atacaram o dono.
+ */
+registrarComportamento('pet', (mobs, m, dt) => {
+  if (m.sentado) { m.querVel = 0; m.estado = 'sentado'; return; }
+  if (mobs._guardar(m, dt)) { m.sentadoAuto = false; return; }
+  if (mobs._seguirChamado(m, dt)) { m.sentadoAuto = false; return; }
+  const dono = mobs._jogadorPorApelido(m.dono);
+  if (!dono || !dono.posicao || dono.morto) { m.querVel = 0; m.sentadoAuto = true; return; }
+  const p = dono.posicao;
+  let dx = p.x - m.x, dz = p.z - m.z;
+  const dist = Math.sqrt(dx * dx + dz * dz);
+  if (dist > CONFIG.PET_DIST_TELEPORTE || Math.abs(p.y - m.y) > 12) {
+    mobs._teleportarPerto(m, p.x, p.y, p.z, 2);
+    return;
+  }
+  // O dono está parado? (anda menos que um tiquinho entre uma "pensada" e outra)
+  const andou = Math.abs(p.x - m.donoXAnt) + Math.abs(p.z - m.donoZAnt) > 0.05;
+  m.donoXAnt = p.x; m.donoZAnt = p.z;
+  m.tDonoParado = andou ? 0 : m.tDonoParado + dt;
+  if (andou && dist > CONFIG.PET_DIST_PERTO) m.sentadoAuto = false; // o dono saiu andando: levanta
+  if (dist > DIST_PET_SEGUE || (dist > CONFIG.PET_DIST_PERTO && !m.sentadoAuto)) {
+    m.sentadoAuto = false;
+    m.estado = 'seguir';
+    if (dist > 0.01) { dx /= dist; dz /= dist; }
+    m.yawAlvo = Math.atan2(-dx, -dz);
+    // longe, corre (bem mais rápido que o jogador andando)
+    const vel = dist > 8 ? 6.5 : 4.5;
+    mobs._andarPara(m, dx, dz, vel, dt, QUEDA_MAX_PERSEGUIR);
+    return;
+  }
+  m.querVel = 0;
+  m.estado = 'perto';
+  if (dist > 0.01) m.yawAlvo = Math.atan2(-dx, -dz);
+  if (m.tDonoParado > TEMPO_DONO_PARADO) m.sentadoAuto = true;
+});
+
 // =====================================================================
 // Modelo reserva: uma caixa colorida com a mesma "interface" do modelo
 // =====================================================================
@@ -1055,16 +1256,29 @@ function criarModeloCaixa(tipo) {
   };
 }
 
-/** Cria o modelo do tipo (modelos_mobs.js) ou, sem ele, a caixa reserva */
-function criarModelo(tipo) {
+/**
+ * Cria o modelo do tipo (modelos_mobs.js) ou, sem ele, a caixa reserva.
+ * `variante` = a pelagem (cavalo 0–3, cachorro 0–2); o anfitrião sorteia e manda pela rede.
+ */
+function criarModelo(tipo, variante = 0) {
   if (criarModeloExterno) {
     try {
-      return criarModeloExterno(tipo);
+      return criarModeloExterno(tipo, { variante });
     } catch (e) {
       // Tipo sem modelo: usa a caixa
     }
   }
-  return criarModeloCaixa(tipo);
+  const mod = criarModeloCaixa(tipo);
+  // A caixa não tem sela nem armadura (as funções existem para o mobs.js chamar sem medo)
+  mod.assento = mod.grupo;
+  mod.definirSela = () => {};
+  mod.definirArmaduraMontaria = () => {};
+  return mod;
+}
+
+/** Chave do pool de modelos: tipos com pelagens diferentes guardam cada uma separada */
+function chaveModelo(tipo, variante) {
+  return variante ? tipo + '|' + variante : tipo;
 }
 
 // =====================================================================
@@ -1150,6 +1364,19 @@ export class Mobs {
     this._barraFrac = -1;
     this._chefaoPerto = { tipo: '', nome: '', frac: 0, dist: 0 };
     this._temChefaoPerto = false;
+
+    // Montarias e pet (Fase 11)
+    this.obterCasaDe = null;          // o main liga: fn(apelido) → [x, y, z] da casa do dono (para onde volta quem desmaia)
+    this._ovos = new Map();           // (anfitrião) "x,y,z" → { x, y, z, dono, tempo, nivel } dos ovos de dragão colocados
+    this._tOvos = 0;
+    this._agressor = new Map();       // (anfitrião) id do jogador → id do monstro que bateu nele por último (o pet defende)
+    this._domandoLocal = null;        // a barra de confiança que EU estou vendo: { id, ini, conf, dur, ate }
+    this._paramsMontaria = {};        // tipo → números da montaria para o player.js (calculados uma vez)
+    this._vAssento = new THREE.Vector3();
+    this._tUiMontaria = 0;
+    this._limiteMobs = MAX_MOBS;      // MAX_MOBS + quantos domados existem (recalculado a cada segundo)
+    // O mundo avisa quando um bloco muda: é assim que o anfitrião percebe um ovo colocado ou quebrado
+    if (mundo && typeof mundo.aoAlterarBloco === 'function') mundo.aoAlterarBloco((ev) => this._aoMudarBloco(ev));
 
     // A rede precisa saber de nós (bemvindo, atacarMob e as mensagens dos mobs)
     if (rede && typeof rede.registrarMobs === 'function') rede.registrarMobs(this);
@@ -1244,10 +1471,12 @@ export class Mobs {
         this._verificarChefoes();
       }
       for (let i = 0; i < this.lista.length; i++) this._simular(this.lista[i], dt);
+      this._atualizarOvos(dt); // Fase 11: ovos de dragão chocando perto de fogueiras
       this._enviarEstado();
     } else {
       this._interpolarTodos();
     }
+    this._atualizarUiDoma(); // Fase 11: a barra de confiança de quem está domando aqui
 
     // Projéteis e nuvens (o anfitrião simula; o cliente só desenha)
     this._atualizarProjeteis(dt);
@@ -1301,6 +1530,12 @@ export class Mobs {
       casaX: 0, casaY: 0, casaZ: 0, areaChave: null, tLonge: 0, daLua: false,
       alvoX: 0, alvoY: 0, alvoZ: 0, acertou: false, pousoX: 0, pousoY: 0, pousoZ: 0, soprouNoChao: false,
       soproId: 0, tCab: new Float32Array(3), tCabAnim: new Float32Array(3),
+      // Fase 11: montarias e pet
+      variante: 0, dono: null, nomeDono: '', sela: false, armadura: null, montadoPor: null,
+      sentado: false, sentadoAuto: false, desmaiado: 0, domando: null, confianca: 0, tConfianca: 0,
+      tBravo: 0, alvoMob: 0, tAlvoMob: 0, tMordida: 0, chamadoX: 0, chamadoZ: 0, tChamado: 0,
+      donoXAnt: 0, donoZAnt: 0, tDonoParado: 0, xMont: 0, zMont: 0,
+      etiqueta: null, etiquetaTexto: '', inclinaSentado: 0, deitado: 0,
       // desenho
       modelo: null, tLuz: 0, tSom: 0, tSomDano: -Infinity, tFogo: 0, tNeve: 0, tVen: 0,
       inclinacao: 0, velAnim: 0, xAnt: 0, zAnt: 0, distLocal: 0,
@@ -1318,10 +1553,18 @@ export class Mobs {
   }
 
   /** Cria um mob (anfitrião ou cliente) e devolve o objeto, ou null se o tipo não existir */
-  _novo(id, tipo, x, y, z, yaw, vidaFrac) {
+  _novo(id, tipo, x, y, z, yaw, vidaFrac, variante = 0) {
     const def = TIPOS_MOB[tipo];
     if (!def) return null;
     const m = this._livres.pop() || this._objetoMob();
+    // Fase 11: pelagem, dono, sela, armadura...
+    m.variante = def.variantes > 0 ? ((Math.floor(variante) % def.variantes) + def.variantes) % def.variantes : 0;
+    m.dono = null; m.nomeDono = ''; m.sela = false; m.armadura = null; m.montadoPor = null;
+    m.sentado = false; m.sentadoAuto = false; m.desmaiado = 0; m.domando = null; m.confianca = 0; m.tConfianca = 0;
+    m.tBravo = 0; m.alvoMob = 0; m.tAlvoMob = 0; m.tMordida = 0; m.tChamado = 0;
+    m.donoXAnt = x; m.donoZAnt = z; m.tDonoParado = 0; m.xMont = x; m.zMont = z;
+    m.etiquetaTexto = ''; m.inclinaSentado = 0; m.deitado = 0;
+    if (m.etiqueta) m.etiqueta.visible = false;
     m.id = id; m.tipo = tipo; m.def = def;
     m.x = x; m.y = y; m.z = z; m.vx = 0; m.vy = 0; m.vz = 0;
     m.yaw = yaw; m.yawAlvo = yaw;
@@ -1357,7 +1600,7 @@ export class Mobs {
     m.nHist = 0; m.histProvisorio = false; m.golpesVistos = -1; m.piscouLocal = -Infinity;
     m.alvo.id = id;
     m.alvo.raio = Math.max(def.raio, def.altura * 0.45);
-    m.modelo = this._pegarModelo(tipo);
+    m.modelo = this._pegarModelo(tipo, m.variante);
     m.modelo.grupo.position.set(x, y, z);
     m.modelo.grupo.rotation.set(0, yaw, 0);
     this.lista.push(m);
@@ -1366,27 +1609,31 @@ export class Mobs {
     return m;
   }
 
-  /** Um modelo do tipo, do pool ou novo, já na cena e "zerado" */
-  _pegarModelo(tipo) {
-    const pool = this._modelosLivres.get(tipo);
+  /** Um modelo do tipo (e da pelagem), do pool ou novo, já na cena e "zerado" */
+  _pegarModelo(tipo, variante = 0) {
+    const pool = this._modelosLivres.get(chaveModelo(tipo, variante));
     let mod = pool && pool.length > 0 ? pool.pop() : null;
     if (mod) {
       mod.morrer(0);           // desfaz o tombo e a transparência
       mod.definirVida(1);      // esconde a barra
     } else {
-      mod = criarModelo(tipo);
+      mod = criarModelo(tipo, variante);
       // Ordem "YXZ": primeiro vira (yaw), depois inclina (a aranha subindo a parede)
       mod.grupo.rotation.order = 'YXZ';
     }
+    // Sem sela e sem armadura até o dono colocar (Fase 11)
+    if (typeof mod.definirSela === 'function') mod.definirSela(false);
+    if (typeof mod.definirArmaduraMontaria === 'function') mod.definirArmaduraMontaria(null);
+    if (mod.raiz) { mod.raiz.rotation.z = 0; mod.raiz.position.y = 0; }
     mod.grupo.visible = true;
     if (mod.grupo.parent !== this.scene) this.scene.add(mod.grupo);
     return mod;
   }
 
-  _devolverModelo(tipo, mod) {
+  _devolverModelo(chave, mod) {
     mod.grupo.visible = false;
-    let pool = this._modelosLivres.get(tipo);
-    if (!pool) { pool = []; this._modelosLivres.set(tipo, pool); }
+    let pool = this._modelosLivres.get(chave);
+    if (!pool) { pool = []; this._modelosLivres.set(chave, pool); }
     if (pool.length < MODELOS_NO_POOL) {
       pool.push(mod);
     } else {
@@ -1408,9 +1655,11 @@ export class Mobs {
       EF_POF.espalhar = Math.max(0.6, m.def.raio * 1.5);
       this.particulas.emitir(EF_POF);
     }
-    this._devolverModelo(m.tipo, m.modelo);
+    this._devolverModelo(chaveModelo(m.tipo, m.variante), m.modelo);
     m.modelo = null;
     m.def = null;
+    if (m.etiqueta) m.etiqueta.visible = false;
+    if (this._domandoLocal && this._domandoLocal.id === m.id) this._fimDomarLocal(null);
     this._livres.push(m);
   }
 
@@ -1428,17 +1677,39 @@ export class Mobs {
    * (Anfitrião/sozinho) Cria um mob agora, com os pés em (x, y, z). Serve para
    * testes, comandos e eventos (os chefões). Devolve o id ou null.
    */
-  criarMob(tipo, x, y, z, yaw = Math.random() * Math.PI * 2) {
+  criarMob(tipo, x, y, z, yaw = Math.random() * Math.PI * 2, opcoes = null) {
     if (!this.autoridade || !TIPOS_MOB[tipo]) return null;
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+    if (!Number.isFinite(yaw)) yaw = 0;
+    const def = TIPOS_MOB[tipo];
     const id = this._gerarId();
     if (!id) return null;
-    const m = this._novo(id, tipo, x, y, z, yaw, 1);
+    // Fase 11: pelagem sorteada aqui (e mandada pela rede); um mob salvo já vem com dono, sela...
+    const o = opcoes || null;
+    const variante = o && Number.isFinite(o.variante) ? o.variante
+      : (def.variantes > 0 ? Math.floor(Math.random() * def.variantes) : 0);
+    const vidaFrac = o && Number.isFinite(o.vida) ? Math.max(0.05, Math.min(1, o.vida)) : 1;
+    const m = this._novo(id, tipo, x, y, z, yaw, vidaFrac, variante);
     if (!m) return null;
+    if (o && typeof o.dono === 'string' && o.dono) {
+      m.sela = !!o.sela && !!def.montaria;
+      m.armadura = def.montaria && typeof o.armadura === 'string' && obterItem('armadura_montaria_' + o.armadura) ? o.armadura : null;
+      m.sentado = !!o.sentado && def.pet;
+      this._definirDono(m, o.dono, false);
+    }
     if (this.rede && typeof this.rede.enviarMobNovo === 'function') {
-      this.rede.enviarMobNovo(id, tipo, x, y, z, yaw, 1);
+      this.rede.enviarMobNovo(id, tipo, x, y, z, yaw, vidaFrac, this._extraRede(m));
     }
     return id;
+  }
+
+  /**
+   * (Fase 11) O que vai junto no `mobNovo` e no `bemvindo`: { v: pelagem,
+   * dono, sela, arm, mont, sent } ou null (mob comum, sem nada disso).
+   */
+  _extraRede(m) {
+    if (!m.variante && !m.dono) return null;
+    return { v: m.variante, dono: m.dono, sela: m.sela, arm: m.armadura, mont: m.montadoPor, sent: m.sentado };
   }
 
   /** (Testes) O objeto interno do mob `id`, ou null */
@@ -1453,6 +1724,7 @@ export class Mobs {
   _removerMob(m, morreu) {
     if (m.descartar || m.morrendo) return;
     if (m.soproId) this._terminarSopro(m);
+    if (m.domando && this.autoridade) this._falharDoma(m, 'sumiu');
     // Chefão que foi embora (sem morrer): pode voltar quando alguém chegar perto de novo
     if (m.def.chefao && m.areaChave) {
       if (this._chefePorArea.get(m.areaChave) === m.id) this._chefePorArea.delete(m.areaChave);
@@ -1531,7 +1803,7 @@ export class Mobs {
     const r2 = RAIO_CONTAGEM * RAIO_CONTAGEM;
     for (let i = 0; i < this.lista.length; i++) {
       const m = this.lista[i];
-      if (m.morrendo || m.descartar || m.def.chefao) continue;
+      if (m.morrendo || m.descartar || m.def.chefao || m.dono) continue;
       const dx = m.x - p.x, dz = m.z - p.z;
       if (dx * dx + dz * dz > r2) continue;
       if (m.def.hostil) mo++; else a++;
@@ -1555,7 +1827,11 @@ export class Mobs {
 
   _gerarPerto() {
     const jog = this._jogadores;
-    if (jog.length === 0 || this.lista.length >= MAX_MOBS) return;
+    // Os domados (montarias e pets) não ocupam lugar dos mobs que nascem sozinhos
+    let domados = 0;
+    for (let i = 0; i < this.lista.length; i++) if (this.lista[i].dono) domados++;
+    this._limiteMobs = MAX_MOBS + domados;
+    if (jog.length === 0 || this.lista.length >= this._limiteMobs) return;
     this._atualizarListasTipos();
     const noite = this.ceu ? !!this.ceu.ehNoite : false;
     const lua = noite && this.ceu && !!this.ceu.luaVermelha;
@@ -1571,7 +1847,7 @@ export class Mobs {
       this._contarPerto(p);
       let gerados = 0;
       for (let t = 0; t < TENTATIVAS_POR_JOGADOR && gerados < porVez; t++) {
-        if (this.lista.length >= MAX_MOBS) return;
+        if (this.lista.length >= this._limiteMobs) return;
         const querAnimal = diaClaro && this._contAnimais < MAX_ANIMAIS_POR_JOGADOR && this._tiposGrama.length > 0;
         const querMonstro = this._contMonstros < maxMonstros && listaEscuro.length > 0;
         if (!querAnimal && !querMonstro) break;
@@ -1591,6 +1867,7 @@ export class Mobs {
           const def = this._sortearTipo(listaEscuro);
           const y = this._acharLugarEscuro(def, x, z, p.y, noite);
           if (y < 0) continue;
+          if (def.soSuperficie && !this._naSuperficie) continue; // o lobo não mora em caverna
           // A aranha gigante, na superfície, só nasce em florestas
           if (def.biomaSuperficie && this._naSuperficie && !this._biomaCombina(def, x, z)) continue;
           const n = this._gerarGrupoMonstros(def, x, y, z);
@@ -1620,11 +1897,12 @@ export class Mobs {
       const xx = i === 0 ? x : x + Math.floor(Math.random() * 5) - 2;
       const zz = i === 0 ? z : z + Math.floor(Math.random() * 5) - 2;
       if (!this.mundo.estaPronto(xx, zz)) continue;
+      if (def.biomaSuperficie && !this._biomaCombina(def, xx, zz)) continue; // cavalo e cachorro: planícies
       const y = this._acharGrama(def, xx, zz);
       if (y < 0) continue;
       if (this.criarMob(def.tipo, xx + 0.5, y, zz + 0.5) === null) break;
       feitos++;
-      if (this.lista.length >= MAX_MOBS) break;
+      if (this.lista.length >= this._limiteMobs) break;
     }
     return feitos;
   }
@@ -1638,7 +1916,7 @@ export class Mobs {
     const n = g[0] + Math.floor(Math.random() * (g[1] - g[0] + 1));
     if (this.criarMob(def.tipo, x + 0.5, y, z + 0.5) === null) return 0;
     let feitos = 1;
-    for (let i = 0; i < n * 3 && feitos < n && this.lista.length < MAX_MOBS; i++) {
+    for (let i = 0; i < n * 3 && feitos < n && this.lista.length < this._limiteMobs; i++) {
       const xx = x + Math.floor(Math.random() * 7) - 3;
       const zz = z + Math.floor(Math.random() * 7) - 3;
       const yy = this._acharChaoPerto(def, xx, y, zz);
@@ -1646,7 +1924,7 @@ export class Mobs {
       if (this.criarMob(def.tipo, xx + 0.5, yy, zz + 0.5) !== null) feitos++;
     }
     const ac = def.acompanhante;
-    if (ac && TIPOS_MOB[ac.tipo] && Math.random() < ac.chance && this.lista.length < MAX_MOBS) {
+    if (ac && TIPOS_MOB[ac.tipo] && Math.random() < ac.chance && this.lista.length < this._limiteMobs) {
       const dAc = TIPOS_MOB[ac.tipo];
       for (let i = 0; i < 8; i++) {
         const xx = x + Math.floor(Math.random() * 9) - 4;
@@ -1753,6 +2031,8 @@ export class Mobs {
     for (let i = 0; i < this.lista.length; i++) {
       const m = this.lista[i];
       if (m.morrendo || m.descartar) continue;
+      // Domado caiu no abismo: volta para a casa do dono. Domado nunca some por distância.
+      if (m.dono) { if (m.y < -20) this._voltarParaCasa(m); continue; }
       if (m.y < -20) { this._removerMob(m, false); continue; }
       if (jog.length === 0) continue; // sem lista de jogadores (início): não decide nada
       const lim = m.def.chefao ? DIST_SUMIR_CHEFAO : DIST_SUMIR;
@@ -1928,6 +2208,23 @@ export class Mobs {
     if (m.tSubindo > 0) m.tSubindo -= dt;
     if (m.lento > 0) m.lento = Math.max(0, m.lento - dt);
     for (let k = 0; k < 3; k++) if (m.tCabAnim[k] > 0) m.tCabAnim[k] -= dt;
+    // Fase 11: relógios das montarias e do pet
+    if (m.tMordida > 0) m.tMordida -= dt;
+    if (m.tAlvoMob > 0) { m.tAlvoMob -= dt; if (m.tAlvoMob <= 0) m.alvoMob = 0; }
+    if (m.dono && m.desmaiado <= 0 && m.vida < def.vidaMax) {
+      m.vida = Math.min(def.vidaMax, m.vida + REGEN_DOMADO_POR_S * dt); // montarias e pets saram devagar
+    }
+    if (m.confianca > 0 && !m.dono) {
+      // o cachorro esquece os ossos se ninguém der outro logo
+      m.tConfianca += dt;
+      if (m.tConfianca > CONFIG.DOMAR_OSSO_ESQUECE_S) { m.confianca = 0; m.tConfianca = 0; }
+    }
+    // Alguém montado: a posição vem do cavaleiro (nada de IA nem de física aqui)
+    if (m.montadoPor && !m.morrendo) {
+      this._simularMontada(m, dt);
+      this._calcularFlags(m);
+      return;
+    }
 
     // Fogo (poder de fogo, espada do dragão): 1 de dano por segundo enquanto durar
     if (m.queimar > 0 && !m.morrendo) {
@@ -1953,6 +2250,16 @@ export class Mobs {
     if (m.morrendo) {
       m.querVel = 0;
       m.querVy = 0;
+    } else if (m.desmaiado > 0) {
+      // Fase 11: desmaiado (deitado); depois de 60 s acorda na casa do dono
+      m.querVel = 0;
+      m.querVy = 0;
+      m.desmaiado -= dt;
+      if (m.desmaiado <= 0) this._voltarParaCasa(m);
+    } else if (m.domando) {
+      // Fase 11: sendo domado: fica quietinho olhando para quem está domando
+      m.querVel = 0;
+      this._progredirDoma(m, dt);
     } else {
       // Sol da manhã (a cada 0.5 s)
       m.tSol -= dt;
@@ -1973,8 +2280,10 @@ export class Mobs {
       m.acumIA -= dt;
       if (m.acumIA <= 0 && !m.morrendo) {
         m.distJogador = this._distJogadorMaisPerto(m);
-        m.acumIA = def.chefao || m.distJogador < DIST_IA_PERTO ? IA_PERTO : IA_LONGE;
-        const fn = COMPORTAMENTOS[def.comportamento] || COMPORTAMENTOS.animal;
+        m.acumIA = def.chefao || m.dono || m.distJogador < DIST_IA_PERTO ? IA_PERTO : IA_LONGE;
+        // Domado (Fase 11): o pet segue o dono; as montarias ficam paradas
+        const nome = m.dono ? (def.pet ? 'pet' : 'montaria') : def.comportamento;
+        const fn = COMPORTAMENTOS[nome] || COMPORTAMENTOS.animal;
         fn(this, m, m.dtIA);
         m.dtIA = 0;
       }
@@ -1985,12 +2294,17 @@ export class Mobs {
     if (this.mundo.estaPronto(m.x, m.z)) {
       this._fisica(m, dt);
       m.tSemChunk = 0;
-    } else if (!m.morrendo) {
+    } else if (!m.morrendo && !m.dono) {
+      // (o domado só fica parado esperando o chunk voltar: nunca some)
       m.tSemChunk += dt;
       if (m.tSemChunk > TEMPO_SEM_CHUNK) this._removerMob(m, false);
     }
+    this._calcularFlags(m);
+  }
 
-    // Flags para o desenho e para a rede
+  /** Flags para o desenho e para a rede (andando, atacando, no ar...) */
+  _calcularFlags(m) {
+    const def = m.def;
     let f = 0;
     if (m.vx * m.vx + m.vz * m.vz > 0.04) f |= F_ANDANDO;
     if (m.tAtacando > 0) f |= F_ATACANDO;
@@ -2003,6 +2317,10 @@ export class Mobs {
     for (let k = 0; k < 3; k++) if (m.tCabAnim[k] > 0) f |= F_CABECA[k];
     if (m.soproId) f |= F_SOPRANDO;
     if (m.fase === 'pousado' && def.comportamento === 'dragao') f |= F_POUSADO;
+    if (m.dono) f |= F_DOMADO;
+    if (m.montadoPor) f |= F_MONTADO;
+    if (m.sentado || (m.sentadoAuto && def.pet && m.querVel === 0)) f |= F_SENTADO;
+    if (m.desmaiado > 0) f |= F_DESMAIADO;
     m.flags = f | ((m.golpes & 15) << 8);
     m.vidaFrac = Math.max(0, m.vida / def.vidaMax);
   }
@@ -2010,7 +2328,7 @@ export class Mobs {
   /** Começa a queimar no sol? (monstros, de dia, sob o céu aberto e fora da água) */
   _conferirSol(m) {
     const def = m.def;
-    if (!def.queimaNoSol || def.chefao || m.sol > 0 || !this.ceu) return;
+    if (!def.queimaNoSol || def.chefao || m.dono || m.sol > 0 || !this.ceu) return;
     if (this.ceu.ehNoite || this.ceu.luzDoDia < LUZ_SOL_QUEIMA || m.naAgua) return;
     const hx = Math.floor(m.x), hy = Math.floor(m.y + def.altura - 0.1), hz = Math.floor(m.z);
     if (!this.mundo.estaPronto(hx, hz)) return;
@@ -2432,6 +2750,7 @@ export class Mobs {
   /** O monstro `m` bateu no jogador `j` (com o efeito do tipo, se tiver: a aranha gigante envenena) */
   _baterNoJogador(m, j, qtd = m.def.dano) {
     if (!(qtd > 0)) return;
+    if (j && j.id) this._agressor.set(j.id, m.id); // o pet do jogador vai atrás de quem bateu (Fase 11)
     const ef = m.def.efeitoAtaque;
     this._danoEmJogador(j, qtd, m.x, m.y, m.z, ef ? ef.efeito : null, ef ? ef.segundos : 0);
     if (m.def.somAtaque) this._tocar(m, 'ataque');
@@ -2444,6 +2763,12 @@ export class Mobs {
    */
   _danoEmJogador(j, qtd, dx, dy, dz, efeito = null, segundos = 0) {
     if (!j || j.morto || !(qtd > 0)) return;
+    // Fase 11: montado, quem leva o golpe é a montaria (a armadura dela protege)
+    const mont = this._montariaDe(j.id);
+    if (mont && mont.desmaiado <= 0) {
+      this._danoEmDomado(mont, qtd, dx, dz);
+      return;
+    }
     const de = [dx, dy, dz];
     if (j.local) {
       this._emitirDano({ qtd, de, efeito: efeito ? (segundos > 0 ? { tipo: efeito, segundos } : efeito) : null });
@@ -2472,6 +2797,9 @@ export class Mobs {
    */
   _aplicarDano(m, qtd, dir, quem, tipo, efeito) {
     if (m.morrendo || m.descartar || !(qtd > 0)) return false;
+    // Fase 11: montarias e pets não apanham dos jogadores (nem sem querer)
+    if (m.dono) return false;
+    if (m.domando) this._falharDoma(m, 'dano'); // levou dano: a doma falha
     const def = m.def;
     m.vida -= qtd;
     m.golpes = (m.golpes + 1) & 15;
@@ -2505,8 +2833,13 @@ export class Mobs {
       }
     }
 
-    // Reação: o animal foge; o monstro vai atrás de quem bateu
-    if (!def.hostil) {
+    // Reação: o animal foge; o monstro vai atrás de quem bateu; o lobo (neutro) fica bravo
+    if (def.neutro) {
+      m.tBravo = TEMPO_RAIVA_LOBO;
+      const j = quem ? this._jogadorPorId(quem) : null;
+      if (j && !j.morto) m.alvoId = quem;
+      m.acumIA = 0;
+    } else if (!def.hostil) {
       m.estado = 'fugir';
       m.tEstado = TEMPO_FUGA;
       m.fugirX = m.x - nx;
@@ -2615,7 +2948,7 @@ export class Mobs {
    */
   atacar(id, dano, dir, efeito = null) {
     const m = this.porId.get(id);
-    if (!m || m.morrendo || m.descartar || !(dano > 0)) return false;
+    if (!m || m.morrendo || m.descartar || !(dano > 0) || m.dono) return false;
     const ef = efeitoDeArma(efeito);
     if (this.autoridade) return this._aplicarDano(m, dano, dir, this._idLocal(), 'golpe', ef);
     m.piscouLocal = performance.now();
@@ -2629,7 +2962,7 @@ export class Mobs {
   /** Um poder (fogo, raio, gelo) acertou o alvo do mob (chamado pelo Poderes) */
   _danoDePoder(alvo, qtd, tipo, efeito) {
     const m = this.porId.get(alvo.id);
-    if (!m || m.morrendo || m.descartar || !(qtd > 0)) return;
+    if (!m || m.morrendo || m.descartar || !(qtd > 0) || m.dono) return;
     // Direção do empurrão: do meu jogador para o mob
     let dir = null;
     const loc = this._local;
@@ -2658,7 +2991,7 @@ export class Mobs {
   aplicarAtaqueRemoto(quem, id, dano, dir, ataque = 'golpe', efeito = null) {
     if (!this.autoridade) return false;
     const m = this.porId.get(id);
-    if (!m || m.morrendo || m.descartar) return false;
+    if (!m || m.morrendo || m.descartar || m.dono) return false;
     return this._aplicarDano(m, dano, dir, quem, ataque, efeitoDeArma(efeito));
   }
 
@@ -2680,7 +3013,7 @@ export class Mobs {
    * `alcance` blocos? Devolve { id, t } (objeto reaproveitado; t = distância)
    * ou null. Usa as posições desenhadas na tela (no cliente, as interpoladas).
    */
-  raycastMob(origem, dir, alcance) {
+  raycastMob(origem, dir, alcance, ignorarDomados = false) {
     let dx = dir.x, dy = dir.y, dz = dir.z;
     const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (!(len > 0)) return null;
@@ -2689,7 +3022,8 @@ export class Mobs {
     let melhorT = alcance, melhor = null;
     for (let i = 0; i < this.lista.length; i++) {
       const m = this.lista[i];
-      if (m.morrendo || m.descartar) continue;
+      if (m.morrendo || m.descartar || (ignorarDomados && m.dono)) continue;
+      if (m.montadoPor && m.montadoPor === this._idLocal()) continue; // a montaria em que estou montado
       const r = m.def.raio + 0.1; // um pouquinho maior: mais fácil de acertar
       const t = raioCaixa(ox, oy, oz, dx, dy, dz,
         m.x - r, m.y, m.z - r, m.x + r, m.y + m.def.altura + 0.1, m.z + r, melhorT);
@@ -2712,7 +3046,7 @@ export class Mobs {
     l.length = 0;
     for (let i = 0; i < this.lista.length; i++) {
       const m = this.lista[i];
-      if (m.morrendo || m.descartar) continue;
+      if (m.morrendo || m.descartar || m.dono) continue; // os poderes não acertam montarias e pets
       const a = m.alvo;
       a.posicao.set(m.x, m.y + m.def.altura * 0.5 - a.raio, m.z);
       l.push(a);
@@ -3002,6 +3336,7 @@ export class Mobs {
           } else {
             const j = this._jogadorAtingido(p);
             if (j) {
+              if (p.dono && j.id) this._agressor.set(j.id, p.dono);
               if (p.dano > 0) this._danoEmJogador(j, p.dano, p.x - p.vx * 0.05, p.y, p.z - p.vz * 0.05, def.efeito, def.segundos);
               this._fimProjetil(p, p.x, p.y, p.z, j);
             }
@@ -3225,6 +3560,949 @@ export class Mobs {
   }
 
   // ------------------------------------------------------------------
+  // Montarias e pet (Fase 11)
+  // ------------------------------------------------------------------
+
+  /** O meu apelido (é ele que vira o `dono` das montarias que eu domo) */
+  _meuApelido() {
+    return this.rede && this.rede.apelido ? this.rede.apelido : 'Jogador';
+  }
+
+  /** Jogador (da lista deste quadro) com esse apelido, ou null */
+  _jogadorPorApelido(apelido) {
+    if (!apelido) return null;
+    const jog = this._jogadores;
+    for (let i = 0; i < jog.length; i++) if (jog[i].apelido === apelido) return jog[i];
+    return null;
+  }
+
+  /** A montaria em que o jogador `id` está montado, ou null */
+  _montariaDe(id) {
+    if (!id) return null;
+    for (let i = 0; i < this.lista.length; i++) {
+      const m = this.lista[i];
+      if (m.montadoPor === id && !m.morrendo && !m.descartar) return m;
+    }
+    return null;
+  }
+
+  /** (Para o player.js) O mob em que EU estou montado, ou null */
+  get minhaMontaria() {
+    return this._montariaDe(this._idLocal());
+  }
+
+  /**
+   * Números da montaria `tipo` para a física do jogador montado (calculados
+   * uma vez por tipo): { tipo, nome, meia (meia largura da caixa), altura
+   * (montaria + cavaleiro), assento (altura do assento), olhos, vel (blocos/s),
+   * vyPulo (velocidade do pulo), sobeParede, voa }. null se não é montaria.
+   */
+  paramsMontaria(tipo) {
+    const def = TIPOS_MOB[tipo];
+    if (!def || !def.montaria) return null;
+    let p = this._paramsMontaria[tipo];
+    if (p) return p;
+    // A altura do assento vem do próprio boneco (o modelo sabe onde fica a sela)
+    let assento = def.altura * 0.75;
+    try {
+      const mod = criarModelo(tipo, 0);
+      if (mod.assento && mod.assento !== mod.grupo) {
+        mod.grupo.updateMatrixWorld(true);
+        mod.assento.getWorldPosition(this._vAssento);
+        if (this._vAssento.y > 0.2 && this._vAssento.y < 4) assento = this._vAssento.y;
+      }
+      if (typeof mod.dispose === 'function') mod.dispose();
+    } catch (e) { /* sem modelo: fica a estimativa */ }
+    const mt = def.montaria;
+    p = {
+      tipo, nome: def.nome,
+      meia: Math.min(def.raio, MEIA_LARGURA_MONTADO_MAX),
+      assento,
+      altura: Math.max(def.altura, assento + 1.1),          // a cabeça do cavaleiro sentado
+      olhos: assento - QUADRIL_JOGADOR + ALTURA_OLHOS,
+      vel: mt.vel || 6,
+      vyPulo: Math.sqrt(2 * GRAVIDADE * ((mt.pulo || 1.2) + 0.05)),
+      sobeParede: !!mt.sobeParede,
+      voa: !!mt.voa,
+    };
+    this._paramsMontaria[tipo] = p;
+    return p;
+  }
+
+  /** A montaria SUA mais perto (até `raio` blocos), acordada e livre, ou null */
+  montariaPerto(raio = CONFIG.MONTAR_DIST) {
+    const loc = this._local;
+    if (!loc) return null;
+    const eu = this._meuApelido(), id = this._idLocal();
+    let melhor = null, melhorD = (raio + 0.8) * (raio + 0.8);
+    for (let i = 0; i < this.lista.length; i++) {
+      const m = this.lista[i];
+      if (m.morrendo || m.descartar || !m.def.montaria || m.dono !== eu || m.desmaiado > 0) continue;
+      if (m.montadoPor && m.montadoPor !== id) continue;
+      const dx = m.x - loc.posicao.x, dy = m.y - loc.posicao.y, dz = m.z - loc.posicao.z;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < melhorD) { melhorD = d; melhor = m; }
+    }
+    return melhor;
+  }
+
+  /**
+   * O jogador local monta na montaria `id`. Confere aqui (é minha, tem sela,
+   * está perto e acordada). No cliente, pede ao anfitrião, que confirma (ou
+   * desfaz) pelo `donoMob`. Devolve { ok, msg, tipo, nome }.
+   */
+  montar(id) {
+    const m = this.porId.get(id);
+    const loc = this._local;
+    if (!m || m.morrendo || m.descartar || !m.def.montaria || !loc) return { ok: false, msg: 'Não dá para montar nisso.' };
+    const eu = this._meuApelido(), meuId = this._idLocal();
+    if (m.dono !== eu) return { ok: false, msg: m.dono ? 'Essa montaria é de ' + m.dono + '.' : 'Primeiro você precisa domar esse bicho.' };
+    if (m.desmaiado > 0) return { ok: false, msg: m.nomeDono + ' está desmaiado. Ele volta para casa logo.' };
+    if (!m.sela) return { ok: false, msg: 'Coloque uma sela (botão direito nele com a sela na mão) para montar.' };
+    if (m.montadoPor && m.montadoPor !== meuId) return { ok: false, msg: 'Alguém já está montado.' };
+    const dx = m.x - loc.posicao.x, dz = m.z - loc.posicao.z;
+    if (dx * dx + dz * dz > (CONFIG.MONTAR_DIST + 1) ** 2) return { ok: false, msg: 'Chegue mais perto para montar.' };
+    m.montadoPor = meuId;
+    m.sentado = false;
+    m.tChamado = 0;
+    if (this.autoridade) this._enviarDono(m);
+    else if (this.rede && typeof this.rede.enviarMontar === 'function') this.rede.enviarMontar(id);
+    return { ok: true, tipo: m.tipo, nome: m.nomeDono };
+  }
+
+  /** O jogador local desce da montaria (se estiver montado) */
+  desmontar() {
+    const m = this._montariaDe(this._idLocal());
+    if (!m) return;
+    m.montadoPor = null;
+    m.vx = 0; m.vz = 0;
+    if (this.autoridade) this._enviarDono(m);
+    else if (this.rede && typeof this.rede.enviarDesmontar === 'function') this.rede.enviarDesmontar();
+  }
+
+  /** (Anfitrião) Um cliente pediu para montar (ele já montou na tela dele; aqui confirma ou desfaz) */
+  pedidoMontar(quem, apelido, id) {
+    const m = this.porId.get(id);
+    if (!m || m.morrendo || m.descartar || !m.def.montaria) return;
+    const e = this.rede && typeof this.rede.estadoJogador === 'function' ? this.rede.estadoJogador(quem) : null;
+    let ok = m.dono === apelido && m.sela && m.desmaiado <= 0 && (!m.montadoPor || m.montadoPor === quem);
+    if (ok && e) {
+      const dx = e.x - m.x, dz = e.z - m.z;
+      if (dx * dx + dz * dz > (CONFIG.MONTAR_DIST + 4) ** 2) ok = false; // folga para o atraso da rede
+    }
+    if (ok) {
+      const outra = this._montariaDe(quem); // ninguém monta em dois ao mesmo tempo
+      if (outra && outra !== m) this._desmontarMob(outra);
+      m.montadoPor = quem;
+      m.sentado = false;
+      m.tChamado = 0;
+    }
+    this._enviarDono(m);
+  }
+
+  /** (Anfitrião) Um cliente desceu da montaria */
+  pedidoDesmontar(quem) {
+    const m = this._montariaDe(quem);
+    if (m) this._desmontarMob(m);
+  }
+
+  /** (Anfitrião) Alguém saiu da sala: desce da montaria e a doma dele falha */
+  jogadorSaiu(quem) {
+    this.pedidoDesmontar(quem);
+    for (let i = 0; i < this.lista.length; i++) {
+      const m = this.lista[i];
+      if (m.domando && m.domando.quem === quem) this._falharDoma(m, 'sumiu');
+    }
+    this._agressor.delete(quem);
+  }
+
+  _desmontarMob(m) {
+    m.montadoPor = null;
+    m.vx = 0; m.vy = 0; m.vz = 0;
+    this._enviarDono(m);
+  }
+
+  /**
+   * (Anfitrião, todo quadro) A montaria segue o cavaleiro: quem controla é
+   * o dono, e aqui só copiamos a posição dele (a minha, ou a que o cliente
+   * mandou pela rede, andando suave até ela).
+   */
+  _simularMontada(m, dt) {
+    const quem = m.montadoPor;
+    const loc = this._local;
+    let yaw, noAr;
+    if (loc && quem === this._idLocal()) {
+      m.x = loc.posicao.x; m.y = loc.posicao.y; m.z = loc.posicao.z;
+      yaw = Number.isFinite(loc.yaw) ? loc.yaw : m.yaw;
+      noAr = !!loc.noAr;
+    } else {
+      const e = this.rede && typeof this.rede.estadoJogador === 'function' ? this.rede.estadoJogador(quem) : null;
+      if (!e) { this._desmontarMob(m); return; } // o cavaleiro sumiu
+      const ddx = e.x - m.x, ddy = e.y - m.y, ddz = e.z - m.z;
+      if (ddx * ddx + ddy * ddy + ddz * ddz > 64) { m.x = e.x; m.y = e.y; m.z = e.z; } // teletransportou
+      else {
+        const k = Math.min(1, dt * 15); // as posições chegam ~15 vezes por segundo
+        m.x += ddx * k; m.y += ddy * k; m.z += ddz * k;
+      }
+      yaw = e.yaw;
+      noAr = !!e.noAr;
+    }
+    if (dt > 0) {
+      m.vx = (m.x - m.xMont) / dt;
+      m.vz = (m.z - m.zMont) / dt;
+      if (m.vx * m.vx + m.vz * m.vz > 900) { m.vx = 0; m.vz = 0; }
+    }
+    m.xMont = m.x; m.zMont = m.z;
+    if (Number.isFinite(yaw)) { m.yaw = yaw; m.yawAlvo = yaw; }
+    m.noChao = !noAr;
+    m.naAgua = false;
+    m.vy = 0;
+    // O lobo montado morde os monstros que chegam perto
+    if (m.def.montaria && m.def.montaria.mordida) this._morderPerto(m);
+  }
+
+  /**
+   * Botão direito do jogador local num mob, com `item` na mão (ou null) e o
+   * Shift. Decide: domar, dar osso, pôr sela ou armadura, montar, mandar o pet
+   * sentar. Devolve { acao, gastar, msg } (gastar = quantos do item da mão
+   * saem do inventário: quem tira é o player.js) ou null (nada a fazer).
+   */
+  interagir(id, item, shift) {
+    const m = this.porId.get(id);
+    if (!m || m.morrendo || m.descartar) return null;
+    const def = m.def;
+    const eu = this._meuApelido();
+    if (m.dono) {
+      if (m.dono !== eu) return { acao: null, gastar: 0, msg: 'Esse é o ' + m.nomeDono + '.' };
+      if (def.pet && shift) {
+        const vaiSentar = !m.sentado;
+        this._pedirSentar(m);
+        return { acao: 'sentar', gastar: 0, msg: vaiSentar ? 'Senta! (Shift + botão direito de novo: pode vir)' : 'Pode vir!' };
+      }
+      if (!def.montaria) return null;
+      if (m.desmaiado > 0) return { acao: null, gastar: 0, msg: m.nomeDono + ' está desmaiado.' };
+      if (item === 'sela') {
+        if (m.sela) return { acao: null, gastar: 0, msg: m.nomeDono + ' já tem sela.' };
+        this._pedirEquipar(m, 'sela');
+        return { acao: 'sela', gastar: 1, msg: 'Sela colocada! Aperte R perto dele para montar.' };
+      }
+      if (typeof item === 'string' && item.startsWith('armadura_montaria_') && obterItem(item)) {
+        if (m.armadura === item.slice(18)) return { acao: null, gastar: 0, msg: 'Ele já está com essa armadura.' };
+        this._pedirEquipar(m, item);
+        return { acao: 'armadura', gastar: 1, msg: 'Armadura colocada em ' + m.nomeDono + '!' };
+      }
+      if (!m.sela) return { acao: null, gastar: 0, msg: 'Coloque uma sela (botão direito nele com a sela na mão) para montar.' };
+      return { acao: 'montar', gastar: 0 };
+    }
+    // Ainda selvagem: dá para domar com esse item?
+    const dom = def.domar;
+    if (!dom || !item || item !== dom.item) return null;
+    if (dom.vidaMaxFrac && m.vidaFrac > dom.vidaMaxFrac + 0.005) {
+      return { acao: null, gastar: 0, msg: 'A aranha gigante só aceita quando está bem fraca (menos de 30% de vida).' };
+    }
+    if (m.domando) return { acao: null, gastar: 0, msg: m.domando.quem === this._idLocal() ? null : 'Alguém já está domando esse bicho.' };
+    if (this._domandoLocal && this._domandoLocal.id === id && this._domandoLocal.dur > 0) return { acao: null, gastar: 0 };
+    if (this.autoridade) {
+      const r = this._comecarDomar(m, this._idLocal(), eu, item);
+      return r.ok ? { acao: 'domar', gastar: 1 } : { acao: null, gastar: 0, msg: r.msg };
+    }
+    // Cliente: pede ao anfitrião (se ele recusar, devolve o item com `ganhou`)
+    if (this.rede && typeof this.rede.enviarDomar === 'function') this.rede.enviarDomar(id, item);
+    return { acao: 'domar', gastar: 1 };
+  }
+
+  _pedirEquipar(m, item) {
+    if (this.autoridade) this._equipar(m, item, this._idLocal(), this._meuApelido());
+    else if (this.rede && typeof this.rede.enviarEquiparMontaria === 'function') this.rede.enviarEquiparMontaria(m.id, item);
+  }
+
+  _pedirSentar(m) {
+    if (this.autoridade) this._sentar(m, this._meuApelido());
+    else if (this.rede && typeof this.rede.enviarSentar === 'function') this.rede.enviarSentar(m.id);
+  }
+
+  /** (Anfitrião) Um cliente quer domar (ou dar um osso): se não der, o item volta para ele */
+  pedidoDomar(quem, apelido, id, item) {
+    const m = this.porId.get(id);
+    const r = m && !m.morrendo && !m.descartar ? this._comecarDomar(m, quem, apelido, item)
+      : { ok: false, msg: 'Esse bicho não está mais aqui.' };
+    if (r.ok) return;
+    this._darItem(quem, item, 1);
+    this._notificarDoma(quem, m, 'recusado', 0, r.msg);
+  }
+
+  /** (Anfitrião) Um cliente quer pôr a sela ou a armadura */
+  pedidoEquipar(quem, apelido, id, item) {
+    const m = this.porId.get(id);
+    if (!m || m.morrendo || m.descartar) { this._darItem(quem, item, 1); return; }
+    this._equipar(m, item, quem, apelido);
+  }
+
+  /** (Anfitrião) Um cliente mandou o pet sentar ou levantar */
+  pedidoSentar(quem, apelido, id) {
+    this._sentar(this.porId.get(id), apelido);
+  }
+
+  /** (Anfitrião) Um cliente tocou o apito */
+  pedidoApito(quem, apelido) {
+    const e = this.rede && typeof this.rede.estadoJogador === 'function' ? this.rede.estadoJogador(quem) : null;
+    if (e) this._apitar(apelido, e);
+  }
+
+  /** (Anfitrião) Põe a sela ou a armadura. O que já estava (ou o que não serviu) volta para o jogador. */
+  _equipar(m, item, quem, apelido) {
+    if (!m || m.dono !== apelido || !m.def.montaria || m.desmaiado > 0) { this._darItem(quem, item, 1); return false; }
+    if (item === 'sela') {
+      if (m.sela) { this._darItem(quem, 'sela', 1); return false; }
+      m.sela = true;
+    } else {
+      const mat = typeof item === 'string' && item.startsWith('armadura_montaria_') ? item.slice(18) : null;
+      if (!mat || !obterItem(item)) return false;
+      const antes = m.armadura;
+      if (antes === mat) { this._darItem(quem, item, 1); return false; }
+      m.armadura = mat;
+      if (antes) this._darItem(quem, 'armadura_montaria_' + antes, 1);
+    }
+    this._enviarDono(m);
+    return true;
+  }
+
+  /** (Anfitrião) Senta ou levanta o pet */
+  _sentar(m, apelido) {
+    if (!m || m.dono !== apelido || !m.def.pet) return;
+    m.sentado = !m.sentado;
+    m.sentadoAuto = false;
+    m.tChamado = 0;
+    m.querVel = 0;
+    this._enviarDono(m);
+  }
+
+  /** Dá um item a um jogador (o meu inventário, ou `ganhou` pela rede) */
+  _darItem(quem, item, qtd) {
+    if (typeof item !== 'string' || !obterItem(item) || !(qtd > 0)) return;
+    if (this.rede && typeof this.rede.darItem === 'function') this.rede.darItem(quem, item, qtd);
+  }
+
+  /** (Anfitrião) Começa a doma, ou dá mais um osso ao cachorro. Devolve { ok, msg }. */
+  _comecarDomar(m, quem, apelido, item) {
+    const def = m.def, dom = def.domar;
+    if (m.dono || !dom) return { ok: false, msg: 'Esse bicho não pode ser domado.' };
+    if (item !== dom.item) return { ok: false, msg: 'Ele não quer isso.' };
+    if (m.desmaiado > 0 || m.morrendo) return { ok: false, msg: 'Agora não dá.' };
+    if (dom.vidaMaxFrac && m.vida / def.vidaMax > dom.vidaMaxFrac + 0.005) {
+      return { ok: false, msg: 'A aranha gigante só aceita quando está bem fraca (menos de 30% de vida).' };
+    }
+    if (m.estado === 'fugir' || m.tBravo > 0) return { ok: false, msg: 'Ele está assustado. Espere ele se acalmar.' };
+    if (m.domando) return { ok: false, msg: 'Alguém já está domando esse bicho.' };
+    const j = this._jogadorPorId(quem);
+    if (!j || !j.posicao || j.morto) return { ok: false, msg: 'Agora não dá.' };
+    const dx = j.posicao.x - m.x, dz = j.posicao.z - m.z;
+    if (dx * dx + dz * dz > (CONFIG.DOMAR_DIST + 1.5) ** 2) return { ok: false, msg: 'Chegue mais perto.' };
+    m.querVel = 0;
+    m.alvoId = null;
+    m.estado = 'passear';
+    if (dom.vezes > 1) {
+      // Cachorro: cada osso enche 1/3 da confiança na hora
+      m.confianca = Math.min(1, m.confianca + 1 / dom.vezes);
+      m.tConfianca = 0;
+      this._emitirCoracoes(m, 4);
+      if (m.confianca >= 0.999) this._concluirDoma(m, quem, apelido);
+      else this._notificarDoma(quem, m, 'progresso', m.confianca);
+      return { ok: true };
+    }
+    // O tempo da doma é contado no relógio de verdade (como a barra na tela):
+    // num computador lento o tempo do jogo anda mais devagar que o relógio
+    m.domando = { quem, apelido, ini: performance.now() };
+    this._notificarDoma(quem, m, 'comecou', 0);
+    return { ok: true };
+  }
+
+  /** (Anfitrião, todo quadro) A doma continua? Se o jogador se afastou ou sumiu, falha. */
+  _progredirDoma(m, dt) {
+    const d = m.domando;
+    const j = this._jogadorPorId(d.quem);
+    if (!j || !j.posicao || j.morto) { this._falharDoma(m, 'longe'); return; }
+    const dx = j.posicao.x - m.x, dz = j.posicao.z - m.z;
+    if (dx * dx + dz * dz > (CONFIG.DOMAR_DIST + 0.5) ** 2) { this._falharDoma(m, 'longe'); return; }
+    m.yawAlvo = Math.atan2(-dx, -dz);
+    if (performance.now() - d.ini >= CONFIG.DOMAR_TEMPO_S * 1000) this._concluirDoma(m, d.quem, d.apelido);
+  }
+
+  _falharDoma(m, motivo) {
+    const d = m.domando;
+    m.domando = null;
+    if (d) this._notificarDoma(d.quem, m, 'falhou', 0, motivo);
+  }
+
+  /** (Anfitrião) A confiança encheu: agora o bicho tem dono */
+  _concluirDoma(m, quem, apelido) {
+    m.domando = null;
+    m.confianca = 0;
+    const def = m.def;
+    let alvo = m;
+    if (def.domar && def.domar.vira && TIPOS_MOB[def.domar.vira]) {
+      // A aranha gigante vira a aranha montaria (outro tipo = outro mob, no mesmo lugar)
+      const id = this.criarMob(def.domar.vira, m.x, m.y, m.z, m.yaw, { dono: apelido, vida: 1 });
+      this._removerMob(m, false);
+      alvo = id ? this.porId.get(id) : null;
+      if (!alvo) return;
+    } else {
+      alvo.vida = def.vidaMax;
+      alvo.estado = 'passear';
+      alvo.alvoId = null;
+      alvo.tBravo = 0;
+      this._definirDono(alvo, apelido, false);
+    }
+    this._enviarDono(alvo, true);
+    this._emitirCoracoes(alvo, 14);
+    this._notificarDoma(quem, alvo, 'domado', 1);
+  }
+
+  /** Conta para quem está domando como foi (a barra de confiança e as mensagens) */
+  _notificarDoma(quem, m, estado, conf, motivo = '') {
+    const tipo = m ? m.tipo : '';
+    if (quem === this._idLocal()) {
+      this._aoEstadoDoma(m ? m.id : 0, estado, conf, motivo, tipo);
+    } else if (this.rede && typeof this.rede.enviarDomarEstado === 'function') {
+      this.rede.enviarDomarEstado(quem, { id: m ? m.id : 0, estado, conf, motivo: motivo || '', mob: tipo });
+    }
+  }
+
+  /** (Cliente) Chegou o `domarEstado` do anfitrião */
+  receberEstadoDoma(d) {
+    if (!d) return;
+    this._aoEstadoDoma(d.id, d.estado, d.conf, d.motivo, d.mob);
+  }
+
+  /** A barra de confiança e as mensagens de quem está domando (só neste computador) */
+  _aoEstadoDoma(id, estado, conf, motivo, tipo) {
+    const nome = NOME_CURTO[tipo] || (TIPOS_MOB[tipo] ? TIPOS_MOB[tipo].nome : 'Bicho');
+    const msg = (t) => { if (t && this.ui && typeof this.ui.mostrarMensagem === 'function') this.ui.mostrarMensagem(t); };
+    const agora = performance.now();
+    if (estado === 'comecou') {
+      this._domandoLocal = { id, ini: agora, conf: 0, dur: CONFIG.DOMAR_TEMPO_S * 1000, ate: agora + CONFIG.DOMAR_TEMPO_S * 1000 + 4000, nome };
+    } else if (estado === 'progresso') {
+      this._domandoLocal = { id, ini: agora, conf: Math.max(0, Math.min(1, conf || 0)), dur: 0, ate: agora + 2500, nome };
+      msg(nome + ' gostou! Confiança ' + Math.round((conf || 0) * 3) + ' de 3.');
+    } else if (estado === 'domado') {
+      // (na tela e no chat: dá para ler de novo depois)
+      this._fimDomarLocal();
+      const def = TIPOS_MOB[tipo];
+      if (def && def.pet) this._avisar(nome + ' domado! Ele vai te seguir. (Shift + botão direito: senta)');
+      else this._avisar(nome + ' domado! Use uma sela e aperte R para montar');
+      if (this.som && typeof this.som.domar === 'function') this.som.domar(1);
+    } else if (estado === 'falhou') {
+      this._fimDomarLocal();
+      this._avisar(motivo === 'dano' ? 'A doma falhou: ele levou dano e se assustou!'
+        : motivo === 'longe' ? 'A doma falhou: você se afastou demais.' : 'A doma falhou.');
+    } else if (estado === 'recusado') {
+      this._fimDomarLocal();
+      msg(motivo || 'Não deu para domar.');
+    }
+  }
+
+  /** Desenha a barra de confiança (todo quadro, enquanto eu estiver domando) */
+  _atualizarUiDoma() {
+    const d = this._domandoLocal;
+    if (!d) return;
+    const agora = performance.now();
+    if (agora > d.ate) { this._fimDomarLocal(); return; }
+    const frac = d.dur > 0 ? Math.min(0.99, (agora - d.ini) / d.dur) : d.conf;
+    if (this.ui && typeof this.ui.mostrarConfianca === 'function') this.ui.mostrarConfianca(frac, d.nome);
+  }
+
+  _fimDomarLocal() {
+    this._domandoLocal = null;
+    if (this.ui && typeof this.ui.mostrarConfianca === 'function') this.ui.mostrarConfianca(null);
+  }
+
+  /** Muda o dono (e o nome que aparece acima: "Cavalo de Pai") */
+  _definirDono(m, apelido, enviar = true) {
+    m.dono = apelido || null;
+    m.nomeDono = m.dono ? (NOME_CURTO[m.tipo] || m.def.nome) + ' de ' + m.dono : '';
+    if (!m.dono) { m.sela = false; m.armadura = null; m.montadoPor = null; m.sentado = false; }
+    else { m.alvoId = null; m.tBravo = 0; m.domando = null; }
+    this._aplicarVisualDono(m);
+    if (enviar) this._enviarDono(m);
+  }
+
+  /** Sela e armadura aparecem no boneco */
+  _aplicarVisualDono(m) {
+    const mod = m.modelo;
+    if (!mod) return;
+    if (typeof mod.definirSela === 'function') mod.definirSela(!!m.sela);
+    if (typeof mod.definirArmaduraMontaria === 'function') mod.definirArmaduraMontaria(m.armadura || null);
+  }
+
+  /** (Anfitrião) Avisa todos: dono, sela, armadura, quem está montado e se está sentado */
+  _enviarDono(m, novo = false) {
+    this._aplicarVisualDono(m);
+    if (!this.autoridade || !this.rede || typeof this.rede.enviarDonoMob !== 'function') return;
+    this.rede.enviarDonoMob(m.id, { dono: m.dono, sela: m.sela, arm: m.armadura, mont: m.montadoPor, sent: m.sentado, novo: !!novo });
+  }
+
+  /** (Cliente) Chegou o `donoMob` (ou o extra do `mobNovo`): { dono, sela, arm, mont, sent, novo } */
+  receberDono(id, d) {
+    if (this.autoridade || !d) return;
+    const m = this.porId.get(id);
+    if (!m) return;
+    const def = m.def;
+    m.sela = !!d.sela && !!def.montaria;
+    m.armadura = def.montaria && typeof d.arm === 'string' ? d.arm : null;
+    m.sentado = !!d.sent;
+    m.montadoPor = typeof d.mont === 'string' && d.mont ? d.mont : null;
+    const sela = m.sela, arm = m.armadura, mont = m.montadoPor, sent = m.sentado;
+    this._definirDono(m, typeof d.dono === 'string' ? d.dono : null, false);
+    if (m.dono) { m.sela = sela; m.armadura = arm; m.montadoPor = mont; m.sentado = sent; this._aplicarVisualDono(m); }
+    if (d.novo) this._emitirCoracoes(m, 14);
+  }
+
+  /** (Cliente) Um aviso do anfitrião só para mim ("Seu cavalo desmaiou!") */
+  receberAvisoMob(texto) {
+    if (typeof texto === 'string' && texto) this._avisar(texto);
+  }
+
+  /** Aviso para o dono (neste computador ou pela rede) */
+  _avisarDono(apelido, texto) {
+    if (!apelido) return;
+    if (apelido === this._meuApelido()) { this._avisar(texto); return; }
+    const j = this._jogadorPorApelido(apelido);
+    if (j && this.rede && typeof this.rede.enviarAvisoMob === 'function') this.rede.enviarAvisoMob(j.id, texto);
+  }
+
+  _emitirCoracoes(m, qtd) {
+    const part = this.particulas;
+    if (!m || !part || typeof part.emitir !== 'function' || !this._pertoDeMim(m.x, m.y, m.z, 48)) return;
+    EF_CORACAO.x = m.x; EF_CORACAO.y = m.y + m.def.altura + 0.2; EF_CORACAO.z = m.z; EF_CORACAO.qtd = qtd;
+    part.emitir(EF_CORACAO);
+  }
+
+  /** O jogador local tocou o apito: chama as montarias e o pet dele */
+  apito() {
+    const s = this.som;
+    if (s && typeof s.apito === 'function') s.apito();
+    const loc = this._local;
+    if (!loc) return;
+    if (this.autoridade) this._apitar(this._meuApelido(), loc.posicao);
+    else if (this.rede && typeof this.rede.enviarApito === 'function') this.rede.enviarApito();
+  }
+
+  /** (Anfitrião) Quem está a mais de 30 blocos teleporta para perto; quem está perto vem andando */
+  _apitar(apelido, p) {
+    if (!p || !Number.isFinite(p.x)) return 0;
+    let n = 0;
+    for (let i = 0; i < this.lista.length; i++) {
+      const m = this.lista[i];
+      if (m.dono !== apelido || m.morrendo || m.descartar || m.montadoPor || m.desmaiado > 0) continue;
+      n++;
+      const dx = m.x - p.x, dz = m.z - p.z;
+      if (dx * dx + dz * dz > CONFIG.APITO_DIST_TELEPORTE ** 2 || Math.abs(m.y - p.y) > 20) {
+        this._teleportarPerto(m, p.x, p.y, p.z, 3);
+      } else {
+        m.chamadoX = p.x; m.chamadoZ = p.z; m.tChamado = TEMPO_CHAMADO;
+      }
+      m.sentadoAuto = false;
+      if (m.sentado) { m.sentado = false; this._enviarDono(m); }
+    }
+    return n;
+  }
+
+  /** (Anfitrião) Leva o mob para um lugar livre perto de (x, y, z) (sem lugar: em cima do ponto) */
+  _teleportarPerto(m, x, y, z, raio) {
+    const by = Math.floor(y);
+    for (let k = 0; k < 14; k++) {
+      const ang = Math.random() * Math.PI * 2, d = 1.5 + Math.random() * raio;
+      const xx = Math.floor(x + Math.cos(ang) * d), zz = Math.floor(z + Math.sin(ang) * d);
+      const yy = this._acharChaoPerto(m.def, xx, by, zz);
+      if (yy < 0) continue;
+      this._moverPara(m, xx + 0.5, yy, zz + 0.5);
+      return true;
+    }
+    // Sem lugar conferido (o anfitrião não tem esse pedaço do mundo carregado):
+    // aparece um pouco ao lado do dono (se cair dentro de um bloco, a física o tira de lá)
+    const ang = Math.random() * Math.PI * 2;
+    this._moverPara(m, x + Math.cos(ang) * 1.5, y + 0.2, z + Math.sin(ang) * 1.5);
+    return false;
+  }
+
+  _moverPara(m, x, y, z) {
+    const part = this.particulas;
+    if (part && typeof part.emitir === 'function') {
+      for (const [px, py, pz] of [[m.x, m.y, m.z], [x, y, z]]) {
+        if (!this._pertoDeMim(px, py, pz, 48)) continue;
+        EF_POF.x = px; EF_POF.y = py + m.def.altura * 0.5; EF_POF.z = pz;
+        EF_POF.espalhar = Math.max(0.6, m.def.raio * 1.5);
+        part.emitir(EF_POF);
+      }
+    }
+    m.x = x; m.y = y; m.z = z;
+    m.vx = 0; m.vy = 0; m.vz = 0;
+    m.tChamado = 0;
+    m.tSemChunk = 0;
+  }
+
+  /** Apito com o bicho perto: anda até onde o dono estava. Devolve true enquanto estiver indo. */
+  _seguirChamado(m, dt) {
+    if (!(m.tChamado > 0)) return false;
+    m.tChamado -= dt;
+    let dx = m.chamadoX - m.x, dz = m.chamadoZ - m.z;
+    const d = Math.sqrt(dx * dx + dz * dz);
+    if (d < 2.5 || m.tChamado <= 0) { m.tChamado = 0; m.querVel = 0; return false; }
+    dx /= d; dz /= d;
+    m.yawAlvo = Math.atan2(-dx, -dz);
+    m.estado = 'chamado';
+    this._andarPara(m, dx, dz, Math.max(3.5, m.def.velocidade * 2.5), dt, QUEDA_MAX_PERSEGUIR);
+    return true;
+  }
+
+  /** Monstro que vale como alvo do pet ou do lobo: hostil, vivo, sem dono e que não voa */
+  _monstroAlvo(t) {
+    // (quem está sendo domado fica de fora: senão o lobo estragaria a doma da aranha gigante)
+    return !!t && !t.morrendo && !t.descartar && t.def.hostil && !t.dono && !t.def.voa && !t.domando;
+  }
+
+  /** Monstro mais perto de (x, z) até `raio` blocos, ou null */
+  _monstroPerto(x, z, raio) {
+    let melhor = null, melhorD = raio * raio;
+    for (let i = 0; i < this.lista.length; i++) {
+      const t = this.lista[i];
+      if (!this._monstroAlvo(t)) continue;
+      const dx = t.x - x, dz = t.z - z;
+      const d = dx * dx + dz * dz;
+      if (d < melhorD) { melhorD = d; melhor = t; }
+    }
+    return melhor;
+  }
+
+  /**
+   * Pet e lobo domado: vão atrás do monstro que bateu no dono (o lobo também
+   * guarda: morde os monstros perto dele, se o dono estiver por perto).
+   * Devolve true enquanto estiver atacando.
+   */
+  _guardar(m, dt) {
+    const dono = this._jogadorPorApelido(m.dono);
+    if (!dono || !dono.posicao) return false;
+    const def = m.def;
+    let alvo = null;
+    const idAgr = this._agressor.get(dono.id);
+    if (idAgr) {
+      const t = this.porId.get(idAgr);
+      const dx = t ? t.x - m.x : 0, dz = t ? t.z - m.z : 0;
+      if (this._monstroAlvo(t) && dx * dx + dz * dz < 400) alvo = t;
+      else this._agressor.delete(dono.id);
+    }
+    if (!alvo && def.montaria && def.montaria.mordida) {
+      const dxD = dono.posicao.x - m.x, dzD = dono.posicao.z - m.z;
+      if (dxD * dxD + dzD * dzD < DIST_GUARDA_DONO * DIST_GUARDA_DONO) alvo = this._monstroPerto(m.x, m.z, DIST_GUARDA);
+    }
+    if (!alvo) return false;
+    let dx = alvo.x - m.x, dz = alvo.z - m.z;
+    const d = Math.sqrt(dx * dx + dz * dz) || 0.01;
+    dx /= d; dz /= d;
+    m.yawAlvo = Math.atan2(-dx, -dz);
+    m.estado = 'atacar';
+    m.sentadoAuto = false;
+    const alc = def.raio + alvo.def.raio + 0.9;
+    if (d <= alc && Math.abs(alvo.y - m.y) < 2.5) {
+      m.querVel = 0;
+      if (m.tMordida <= 0) this._morder(m, alvo, dono.id);
+    } else {
+      this._andarPara(m, dx, dz, def.pet ? 5.5 : 6, dt, QUEDA_MAX_PERSEGUIR);
+    }
+    return true;
+  }
+
+  /** Mordida do pet ou do lobo no monstro `t` (o XP da morte vai para o dono, `quem`) */
+  _morder(m, t, quem) {
+    m.tMordida = RECARGA_MORDIDA;
+    m.tAtacando = 0.45;
+    const dano = m.def.pet ? CONFIG.PET_DANO : CONFIG.LOBO_DANO;
+    const dir = this._dirPoder;
+    dir.x = t.x - m.x; dir.y = 0; dir.z = t.z - m.z;
+    this._aplicarDano(t, dano, dir, quem, 'golpe', null);
+    if (!t.morrendo) { t.alvoMob = m.id; t.tAlvoMob = 6; } // o monstro revida no bicho por uns segundos
+    this._tocar(m, 'ataque');
+  }
+
+  /** Lobo montado: morde o monstro que chegar perto (1 vez por segundo) */
+  _morderPerto(m) {
+    if (m.tMordida > 0) return;
+    const t = this._monstroPerto(m.x, m.z, m.def.raio + 2);
+    if (!t || Math.abs(t.y - m.y) > 2.5) return;
+    this._morder(m, t, m.montadoPor);
+  }
+
+  /**
+   * Monstro mordido por um pet/lobo: revida no bicho (por uns segundos, se
+   * ele estiver perto). Devolve true enquanto estiver cuidando disso.
+   */
+  _revidar(m, dt) {
+    const t = this.porId.get(m.alvoMob);
+    if (!t || t.morrendo || t.descartar || t.desmaiado > 0 || !t.dono || t.montadoPor) { m.alvoMob = 0; return false; }
+    let dx = t.x - m.x, dz = t.z - m.z;
+    const d = Math.sqrt(dx * dx + dz * dz) || 0.01;
+    if (d > 14) { m.alvoMob = 0; return false; }
+    dx /= d; dz /= d;
+    m.yawAlvo = Math.atan2(-dx, -dz);
+    const alc = m.def.alcance + m.def.raio + t.def.raio;
+    if (d <= alc && Math.abs(t.y - m.y) < 2) {
+      m.estado = 'atacar';
+      m.querVel = 0;
+      if (m.recarga <= 0) {
+        m.recarga = RECARGA_ATAQUE;
+        m.tAtacando = 0.45;
+        this._danoEmDomado(t, m.def.dano, m.x, m.z);
+      }
+    } else {
+      m.estado = 'perseguir';
+      this._andarPara(m, dx, dz, m.def.velocidade, dt, QUEDA_MAX_PERSEGUIR);
+    }
+    return true;
+  }
+
+  /** (Anfitrião) Um monstro machucou uma montaria ou pet. A armadura protege; sem vida, ele desmaia. */
+  _danoEmDomado(m, qtd, deX, deZ) {
+    if (!m || m.morrendo || m.descartar || m.desmaiado > 0 || !(qtd > 0)) return;
+    const arm = m.armadura ? obterItem('armadura_montaria_' + m.armadura) : null;
+    const red = Math.min(0.8, (arm && arm.defesaMontaria ? arm.defesaMontaria : 0) * DEFESA_MONTARIA_POR_PONTO);
+    m.vida -= qtd * (1 - red);
+    m.golpes = (m.golpes + 1) & 15;
+    m.vidaFrac = Math.max(0, m.vida / m.def.vidaMax);
+    this._mostrarDano(m, m.vidaFrac, true);
+    // empurrãozinho (sem montado: quem anda com a montaria montada é o cavaleiro)
+    if (!m.montadoPor && Number.isFinite(deX)) {
+      const ex = m.x - deX, ez = m.z - deZ, len = Math.sqrt(ex * ex + ez * ez) || 1;
+      m.vx = ex / len * RECUO_GOLPE * 0.5; m.vz = ez / len * RECUO_GOLPE * 0.5;
+    }
+    if (m.vida <= 0) this._desmaiar(m);
+  }
+
+  /** Sem vida: deita, o cavaleiro cai e em 60 s ele acorda na casa do dono */
+  _desmaiar(m) {
+    m.vida = 0;
+    m.vidaFrac = 0;
+    m.desmaiado = CONFIG.DESMAIO_S;
+    m.sentado = false; m.sentadoAuto = false; m.tChamado = 0; m.domando = null;
+    m.montadoPor = null;
+    m.querVel = 0;
+    this._enviarDono(m);
+    this._avisarDono(m.dono, m.nomeDono + ' desmaiou! Ele volta para casa em 1 minuto.');
+  }
+
+  /** Acorda (ou caiu no abismo): aparece ao lado da casa do dono, com a vida cheia */
+  _voltarParaCasa(m) {
+    let pos = null;
+    try { pos = this.obterCasaDe ? this.obterCasaDe(m.dono) : null; } catch (e) { pos = null; }
+    if (!Array.isArray(pos) || pos.length !== 3 || !pos.every(Number.isFinite)) {
+      const n = typeof this.mundo.pontoDeNascimento === 'function' ? this.mundo.pontoDeNascimento() : null;
+      pos = n ? [n.x, n.y, n.z] : [m.x, Math.max(m.y, 2) + 2, m.z];
+    }
+    m.desmaiado = 0;
+    m.vida = m.def.vidaMax;
+    m.vidaFrac = 1;
+    this._moverPara(m, pos[0] + 1, pos[1] + 0.5, pos[2]);
+    this._enviarDono(m);
+  }
+
+  // ----- Ovo de dragão (anfitrião) -----
+
+  /** O mundo mudou um bloco: um ovo foi colocado (guarda quem pôs) ou tirado */
+  _aoMudarBloco(ev) {
+    if (!this.autoridade || B.OVO_DRAGAO === undefined) return;
+    if (ev.lote && Array.isArray(ev.lista)) {
+      for (const b of ev.lista) this._conferirOvo(b[0], b[1], b[2], b[3], b[5], ev.origem);
+    } else {
+      this._conferirOvo(ev.x, ev.y, ev.z, ev.id, ev.anterior, ev.origem);
+    }
+  }
+
+  _conferirOvo(x, y, z, id, anterior, origem) {
+    const OVO = B.OVO_DRAGAO;
+    if (id === anterior) return; // só o estado mudou (é o próprio ovo mostrando o progresso)
+    const chave = x + ',' + y + ',' + z;
+    if (id === OVO) {
+      // Quem pôs: eu (origem 'local') ou o cliente que a rede está atendendo agora
+      const autor = origem === 'rede' ? (this.rede && this.rede.autorBloco) : this._meuApelido();
+      this._ovos.set(chave, { x, y, z, dono: autor || this._meuApelido(), tempo: 0 });
+    } else if (anterior === OVO) {
+      this._ovos.delete(chave);
+    }
+  }
+
+  /** Tem uma fogueira a até 3 blocos do ovo? */
+  _fogueiraPerto(x, y, z) {
+    const r = CONFIG.OVO_DIST_FOGUEIRA, F = B.FOGUEIRA;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (this.mundo.obterBloco(x + dx, y + dy, z + dz) === F) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * (A cada 1 s) Os ovos perto de uma fogueira contam o tempo. O progresso
+   * (1 a 15) vai no estado do bloco: assim todo mundo vê as faíscas e ouve
+   * os estalos. Em 300 s nasce o filhote, já com o dono.
+   */
+  _atualizarOvos(dt) {
+    if (this._ovos.size === 0) return;
+    this._tOvos += dt;
+    if (this._tOvos < 1) return;
+    const passo = this._tOvos;
+    this._tOvos = 0;
+    const total = CONFIG.OVO_TEMPO_CHOCAR_S;
+    for (const [chave, o] of this._ovos) {
+      if (!this.mundo.estaPronto(o.x, o.z)) continue; // ninguém por perto: espera
+      if (this.mundo.obterBloco(o.x, o.y, o.z) !== B.OVO_DRAGAO) { this._ovos.delete(chave); continue; }
+      const quente = this._fogueiraPerto(o.x, o.y, o.z);
+      if (quente) o.tempo += passo;
+      if (o.tempo >= total) { this._chocar(chave, o); continue; }
+      const nivel = quente ? Math.max(1, Math.min(15, 1 + Math.floor(o.tempo / total * 14))) : 0;
+      const atual = typeof this.mundo.obterEstado === 'function' ? this.mundo.obterEstado(o.x, o.y, o.z) : nivel;
+      if (nivel !== atual) this.mundo.definirBloco(o.x, o.y, o.z, B.OVO_DRAGAO, 'local', nivel);
+    }
+  }
+
+  _chocar(chave, o) {
+    this._ovos.delete(chave);
+    this.mundo.definirBloco(o.x, o.y, o.z, B.AR, 'local', 0);
+    const id = this.criarMob('filhote_dragao', o.x + 0.5, o.y, o.z + 0.5, Math.random() * Math.PI * 2, { dono: o.dono });
+    const m = id ? this.porId.get(id) : null;
+    if (m) {
+      this._emitirCoracoes(m, 16);
+      this._enviarDono(m, true);
+    }
+    if (this.som && typeof this.som.chocar === 'function' && this._pertoDeMim(o.x, o.y, o.z, 24)) this.som.chocar();
+    this._avisarDono(o.dono, 'Nasceu um filhote de dragão! Ele é seu. Coloque uma sela para montar.');
+  }
+
+  // ----- Salvar (anfitrião) -----
+
+  /** Montarias e pets domados para o save: [{ tipo, dono, variante, sela, armadura, vida, pos, yaw, sentado, desmaiado? }] */
+  exportarMontarias() {
+    const l = [];
+    for (let i = 0; i < this.lista.length; i++) {
+      const m = this.lista[i];
+      if (!m.dono || m.morrendo || m.descartar) continue;
+      const d = {
+        tipo: m.tipo, dono: m.dono, variante: m.variante, sela: !!m.sela, armadura: m.armadura || null,
+        vida: m.desmaiado > 0 ? 1 : Math.round(m.vidaFrac * 1000) / 1000,
+        pos: [m.x, m.y, m.z], yaw: m.yaw, sentado: !!m.sentado,
+      };
+      if (m.desmaiado > 0) d.desmaiado = Math.ceil(m.desmaiado);
+      l.push(d);
+    }
+    return l;
+  }
+
+  /** Recria as montarias e pets salvos (só no anfitrião/sozinho). Devolve quantas. */
+  carregarMontarias(lista) {
+    if (!this.autoridade || !Array.isArray(lista)) return 0;
+    let n = 0;
+    for (const d of lista.slice(0, 64)) {
+      if (!d || typeof d !== 'object' || !TIPOS_MOB[d.tipo] || typeof d.dono !== 'string' || !d.dono || d.dono.length > 40) continue;
+      const p = d.pos;
+      if (!Array.isArray(p) || p.length !== 3 || !p.every(Number.isFinite)) continue;
+      const id = this.criarMob(d.tipo, p[0], p[1], p[2], Number.isFinite(d.yaw) ? d.yaw : 0, {
+        variante: Number.isFinite(d.variante) ? d.variante : 0, dono: d.dono, sela: d.sela === true,
+        armadura: typeof d.armadura === 'string' ? d.armadura : null, vida: d.vida, sentado: d.sentado === true,
+      });
+      if (!id) continue;
+      n++;
+      if (Number.isFinite(d.desmaiado) && d.desmaiado > 0) {
+        const m = this.porId.get(id);
+        m.desmaiado = Math.min(CONFIG.DESMAIO_S, d.desmaiado);
+        m.vida = 0;
+      }
+    }
+    return n;
+  }
+
+  /** Ovos chocando, para o save: [{ x, y, z, dono, tempo }] */
+  exportarOvos() {
+    const l = [];
+    for (const o of this._ovos.values()) l.push({ x: o.x, y: o.y, z: o.z, dono: o.dono, tempo: Math.floor(o.tempo) });
+    return l;
+  }
+
+  carregarOvos(lista) {
+    this._ovos.clear();
+    if (!Array.isArray(lista)) return;
+    for (const o of lista.slice(0, 256)) {
+      if (!o || !Number.isInteger(o.x) || !Number.isInteger(o.y) || !Number.isInteger(o.z) || typeof o.dono !== 'string') continue;
+      const tempo = Number.isFinite(o.tempo) ? Math.max(0, Math.min(CONFIG.OVO_TEMPO_CHOCAR_S, o.tempo)) : 0;
+      this._ovos.set(o.x + ',' + o.y + ',' + o.z, { x: o.x, y: o.y, z: o.z, dono: o.dono.slice(0, 40), tempo });
+    }
+  }
+
+  // ----- Desenho -----
+
+  /** O nome do dono acima do bicho (só perto, e não na montaria em que EU estou montado) */
+  _atualizarEtiqueta(m, dist) {
+    const mostrar = !!m.dono && dist < DIST_ETIQUETA && !m.morrendo &&
+      !(m.montadoPor && m.montadoPor === this._idLocal());
+    if (!mostrar) { if (m.etiqueta) m.etiqueta.visible = false; return; }
+    if (!m.etiqueta || m.etiquetaTexto !== m.nomeDono) {
+      if (m.etiqueta) {
+        if (m.etiqueta.parent) m.etiqueta.parent.remove(m.etiqueta);
+        m.etiqueta.material.map.dispose();
+        m.etiqueta.material.dispose();
+      }
+      m.etiqueta = criarSpriteTexto(m.nomeDono);
+      m.etiquetaTexto = m.nomeDono;
+      if (this.scene) this.scene.add(m.etiqueta);
+    }
+    m.etiqueta.visible = true;
+    m.etiqueta.position.set(m.x, m.y + m.def.altura + (m.montadoPor ? 1.4 : 0.45), m.z);
+  }
+
+  /**
+   * (Todo quadro, DEPOIS de remotos.atualizar) Põe cada cavaleiro sentado no
+   * assento da montaria: o meu boneco (na 3ª pessoa) e os dos outros jogadores.
+   * Os bonecos dos outros ficam na posição que a rede mandou (nos pés da
+   * montaria); aqui eles sobem para o assento, com as pernas para a frente.
+   */
+  posicionarCavaleiros(remotos, personagemLocal) {
+    const eu = this._idLocal();
+    const v = this._vAssento;
+    for (let i = 0; i < this.lista.length; i++) {
+      const m = this.lista[i];
+      if (!m.montadoPor || !m.modelo || m.descartar || m.morrendo) continue;
+      let pers = null, etiqueta = null, subir = 0;
+      if (m.montadoPor === eu) {
+        if (!personagemLocal || !personagemLocal.grupo || !personagemLocal.grupo.visible) continue;
+        pers = personagemLocal;
+      } else {
+        const r = remotos && remotos.remotos ? remotos.remotos.get(m.montadoPor) : null;
+        if (!r || !r.personagem) continue;
+        pers = r.personagem;
+        etiqueta = r.etiqueta;
+        subir = r.subirEtiqueta || 0;
+      }
+      const mod = m.modelo;
+      if (mod.assento && mod.assento !== mod.grupo) {
+        mod.grupo.updateMatrixWorld(true);
+        mod.assento.getWorldPosition(v);
+      } else {
+        v.set(m.x, m.y + m.def.altura * 0.75, m.z);
+      }
+      pers.grupo.position.set(v.x, v.y - QUADRIL_JOGADOR, v.z);
+      pers.grupo.rotation.y = m.yaw;
+      // Sentado: pernas para a frente e um pouco abertas; braços segurando as rédeas
+      if (pers.pivoPernaD && pers.pivoPernaE) {
+        pers.pivoPernaD.rotation.x = 1.35; pers.pivoPernaE.rotation.x = 1.35;
+        pers.pivoPernaD.rotation.z = 0.28; pers.pivoPernaE.rotation.z = -0.28;
+      }
+      if (pers.pivoBracoE) pers.pivoBracoE.rotation.x = 0.7;
+      if (pers.pivoBracoD && !(pers._golpe >= 0)) pers.pivoBracoD.rotation.x = 0.7;
+      if (etiqueta && etiqueta.sprite) etiqueta.sprite.position.set(v.x, v.y - QUADRIL_JOGADOR + 2.15 + subir, v.z);
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Rede: anfitrião → clientes
   // ------------------------------------------------------------------
 
@@ -3261,13 +4539,13 @@ export class Mobs {
     r.enviarEstadoMobs(agora, buf.subarray(0, n * CAMPOS_REDE));
   }
 
-  /** Lista para o `bemvindo` de quem entra: [[id, tipo, x, y, z, yaw, vida], ...] */
+  /** Lista para o `bemvindo` de quem entra: [[id, tipo, x, y, z, yaw, vida, extra], ...] (extra: Fase 11) */
   exportarParaRede() {
     const l = [];
     for (let i = 0; i < this.lista.length && l.length < MAX_MOBS_REDE; i++) {
       const m = this.lista[i];
       if (m.morrendo || m.descartar) continue;
-      l.push([m.id, m.tipo, m.x, m.y, m.z, m.yaw, m.vidaFrac]);
+      l.push([m.id, m.tipo, m.x, m.y, m.z, m.yaw, m.vidaFrac, this._extraRede(m)]);
     }
     return l;
   }
@@ -3276,19 +4554,21 @@ export class Mobs {
   // Rede: cliente (recebe do anfitrião)
   // ------------------------------------------------------------------
 
-  /** Um mob nasceu (ou já existia quando entrei) */
-  receberNovo(id, tipo, x, y, z, yaw, vida = 1) {
+  /** Um mob nasceu (ou já existia quando entrei). `extra` (Fase 11): { v, dono, sela, arm, mont, sent } */
+  receberNovo(id, tipo, x, y, z, yaw, vida = 1, extra = null) {
     if (this.autoridade) return;
     let m = this.porId.get(id);
-    if (m && (m.tipo !== tipo || m.morrendo)) {
+    const v = extra && Number.isFinite(extra.v) ? extra.v : 0;
+    if (m && (m.tipo !== tipo || m.morrendo || m.variante !== v)) {
       // Id reaproveitado com outro tipo (muito raro): troca
       m.descartar = true;
       m = null;
     }
     if (!m) {
-      m = this._novo(id, tipo, x, y, z, yaw || 0, Math.max(0, Math.min(1, vida)));
+      m = this._novo(id, tipo, x, y, z, yaw || 0, Math.max(0, Math.min(1, vida)), v);
       if (!m) return;
     }
+    if (extra) this.receberDono(id, extra);
     this._guardarPosicao(m, this._offset === null ? NaN : performance.now() - this._offset, x, y, z, yaw || 0);
   }
 
@@ -3387,6 +4667,11 @@ export class Mobs {
     if (m.histProvisorio) { m.nHist = 0; m.histProvisorio = false; }
     let n = m.nHist;
     if (n > 0 && t <= h[(n - 1) * 5]) return; // fora de ordem ou repetida
+    // Pulou longe de uma vez (apito, voltou para casa): recomeça daqui, sem deslizar pelo caminho
+    if (n > 0) {
+      const k0 = (n - 1) * 5, ddx = x - h[k0 + 1], ddy = y - h[k0 + 2], ddz = z - h[k0 + 3];
+      if (ddx * ddx + ddy * ddy + ddz * ddz > 100) n = 0;
+    }
     if (n === HIST) {
       // Cheio: empurra todo mundo uma casa para trás (são só 4 posições)
       h.copyWithin(0, 5, HIST * 5);
@@ -3399,9 +4684,17 @@ export class Mobs {
 
   _interpolarTodos() {
     const tr = this._offset === null ? NaN : performance.now() - this._offset - ATRASO_INTERP_MS;
+    const eu = this._idLocal(), loc = this._local;
     for (let i = 0; i < this.lista.length; i++) {
       const m = this.lista[i];
       if (m.descartar) continue;
+      // A montaria em que EU estou montado vai exatamente onde eu estou (sem o
+      // atraso da rede): quem anda com ela é o meu jogador
+      if (m.montadoPor === eu && loc) {
+        m.x = loc.posicao.x; m.y = loc.posicao.y; m.z = loc.posicao.z;
+        if (Number.isFinite(loc.yaw)) m.yaw = loc.yaw;
+        continue;
+      }
       this._interpolar(m, tr);
     }
   }
@@ -3482,12 +4775,27 @@ export class Mobs {
     } else {
       g.position.set(m.x, m.y, m.z);
     }
-    g.rotation.set(inc * Math.PI / 2, m.yaw, 0);
+    // Fase 11: o cachorro sentado levanta a frente; desmaiado, o bicho deita de lado
+    m.inclinaSentado += (((fl & F_SENTADO) !== 0 ? 1 : 0) - m.inclinaSentado) * Math.min(1, dt * 8);
+    const sent = m.inclinaSentado;
+    if (sent > 0.001) g.position.y += sent * def.altura * 0.12;
+    g.rotation.set(inc * Math.PI / 2 + sent * 0.55, m.yaw, 0);
+    const alvoDeitado = (fl & F_DESMAIADO) !== 0 ? 1 : 0;
+    if (alvoDeitado || m.deitado > 0) {
+      m.deitado += (alvoDeitado - m.deitado) * Math.min(1, dt * 4);
+      if (m.deitado < 0.001) m.deitado = 0;
+      if (mod.raiz && !m.morrendo) {
+        mod.raiz.rotation.z = m.deitado * Math.PI / 2;
+        mod.raiz.position.y = m.deitado * def.raio * 0.7;
+      }
+    }
 
     // Animação (o estado estendido da Fase 8 vai junto: o modelo usa o que conhece)
     const an = m.anim;
     an.atacando = (fl & F_ATACANDO) !== 0;
     an.voando = (fl & F_NO_AR) !== 0;
+    // Montada por mim: o "no ar" vem do meu jogador (as asas do filhote batem na hora)
+    if (m.montadoPor && m.montadoPor === this._idLocal() && this._local) an.voando = !!this._local.noAr;
     an.nadando = (fl & F_NADANDO) !== 0;
     an.pousado = (fl & F_POUSADO) !== 0;
     const cab = an.cabecaAtacando;
@@ -3497,8 +4805,10 @@ export class Mobs {
     // Boca do dragão: abre toda no sopro e um pouco no mergulho (garras)
     const alvoBoca = (fl & F_SOPRANDO) !== 0 ? 1 : (an.atacando ? 0.45 : 0);
     an.boca += (alvoBoca - an.boca) * Math.min(1, dt * 8);
-    mod.animar(dt, m.morrendo ? 0 : m.velAnim, an);
+    mod.animar(dt, m.morrendo || m.deitado > 0.5 ? 0 : m.velAnim, an);
     if (m.morrendo) mod.morrer(m.tMorte);
+    // Nome do dono acima do bicho ("Cavalo de Pai")
+    if (m.dono || m.etiqueta) this._atualizarEtiqueta(m, dist);
 
     // Luz do lugar (a cada 0.25 s): as tochas iluminam os mobs. Tom azulado
     // quando está lento e esverdeado quando está envenenado.

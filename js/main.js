@@ -35,6 +35,13 @@
 //   A TelaForja abre com o botão direito num bloco FORJA (o Jogador cuida do
 //   clique). O XP dos mobs vira nível (jogador.ganharXp), o dano dos mobs pode
 //   trazer um efeito (veneno, lento, fogo) e as forjas perto de você soltam fogo.
+//
+// MONTARIAS E PET (Fase 11)
+//   Quem anda com a montaria é o Jogador (player.js); os Mobs guardam o dono,
+//   a sela e quem está montado. Depois de mover os bonecos dos outros
+//   (remotos.atualizar), mobs.posicionarCavaleiros põe cada cavaleiro sentado
+//   no assento. Os ovos de dragão chocando soltam faíscas (e estalam no fim).
+//   O save (versão 9) guarda as montarias, os pets e os ovos.
 // =====================================================================
 
 import * as THREE from 'three';
@@ -248,7 +255,10 @@ async function iniciar() {
   function salvar() {
     if (!podeSalvar()) return false;
     const ok = salvarJogo({
-      versao: 6,
+      versao: 9,
+      // Fase 11: montarias e pets domados, e os ovos de dragão chocando
+      montarias: jogo.mobs && typeof jogo.mobs.exportarMontarias === 'function' ? jogo.mobs.exportarMontarias() : [],
+      ovos: jogo.mobs && typeof jogo.mobs.exportarOvos === 'function' ? jogo.mobs.exportarOvos() : [],
       baus: jogo.baus.exportar(),
       semente: jogo.semente,
       modificacoes: jogo.mundo.exportarModificacoes(),
@@ -295,7 +305,8 @@ async function iniciar() {
   }
 
   /**
-   * Monta a função `obterJogadores()` dos mobs: [{ id, posicao, local, defesa }].
+   * Monta a função `obterJogadores()` dos mobs: [{ id, apelido, posicao, local, defesa, morto }]
+   * (o meu também tem `yaw` e `noAr`: a montaria em que estou segue o meu jogador).
    * Os objetos são reaproveitados (nada de lixo no loop). A lista de quem está
    * na sala é relida só a cada 1 s; as posições são lidas a cada chamada.
    */
@@ -306,14 +317,16 @@ async function iniciar() {
     let ultimaLeitura = -Infinity;
     const obter = (id) => {
       let o = cache.get(id);
-      if (!o) { o = { id, posicao: null, local: false, defesa: 0, morto: false }; cache.set(id, o); }
+      if (!o) { o = { id, apelido: '', posicao: null, local: false, defesa: 0, morto: false, yaw: 0, noAr: false }; cache.set(id, o); }
       return o;
     };
     return () => {
       const agora = performance.now();
       if (agora - ultimaLeitura > 1000) {
         ultimaLeitura = agora;
-        ids = rede ? rede.listaJogadores().map((j) => j.id) : [];
+        const l = rede ? rede.listaJogadores() : [];
+        ids = l.map((j) => j.id);
+        for (const j of l) obter(j.id).apelido = j.apelido; // o dono das montarias é o apelido
       }
       lista.length = 0;
       const meuId = rede && rede.meuId ? rede.meuId : 'local';
@@ -322,6 +335,9 @@ async function iniciar() {
       eu.local = true;
       eu.defesa = jogador.bonus ? jogador.bonus.defesa : 0;
       eu.morto = jogador.morto; // o local fica SEMPRE na lista (os mobs usam a posição para som e distância)
+      eu.apelido = rede ? rede.apelido : '';
+      eu.yaw = jogador.yaw;
+      eu.noAr = !jogador.noChao && !jogador.naAgua;
       lista.push(eu);
       for (const id of ids) {
         if (id === meuId) continue;
@@ -495,6 +511,14 @@ async function iniciar() {
     // Se salvar morto, o save guarda a casa (não o lugar da morte)
     jogador.obterPosRenascer = obterCasa;
 
+    // Fase 11: a montaria/pet desmaiado volta para a casa do dono
+    if (mobs) {
+      mobs.obterCasaDe = (apelido) => {
+        if (apelido === rede.apelido) return obterCasa();
+        return rede.casaDe(apelido) || obterCasa();
+      };
+    }
+
     // ----- Vida: ao morrer, mostra a tela e volta para casa com a vida cheia -----
     jogador.atualizarHud(); // corações e barra de XP
     jogador.aoMorrer(() => {
@@ -575,6 +599,36 @@ async function iniciar() {
         const b = lista[Math.floor(Math.random() * lista.length)]; // b = [x, y, z, id]
         const def = BLOCOS[b[3]];
         if (def) particulas.brilhoCristal(b[0] + 0.5, b[1] + 0.5, b[2] + 0.5, def.corXray);
+      }
+    }
+
+    // ----- Ovos de dragão chocando (Fase 11): faíscas e, perto do fim, estalos -----
+    // O anfitrião guarda o progresso no estado do bloco (0 = frio, 1 a 15 = chocando),
+    // então todos os computadores veem o mesmo.
+    let tempoOvos = 0, tempoEstalo = 0;
+    const ehOvo = (id) => id === B.OVO_DRAGAO;
+    function ovosChocando(dt) {
+      tempoOvos += dt;
+      tempoEstalo -= dt;
+      if (tempoOvos < 0.3) return;
+      tempoOvos = 0;
+      if (B.OVO_DRAGAO === undefined || typeof particulas.emitir !== 'function') return;
+      const lista = mundo.blocosProximos(jogador.posicao, 16, ehOvo, 8);
+      if (!lista || lista.length === 0) return;
+      for (const b of lista) {
+        const nivel = typeof mundo.obterEstado === 'function' ? mundo.obterEstado(b[0], b[1], b[2]) : 0;
+        if (!nivel) continue;
+        // quanto mais perto de nascer, mais faíscas
+        particulas.emitir({
+          x: b[0] + 0.5, y: b[1] + 0.8, z: b[2] + 0.5, qtd: 1 + Math.floor(nivel / 5),
+          cores: ['#ffb02a', '#ff6a1a', '#ffe08a'], velocidade: 0.6, vy: 1, espalhar: 0.4,
+          gravidade: -1, vida: 0.7, tamanho: 0.08, aditivo: true,
+        });
+        const dx = b[0] + 0.5 - jogador.posicao.x, dz = b[2] + 0.5 - jogador.posicao.z;
+        if (nivel >= 13 && tempoEstalo <= 0 && dx * dx + dz * dz < 144) {
+          tempoEstalo = 3 + Math.random() * 2;
+          if (typeof som.chocar === 'function') som.chocar();
+        }
       }
     }
 
@@ -712,6 +766,9 @@ async function iniciar() {
       itensChao.atualizar(dt);
       rede.atualizar(dt);
       remotos.atualizar(dt);
+      // Fase 11: cada cavaleiro (eu na 3ª pessoa e os outros) sentado no assento da montaria
+      if (mobs) mobs.posicionarCavaleiros(remotos, jogador.personagem);
+      if (typeof mundo.blocosProximos === 'function') ovosChocando(dt);
       mundo.atualizar(jogador.posicao);
       ceu.atualizar(dt, camera.position);
       mundo.definirLuzDoDia(ceu.luzDoDia);
@@ -791,6 +848,11 @@ async function iniciar() {
       rede.carregarDadosJogadores(estado && estado.jogadores);
       if (estado && estado.casa) rede.definirCasa(estado.casa); // casa do anfitrião
       comecar();
+      // Fase 11: montarias, pets e ovos de dragão salvos (depois de comecar: os mobs já conhecem os jogadores)
+      if (estado && jogo.mobs) {
+        jogo.mobs.carregarMontarias(estado.montarias);
+        jogo.mobs.carregarOvos(estado.ovos);
+      }
 
       window.addEventListener('beforeunload', salvarSaindo);
       document.addEventListener('visibilitychange', () => {

@@ -41,7 +41,7 @@ Dicas:
 | **V** ou **F5** | trocar a câmera (1ª e 3ª pessoa) |
 | **F3** | informações (debug) |
 | **M** | ligar ou desligar o som |
-| **R** | montar e desmontar (ainda em construção, Fase 11) |
+| **R** | montar e desmontar |
 | **Esc** | pausa |
 
 ---
@@ -216,7 +216,7 @@ A armadura reduz o dano que você recebe: cada ponto de defesa tira 4% do dano, 
 
 ### Montarias e pet
 
-<!-- conferir quando a Fase 11 ficar pronta -->
+
 
 Esta parte ainda está sendo construída (Fase 11).
 

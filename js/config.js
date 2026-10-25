@@ -140,6 +140,22 @@ export const CONFIG = {
   FORJA_RAIO: 12,                // distância máxima (blocos) para sair fogo das forjas
   FORJA_INTERVALO_S: 0.2,        // de quanto em quanto tempo saem fagulhas das forjas
   FORJA_POR_VEZ: 2,              // quantas forjas soltam fogo a cada vez
+
+  // ----- Montarias e pet (Fase 11) -----
+  MONTAR_DIST: 3,                // R monta a SUA montaria até essa distância (blocos)
+  DOMAR_DIST: 4,                 // domando: se afastar mais que isso faz a doma falhar
+  DOMAR_TEMPO_S: 5,              // segundos para a barra de confiança encher
+  DOMAR_OSSO_ESQUECE_S: 30,      // o cachorro esquece os ossos dados se você demorar isso
+  DESMAIO_S: 60,                 // montaria/pet sem vida desmaia e volta para a casa do dono depois disso
+  APITO_DIST_TELEPORTE: 30,      // o apito teleporta quem estiver mais longe que isso
+  FILHOTE_VOO_S: 10,             // o filhote de dragão voa por até 10 s...
+  FILHOTE_RECARGA_S: 20,         // ...e depois descansa 20 s
+  OVO_TEMPO_CHOCAR_S: 300,       // 1 dia de jogo perto de uma fogueira
+  OVO_DIST_FOGUEIRA: 3,          // a fogueira precisa estar a até 3 blocos do ovo
+  PET_DIST_PERTO: 3,             // o cachorro fica a 2–4 blocos do dono...
+  PET_DIST_TELEPORTE: 24,        // ...e teleporta se ficar mais longe que isso
+  PET_DANO: 4,                   // mordida do cachorro
+  LOBO_DANO: 6,                  // mordida do lobo gigante domado
 };
 
 // Duração total de um dia completo (dia + noite), em segundos

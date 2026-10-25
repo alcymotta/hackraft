@@ -89,3 +89,8 @@ Desde a Fase 3, o Claude segue direto até a Fase 11 sem parar a cada fase, como
 - **Chefão da Lua Vermelha:** vai embora de manhã, para a hidra não ficar para sempre do lado da casa.
 - **Criativo:** no modo criativo, os monstros não deixam veneno, lentidão nem fogo.
 - **/luavermelha:** só quem criou a sala pode usar. Se for dia, vira noite.
+## Fase 11 (decisões tomadas)
+- Montarias e pets não levam dano de jogadores nem de poderes. Montado, o golpe de monstro vai para a montaria (a armadura dela tira 6% por ponto).
+- Montado não há dano de queda. Montarias e pets se curam 1 de vida a cada 10 s.
+- O lobo domado protege o dono mesmo sem estar montado.
+- Ao quebrar o ovo de dragão, ele volta como item e o tempo de chocar recomeça.

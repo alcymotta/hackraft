@@ -1909,4 +1909,93 @@ export class InterfaceJogo {
   definirSubmerso(sim) {
     this.elSubmerso.classList.toggle('oculto', !sim);
   }
+
+  // ------------------------------------------------------------------
+  // Fase 11: barra de confiança (domar) e painel da montaria (vida e voo)
+  // ------------------------------------------------------------------
+
+  /** Cria (uma vez, na primeira vez que precisar) os elementos da Fase 11 */
+  _criarElementosFase11() {
+    if (this.elConfianca) return;
+    const estilo = document.createElement('style');
+    estilo.textContent = `
+#barra-confianca { position: fixed; left: 50%; top: calc(50% + 36px); transform: translateX(-50%);
+  width: 190px; z-index: 7; pointer-events: none; text-align: center; white-space: nowrap; }
+#barra-confianca.oculto, #hud-montaria.oculto, #hud-montaria .oculto { display: none; }
+#barra-confianca .conf-nome { font-family: var(--fonte-pixel); font-size: 9px; color: #ffd6e0; margin-bottom: 3px;
+  text-shadow: 1px 1px 0 #3a0f1a, -1px -1px 0 #3a0f1a, 1px -1px 0 #3a0f1a, -1px 1px 0 #3a0f1a; }
+#barra-confianca .conf-caixa { height: 10px; background: rgba(0, 0, 0, 0.6); border: 2px solid #000; box-sizing: border-box; }
+#barra-confianca .conf-enche { height: 100%; width: 0%; background: linear-gradient(#ff9ab4, #e0406a); }
+#hud-montaria { position: fixed; left: calc(50% + var(--tam-espaco, 44px) * 4.5 + 22px); bottom: 14px; width: 150px;
+  z-index: 6; pointer-events: none; text-align: left; white-space: nowrap; }
+#hud-montaria .mont-nome { font-family: var(--fonte-pixel); font-size: 9px; color: #ffe9a8; margin-bottom: 3px;
+  text-shadow: 1px 1px 0 #3f2f0f, -1px -1px 0 #3f2f0f, 1px -1px 0 #3f2f0f, -1px 1px 0 #3f2f0f; }
+#hud-montaria .mont-caixa { height: 9px; margin-top: 3px; background: rgba(0, 0, 0, 0.6); border: 2px solid #000; box-sizing: border-box; }
+#hud-montaria .mont-vida { height: 100%; width: 100%; background: linear-gradient(#ff6a6a, #b81c1c); }
+#hud-montaria .mont-voo { height: 100%; width: 100%; background: linear-gradient(#ffd23f, #ff7a1a); }
+#hud-montaria .mont-voo.descansando { background: linear-gradient(#9a9a9a, #5a5a5a); }
+`;
+    document.head.appendChild(estilo);
+
+    const conf = document.createElement('div');
+    conf.id = 'barra-confianca';
+    conf.className = 'oculto';
+    conf.innerHTML = '<div class="conf-nome"></div><div class="conf-caixa"><div class="conf-enche"></div></div>';
+    document.body.appendChild(conf);
+    this.elConfianca = conf;
+    this.elConfiancaNome = conf.querySelector('.conf-nome');
+    this.elConfiancaEnche = conf.querySelector('.conf-enche');
+
+    const mont = document.createElement('div');
+    mont.id = 'hud-montaria';
+    mont.className = 'oculto';
+    mont.innerHTML = '<div class="mont-nome"></div><div class="mont-caixa"><div class="mont-vida"></div></div>' +
+      '<div class="mont-caixa mont-voo-caixa"><div class="mont-voo"></div></div>';
+    document.body.appendChild(mont);
+    this.elMontaria = mont;
+    this.elMontariaNome = mont.querySelector('.mont-nome');
+    this.elMontariaVida = mont.querySelector('.mont-vida');
+    this.elMontariaVooCaixa = mont.querySelector('.mont-voo-caixa');
+    this.elMontariaVoo = mont.querySelector('.mont-voo');
+    this._montariaMostrada = '';
+  }
+
+  /**
+   * Barra de "confiança" embaixo da mira enquanto você doma um bicho.
+   * `frac` de 0 a 1 mostra (com `nome`, ex.: "Cavalo"); null esconde.
+   */
+  mostrarConfianca(frac, nome = '') {
+    this._criarElementosFase11();
+    if (frac === null || frac === undefined || !Number.isFinite(frac)) {
+      if (!this.elConfianca.classList.contains('oculto')) this.elConfianca.classList.add('oculto');
+      return;
+    }
+    const texto = 'Confiança' + (nome ? ' do ' + nome : '');
+    if (this.elConfiancaNome.textContent !== texto) this.elConfiancaNome.textContent = texto;
+    this.elConfianca.classList.remove('oculto');
+    this.elConfiancaEnche.style.width = (Math.max(0, Math.min(1, frac)) * 100).toFixed(0) + '%';
+  }
+
+  /**
+   * Painel da montaria acima da hotbar (só montado). info = { nome, vida (0 a 1),
+   * voo: null | { frac (0 a 1), descansando } } (o voo é do filhote de dragão), ou null para esconder.
+   */
+  mostrarMontaria(info) {
+    this._criarElementosFase11();
+    if (!info) {
+      if (!this.elMontaria.classList.contains('oculto')) this.elMontaria.classList.add('oculto');
+      return;
+    }
+    this.elMontaria.classList.remove('oculto');
+    const nome = info.nome || '';
+    if (nome !== this._montariaMostrada) { this._montariaMostrada = nome; this.elMontariaNome.textContent = nome; }
+    const v = Math.max(0, Math.min(1, Number.isFinite(info.vida) ? info.vida : 1));
+    this.elMontariaVida.style.width = (v * 100).toFixed(0) + '%';
+    const voo = info.voo;
+    this.elMontariaVooCaixa.classList.toggle('oculto', !voo);
+    if (voo) {
+      this.elMontariaVoo.style.width = (Math.max(0, Math.min(1, voo.frac)) * 100).toFixed(0) + '%';
+      this.elMontariaVoo.classList.toggle('descansando', !!voo.descansando);
+    }
+  }
 }

@@ -686,3 +686,9 @@ Nomes: `espada_<material>`, `capacete_<material>` etc. Itens existentes continua
 - `rede.definirLuaVermelha(bool)` (só no anfitrião), `rede.luaVermelha`; `CONFIG.CHANCE_LUA_VERMELHA`; comando `/luavermelha`.
 - As áreas especiais ficam a pelo menos 128 blocos do início.
 - Partículas no corpo do jogador não são emitidas em 1ª pessoa.
+**Como ficou a Fase 11 (protocolo versão 8, save versão 9):**
+- Cliente→anfitrião (máx. 8 pedidos/s): `domar { id, item }`, `montar { id }`, `desmontar`, `equiparMontaria { id, item }`, `apito`, `sentar { id }`.
+- Anfitrião→clientes: `donoMob { id, dono, sela, arm, mont, sent, novo }`, `domarEstado` (só quem doma), `avisoMob { texto }`.
+- `mobNovo` e o `bemvindo` levam `extra = { v, dono, sela, arm, mont, sent }`. Flags dos mobs: 17 domado, 18 montado, 19 sentado, 20 desmaiado.
+- A `pos` de quem está montado é a da montaria. Save 9: `montarias` e `ovos` (progresso do ovo no estado do bloco, 1 a 15).
+- Mobs: `interagir`, `montar`, `desmontar`, `montariaPerto`, `apito`, `exportarMontarias/carregarMontarias`, `exportarOvos/carregarOvos`. UI: `mostrarConfianca(frac, nome)`, `mostrarMontaria(info)`.
