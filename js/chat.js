@@ -52,10 +52,14 @@ export class Chat {
     // T e / abrem o chat (só quando se está jogando)
     window.addEventListener('keydown', (e) => this._teclaGlobal(e));
 
-    // Soltou o mouse (pausa, Esc): fecha o chat
-    document.addEventListener('pointerlockchange', () => {
+    // Soltou o mouse (pausa, Esc): fecha o chat.
+    // ui.aoMudarTravamento avisa no PC e no celular (lá não existe
+    // 'pointerlockchange'); sem ele, escutamos o evento do navegador.
+    const aoSoltar = () => {
       if (this._aberto && this.ui && !this.ui.mouseTravado) this.fechar();
-    });
+    };
+    if (this.ui && typeof this.ui.aoMudarTravamento === 'function') this.ui.aoMudarTravamento(aoSoltar);
+    else document.addEventListener('pointerlockchange', aoSoltar);
 
     // Faz o jogador parar de andar e ignorar cliques enquanto o chat está aberto
     if (this.ui && typeof this.ui.adicionarMenuExtra === 'function') {

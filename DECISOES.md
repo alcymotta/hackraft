@@ -103,3 +103,20 @@ Desde a Fase 3, o Claude segue direto até a Fase 11 sem parar a cada fase, como
 - **Raio:** antes de cada raio cair saem faíscas no chão por 0,7 s, para dar tempo de fugir. O arco pula só para jogadores (não para mobs).
 - **Imunidades:** o dragão de gelo não fica lento e o venenoso não se envenena. O de fogo continua como era.
 - **Espada de raio:** +3 de dano em cada golpe (o "choque").
+
+## Fase 12: jogar no celular (a base, feita pelo arquiteto)
+- **Como o jogo sabe que é celular:** ele pergunta ao navegador se o jeito principal de apontar é o dedo. Celular e tablet dizem que sim; o PC (mesmo notebook com tela de toque) diz que não. Para testar no PC, coloque `?toque=1` no fim do endereço. Para forçar o modo PC num tablet com teclado e mouse, use `?toque=0`.
+- **No PC nada muda:** tudo o que é novo só liga no modo toque.
+- **Sem "mouse preso":** no celular uma marcação ("está jogando") faz o papel do mouse preso. Esc, o botão Pausa e trocar de aplicativo levam para a mesma pausa do PC, e o "Continuar" volta para o jogo.
+- **Tela cheia e tela deitada:** ao entrar no jogo e ao tocar em "Continuar", o jogo pede tela cheia e tenta travar a tela na horizontal. O iPhone não deixa fazer nenhum dos dois em páginas, então lá o jogo roda sem isso (é só deitar o celular). No Android funciona no Chrome.
+- **Desempenho no celular:**
+  - a distância de visão cai de 6 para 4 chunks;
+  - o jogo monta 2 chunks por quadro, gastando no máximo 6 ms;
+  - a imagem é desenhada com no máximo 1,25 pixel por ponto da tela. Fica um pouco menos nítida, mas bem mais rápida (as telas dos celulares têm 2 a 4 vezes mais pixels).
+
+  Dá para mudar tudo isso em `js/config.js`, em `TOQUE`.
+- **Celular como anfitrião:** como ele carrega menos mundo em volta, os monstros e animais aparecem numa área menor. Se o filho for para longe, é melhor o PC criar a sala.
+- **Minimapa e F3 desligados no celular:** a tela é pequena e eles cobririam os botões. O botão N liga o minimapa, e a escolha fica salva.
+- **Mouse ignorado no modo toque:** a cada toque, o celular inventa um "movimento de mouse" que faria a câmera pular. Por isso, no modo toque, quem gira a câmera e quebra é só o controle de toque.
+- **Joystick de verdade:** o joystick anda em qualquer direção (não só nas 8 do WASD). Empurrado só um pouco, anda devagar; até o fim, corre. Ele corre sem usar o Shift, porque o Shift também serve para descer voando e para colocar bloco ao lado do baú.
+

@@ -269,10 +269,14 @@ export class TelaAlfaiate {
       else if (e.code === 'Escape') this.fechar(false);
     });
 
-    // Quando abrimos soltando o mouse, a UI mostraria a pausa: escondemos
-    document.addEventListener('pointerlockchange', () => {
+    // Quando abrimos soltando o mouse, a UI mostraria a pausa: escondemos.
+    // ui.aoMudarTravamento avisa no PC e no celular (lá não existe
+    // 'pointerlockchange'), sempre depois de a UI mostrar a pausa.
+    const esconderPausa = () => {
       if (this.aberta && this.ui?.pausaAberta && typeof this.ui._esconderPausa === 'function') this.ui._esconderPausa();
-    });
+    };
+    if (typeof ui?.aoMudarTravamento === 'function') ui.aoMudarTravamento(esconderPausa);
+    else document.addEventListener('pointerlockchange', esconderPausa);
   }
 
   // ------------------------------------------------------------------
@@ -376,13 +380,17 @@ export class TelaAlfaiate {
 
       // Arrastar com o mouse gira o boneco
       let ultimoX = 0;
-      canvas.addEventListener('mousedown', (e) => { p.arrastando = true; ultimoX = e.clientX; e.preventDefault(); });
-      window.addEventListener('mousemove', (e) => {
-        if (!p.arrastando) return;
+      // (pointer events: funcionam igual com mouse e com o dedo no celular)
+      let idDedo = -1;
+      canvas.addEventListener('pointerdown', (e) => { p.arrastando = true; idDedo = e.pointerId; ultimoX = e.clientX; e.preventDefault(); });
+      window.addEventListener('pointermove', (e) => {
+        if (!p.arrastando || e.pointerId !== idDedo) return;
         p.giro += (e.clientX - ultimoX) * SENSIBILIDADE_GIRO;
         ultimoX = e.clientX;
       });
-      window.addEventListener('mouseup', () => { p.arrastando = false; });
+      const soltarGiro = (e) => { if (e.pointerId === idDedo) p.arrastando = false; };
+      window.addEventListener('pointerup', soltarGiro);
+      window.addEventListener('pointercancel', soltarGiro);
     } catch (e) {
       console.warn('Provador do alfaiate indisponível:', e);
     }

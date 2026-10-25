@@ -2,7 +2,9 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Hackraft</title>
   <!-- Ícone da aba: bloquinho de grama pixelado (SVG embutido) -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Crect width='8' height='8' fill='%238b5a2b'/%3E%3Crect width='8' height='3' fill='%234caf3a'/%3E%3Crect y='3' width='1' height='1' fill='%234caf3a'/%3E%3Crect x='3' y='3' width='2' height='1' fill='%234caf3a'/%3E%3Crect x='7' y='3' width='1' height='1' fill='%234caf3a'/%3E%3Crect x='2' y='5' width='1' height='1' fill='%236b4220'/%3E%3Crect x='5' y='6' width='1' height='1' fill='%236b4220'/%3E%3C/svg%3E">
@@ -76,6 +78,8 @@
         </section>
       </div>
       <div class="inv-rodape">
+        <!-- Só no celular: liga o "Shift + clique" (mover a pilha toda) -->
+        <button type="button" class="botao botao-pequeno so-toque btn-mover-tudo">Mover tudo: não</button>
         <button id="btn-limpar-inv" class="botao botao-pequeno botao-perigo">Limpar inventário</button>
       </div>
     </div>
@@ -95,6 +99,9 @@
       <div id="bau-inv-grade" class="grade-espacos"></div>
       <div class="separador separador-curto"></div>
       <div id="bau-inv-hotbar" class="grade-espacos"></div>
+      <div class="inv-rodape">
+        <button type="button" class="botao botao-pequeno so-toque btn-mover-tudo">Mover tudo: não</button>
+      </div>
     </div>
   </div>
 
@@ -223,6 +230,12 @@
         <button id="btn-voltar-menu" class="botao">Voltar ao menu</button>
       </div>
     </div>
+  </div>
+
+  <!-- Aviso do celular em pé (só aparece no modo toque, em retrato) -->
+  <div id="aviso-retrato">
+    <div class="aviso-celular"></div>
+    <p>Gire o celular para horizontal</p>
   </div>
 
   <!-- Carregando -->

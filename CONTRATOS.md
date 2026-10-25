@@ -62,7 +62,7 @@ Este arquivo é a "combinação" entre os módulos: nomes de classes, métodos, 
 - `mostrarCarregando(texto)` / `esconderCarregando()`
 - `mostrarTelaInicial({ aoJogar, aoNovoMundo })`: "Jogar" chama `aoJogar` e trava o mouse
 - `travarMouse()` / `soltarMouse()`
-- `get mouseTravado` → `document.pointerLockElement === canvas`
+- `get mouseTravado` → `document.pointerLockElement === canvas` (no celular, `emJogoToque`: veja a Fase 12)
 - `get menuAberto` → true se o inventário, a pausa ou a tela inicial estiverem abertos
 - Quando o pointer lock é solto sem o inventário aberto, mostra a tela de pausa (Continuar, volume, Novo mundo)
 - `atualizarDebug(texto)`: texto da F3 (só aparece se o debug estiver ligado)
@@ -83,7 +83,7 @@ Este arquivo é a "combinação" entre os módulos: nomes de classes, métodos, 
 - `atualizar(dt)`
 - `teletransportar(x, y, z)`
 - `serializar()` → `{ pos: [x, y, z], yaw, pitch }`; `carregar(dados)`
-- Trata WASD, espaço (pular/nadar), Shift (correr), V ou F5 (câmera; em notebooks o F5 pode ser o "Atualizar" do sistema, que não dá para bloquear) e os botões do mouse. Só age quando `ui.mouseTravado && !ui.menuAberto`.
+- Trata WASD, espaço (pular/nadar), Shift (correr), V ou F5 (câmera; em notebooks o F5 pode ser o "Atualizar" do sistema, que não dá para bloquear) e os botões do mouse. Só age quando `ui.mouseTravado && !ui.menuAberto`. (Fase 12: `girar`, `apertarQuebrar`, `apertarUsar`, `definirMovimentoToque`, `soltarControles`.)
 
 ### save.js
 `salvarJogo(estado)`, `carregarJogo()` → estado ou `null`, `apagarJogo()`. Chave: `CONFIG.CHAVE_SAVE`.
@@ -700,3 +700,77 @@ Nomes: `espada_<material>`, `capacete_<material>` etc. Itens existentes continua
 **world.js:** o ninho tem `elemento` ('fogo' | 'gelo' | 'veneno' | 'raio') em `areasEspeciais`, escolhido por terreno + hash da região; o de fogo ficou igual ao da Fase 8. Exporta `ELEMENTOS_DRAGAO` (o índice é a variante do filhote).
 **mobs.js:** tipos `dragao_gelo`, `dragao_veneno`, `dragao_raio` (registrados por último), mesma IA `'dragao'`; campos novos `elemento`, `sopro`, `imune`. Projéteis novos: `sopro_gelo` (lento + congela água), `sopro_veneno` (veneno + nuvem no chão), `tempestade` (chama `relampago`), `relampago` (0,7 s de aviso, dano 5, arco 3 para quem estiver a até 5 blocos). Vão por `projetilMob`/`projetilFim`. O filhote tem `variantes: 4` (cor do ovo). `/spawn` aceita os nomes novos e o começo do nome bonito.
 **player.js:** `bonus.resistenciaLento` (armadura com `resistencia: 'lento'`). **audio.js:** vozes `dragao_gelo/veneno/raio`, `som.trovao(vol)`, `som.choque()`.
+
+### Fase 12: controles de toque (celular e tablet)
+No celular não existe "mouse preso" (pointer lock). A base abaixo faz o jogo inteiro funcionar com uma flag no lugar dele; o `js/touch.js` (`ControlesToque`) só precisa desenhar os controles e chamar estas funções. **No PC nada muda.**
+
+**config.js**
+- `export const MODO_TOQUE` (boolean, calculado uma vez ao carregar): `matchMedia('(pointer: coarse)').matches`. Na URL, `?toque=1` ou `?touch=1` liga à força (para testar no PC); `?toque=0` ou `?touch=0` desliga à força.
+- `CONFIG.TOQUE`:
+  - `ZONA_MORTA` (0.15): fração do raio do joystick que não anda.
+  - `LIMIAR_CORRER` (0.9): além desta fração do raio, corre.
+  - `RAIO_JOYSTICK_PX` (60).
+  - `SENSIBILIDADE_OLHAR` (0.006 rad/pixel).
+  - `TEMPO_TOQUE_LONGO_MS` (400): toque longo num espaço = botão direito.
+  - `PIXEL_RATIO_MAX` (1.25).
+  - `DISTANCIA_RENDER` (4), `CHUNKS_POR_QUADRO` (2), `ORCAMENTO_CHUNKS_MS` (6).
+  - `TELA_CHEIA` (true): o `travarMouse` pede tela cheia + paisagem.
+- Em `MODO_TOQUE`, o próprio config.js troca `CONFIG.DISTANCIA_RENDER`, `CONFIG.CHUNKS_POR_QUADRO` e `CONFIG.ORCAMENTO_CHUNKS_MS` pelos do `TOQUE` ao carregar. Precisa ser lá porque o world.js e o mobs.js guardam esses números em constantes no momento em que são carregados. Ninguém deve mudar esses três depois.
+
+**ui.js**
+- `emJogoToque` (boolean): no celular faz o papel do pointer lock (true = jogando).
+- `get mouseTravado`: PC → `document.pointerLockElement === canvas`; toque → `emJogoToque`.
+- `travarMouse()` no toque: pede tela cheia (`document.documentElement`) e `screen.orientation.lock('landscape')` (erros e recusas são ignorados; o iPhone não tem nenhum dos dois), liga `emJogoToque`, esconde a pausa e avisa os ouvintes. Faz isso **sempre**, mesmo se já estava jogando.
+- `soltarMouse()` no toque: se estava jogando, desliga `emJogoToque` e faz o mesmo que o `pointerlockchange` faria no PC (mostra a pausa se nenhuma tela estiver aberta e não estiver carregando) e avisa os ouvintes. Se já estava solto, não faz nada (igual ao PC).
+- No toque a mudança acontece **na hora**; no PC ela chega um pouco depois, pelo evento do navegador. Todas as telas marcam "aberta" antes de chamar `soltarMouse`, então tanto faz.
+- `aoMudarTravamento(fn(travado))`: chamado nos dois modos, depois de a UI mostrar ou esconder a pausa, na ordem em que os ouvintes foram registrados. O chat, a forja e o alfaiate usam isso no lugar de `'pointerlockchange'`. **Módulo novo não deve escutar `'pointerlockchange'` direto** (no celular ele nunca acontece).
+- **Esc no toque:** se nenhuma tela da UI tratou o Esc e `emJogoToque` é true, chama `soltarMouse()`, que cai na pausa (com o chat aberto, ele fecha junto).
+- **Botão Pausa do touch.js:** `window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape', key: 'Escape' }))`. Faz exatamente o que o Esc faz: fecha inventário/baú/aparência/forja/alfaiate/chat e mostra a pausa. Para só pausar do jogo, `ui.soltarMouse()` também serve.
+- Aba escondida no toque (trocou de app, apagou a tela): `soltarMouse()` → pausa. No PC isso já acontecia sozinho.
+- O "Continuar" da pausa chama `travarMouse()`: no celular ele volta direto para o jogo.
+
+**player.js**
+- `girar(dx, dy, sensibilidade = CONFIG.SENSIBILIDADE_MOUSE)` → boolean. Gira yaw/pitch (pitch limitado a ±(π/2 − 0.01)). Não faz nada (e devolve false) se `!ativo`. O `mousemove` do PC usa esta função. O toque passa `CONFIG.TOQUE.SENSIBILIDADE_OLHAR` e dx/dy em pixels CSS.
+- `apertarQuebrar(apertado)` → boolean: `botoes[0]` (quebrar/atacar, como o botão esquerdo). Apertar exige `ativo`; soltar vale sempre.
+- `apertarUsar(apertado)` → boolean: `botoes[2]` (colocar/usar/abrir/comer/domar, como o botão direito). Ao apertar: `tempoColocar = 0` e `_cliqueDireito = true` (portas e baús só reagem ao clique). Apertar exige `ativo`; soltar vale sempre. Segurar repete a colocação, como no mouse.
+- `definirMovimentoToque(frente, lado, correr = false)`: joystick analógico, de −1 a 1 (frente > 0 = para frente, lado > 0 = direita). Soma com o WASD. O tamanho do vetor (até 1) é a fração da velocidade; acima de 1 é encurtado (no PC continua igual). `correr` corre **sem Shift**. Chame `(0, 0)` ao soltar o dedo.
+- `soltarControles()`: zera as teclas, os botões e o joystick (sem criar objeto novo).
+- `teclas` continua valendo para os botões de toque (`jogador.teclas.Space = true` para pular/subir/planar; `ShiftLeft` para agachar/descer voando). Leia sempre `jogador.teclas` na hora, sem guardar a referência: o objeto é trocado por `{}` ao morrer, renascer, ser reanimado e quando a janela perde o foco.
+- Em `MODO_TOQUE`, o jogador **ignora** os eventos de mouse do `document` (`mousemove`/`mousedown`/`mouseup`). O celular cria eventos de mouse falsos a cada toque, com `movementX` enorme, que fariam a câmera pular. No modo toque, quem gira e quebra é o touch.js.
+
+**main.js**
+- `renderer.setPixelRatio(min(devicePixelRatio, CONFIG.TOQUE.PIXEL_RATIO_MAX))` no toque (no PC continua ≤ 2).
+- `orientationchange` e `screen.orientation` `'change'` fazem o mesmo ajuste do `resize`, na hora e de novo 300 ms depois (o Safari avisa antes de mudar o tamanho).
+- O minimapa começa desligado no toque, se o jogador nunca escolheu (`localStorage 'hackraft-minimapa'` vazio). O debug (F3) já começa desligado nos dois modos.
+
+**Para o touch.js (sugestões da base)**
+- Só ligar se `MODO_TOQUE`. Não usar pointer lock.
+- `ui.aoMudarTravamento((travado) => { if (!travado) { jogador.soltarControles(); /* e soltar os dedos/joystick */ } })`. Faça o mesmo em `window` `'blur'`.
+- Joystick: `definirMovimentoToque` (de preferência) em vez de `KeyW/A/S/D` + `ShiftLeft`. O Shift também desce voando (voo e filhote de dragão) e, com o botão direito, coloca bloco em vez de abrir o baú, então correr com Shift atrapalha.
+- Olhar: `jogador.girar(dx, dy, CONFIG.TOQUE.SENSIBILIDADE_OLHAR)`.
+- Quebrar: `apertarQuebrar(true/false)` (segurar). Usar: `apertarUsar(true)` no toque, `apertarUsar(false)` ao soltar.
+- Atalhos (E, C, T, Q, R, V, G, N, M): `window.dispatchEvent(new KeyboardEvent('keydown', { code, key }))` e, logo depois, o `'keyup'` com o mesmo `code` (o player marca `teclas[code]`). Para o T, o chat lê `e.key === '/'` só na barra; o `code: 'KeyT'` basta.
+- Nos controles: `preventDefault()` no `pointerdown`/`touchstart`, para o navegador não criar cliques e eventos de mouse falsos nem dar zoom.
+
+**js/touch.js (`ControlesToque`)**
+- `export class ControlesToque`, `new ControlesToque({ ui, jogador, canvas })`. Fora do `MODO_TOQUE` não cria nada (`this.ativo = false`). O main.js cria uma vez em `comecar()` e guarda em `window.jogo.controlesToque`. Não precisa ser chamado no loop: ele se confere sozinho a cada 0,1 s (`setInterval`).
+- Elementos (todos criados por ele, estilo no style.css): `#toque[data-modo]` com `.toque-joy-zona`, `.toque-joy-base`, `.toque-acoes` (Pular, Descer, Quebrar, Usar), `.toque-topo` (Inv., Chat, Poder, Montar, Mais, Pausa), `.toque-mais` e `.toque-fechar`.
+- `data-modo`: `0` escondido (menu/pausa/carregando), `1` jogando (tudo aparece), `2` chat aberto (só a barra de cima, para poder pausar), `3` inventário/baú aberto (só o botão Fechar, que manda a tecla E).
+- Joystick flutuante na metade esquerda (`definirMovimentoToque`, corre acima de `LIMIAR_CORRER`). Olhar: arrastar no canvas ou no botão Quebrar (`girar` com `SENSIBILIDADE_OLHAR`). Pular = `teclas.Space`, Descer = `teclas.ShiftLeft` (só aparece voando ou montado), Quebrar = `apertarQuebrar`, Usar = `apertarUsar`.
+- Atalhos mandam `KeyboardEvent` (`keydown` + `keyup`) no `window` com o `code` (E, T, Q, R, C, V, G, N, M, Escape), dentro do evento `click` do botão: no iPhone o foco do campo do chat só abre se acontecer dentro do próprio toque.
+- Solta tudo (`soltarControles`) ao pausar (`ui.aoMudarTravamento`), em `blur` e em `orientationchange`.
+- main.js também põe a classe `modo-toque` no `body` (liga o CSS do toque e o aviso "Gire o celular para horizontal" em retrato).
+
+**ui.js (toque)**
+- Hotbar da tela: no `MODO_TOQUE` recebe pointer events; tocar num espaço o escolhe e deslizar na horizontal troca de espaço.
+- Espaços do inventário/baú: toque curto = clique esquerdo; segurar `TEMPO_TOQUE_LONGO_MS` = clique direito (andar mais de 12 px cancela, é rolagem). O nome do item aparece enquanto o dedo está lá e some 1,2 s depois.
+- `moverTudoToque` (boolean): botões `.btn-mover-tudo` (só visíveis no toque, no inventário e no baú) ligam e desligam; faz o papel do Shift nos cliques e nas receitas. A forja e o alfaiate usam botões comuns, que já funcionam com toque.
+- Girar o boneco (aparência, inventário e alfaiate) usa pointer events, no PC e no celular.
+- `CONTROLES_TOQUE`: a lista de controles das telas inicial e de pausa no celular.
+
+**Fase 12, correções da revisão**
+- O aviso "Gire o celular" só aparece dentro do jogo: o touch.js põe a classe `jogando-toque` no `body` nos modos 1 e 2. A tela inicial continua usável em pé.
+- Todo o CSS responsivo do celular agora fica sob `body.modo-toque` (o PC com janela estreita não muda). Em `body.modo-toque`: `-webkit-touch-callout:none` e `user-select:none`.
+- Chat no toque fica logo abaixo da barra de atalhos; o selo da sala vai para o canto de cima à esquerda e o minimapa logo abaixo dele.
+- `.inv-rodape` some quando não tem nenhum botão visível (baú no PC).
+- `_ligarHotbarToque` ignora a hotbar escondida (largura 0).

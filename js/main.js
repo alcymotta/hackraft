@@ -45,7 +45,8 @@
 // =====================================================================
 
 import * as THREE from 'three';
-import { CONFIG, CICLO_SEGUNDOS } from './config.js';
+import { CONFIG, CICLO_SEGUNDOS, MODO_TOQUE } from './config.js';
+import { ControlesToque } from './touch.js';
 import { criarTexturas } from './textures.js';
 import { Inventario } from './inventory.js';
 import { Equipamento } from './equipamento.js';
@@ -70,6 +71,10 @@ import { Minimapa } from './minimapa.js';
 import { som } from './audio.js';
 import { B, BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { salvarJogo, carregarJogo, apagarJogo } from './save.js';
+
+// Celular (Fase 12): a classe "modo-toque" liga o CSS próprio do toque
+// (hotbar clicável, chat no topo, aviso "gire o celular", botões "Mover tudo"...)
+if (MODO_TOQUE) document.body.classList.add('modo-toque');
 
 const NOMES_MODO = { sozinho: 'sozinho', anfitriao: 'anfitrião', cliente: 'cliente' };
 const CHAVES_CORES = ['pele', 'cabelo', 'olhos', 'camisa', 'calca', 'sapato'];
@@ -167,18 +172,37 @@ async function iniciar() {
     antialias: false,
     powerPreference: 'high-performance',
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // Celular (modo toque): a tela tem MUITOS pixels (devicePixelRatio 2 a 4)
+  // e o processador é mais fraco. Desenhar com no máximo 1.25 pixel por
+  // ponto da página deixa a imagem um pouco menos nítida, mas o jogo fica
+  // bem mais rápido. (A distância de visão menor do celular já foi aplicada
+  // no config.js, porque o world.js lê esse número assim que é carregado.)
+  const pixelRatioMax = MODO_TOQUE ? CONFIG.TOQUE.PIXEL_RATIO_MAX : 2;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelRatioMax));
   renderer.setSize(window.innerWidth, window.innerHeight);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(
     CONFIG.CAMPO_DE_VISAO, window.innerWidth / window.innerHeight, 0.05, CONFIG.CAMERA_LONGE);
 
-  window.addEventListener('resize', () => {
+  const ajustarTamanho = () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
-  });
+  };
+  window.addEventListener('resize', ajustarTamanho);
+  if (MODO_TOQUE) {
+    // Girar o celular: alguns navegadores (Safari) avisam ANTES de a página
+    // mudar de tamanho, então ajustamos agora e de novo um pouco depois.
+    const aoGirar = () => {
+      ajustarTamanho();
+      setTimeout(ajustarTamanho, 300);
+    };
+    window.addEventListener('orientationchange', aoGirar);
+    if (screen.orientation && typeof screen.orientation.addEventListener === 'function') {
+      screen.orientation.addEventListener('change', aoGirar);
+    }
+  }
 
   // ----- Texturas, inventário, equipamento e interface -----
   // (a tela de carregamento do index.html já começa visível, com "Carregando...")
@@ -605,8 +629,29 @@ async function iniciar() {
     } catch (erro) {
       console.warn('Hackraft: minimapa indisponível.', erro);
     }
+    // Celular: o minimapa começa desligado (a tela é pequena e ele cobriria
+    // os botões). Só se o jogador nunca escolheu: o botão N liga, e a escolha
+    // fica salva pelo próprio minimapa ('hackraft-minimapa'). O debug (F3) já
+    // começa desligado nos dois modos.
+    if (MODO_TOQUE && minimapa && minimapa.visivel) {
+      let escolhido = true;
+      try { escolhido = localStorage.getItem('hackraft-minimapa') !== null; } catch (e) { /* sem localStorage */ }
+      if (!escolhido) minimapa.alternar();
+    }
+
+    // ----- Controles de toque (celular): joystick, botões e atalhos na tela -----
+    // Só existe no MODO_TOQUE; no PC nem é criado. Se falhar, o jogo segue sem eles.
+    let controlesToque = null;
+    if (MODO_TOQUE) {
+      try {
+        controlesToque = new ControlesToque({ ui, jogador, canvas });
+      } catch (erro) {
+        console.warn('Hackraft: controles de toque indisponíveis.', erro);
+      }
+    }
 
     window.jogo = {
+      controlesToque,
       mundo, ceu, jogador, inventario, equipamento, itensChao, ui, som, salvar, rede, remotos,
       renderer, scene, camera, texturas, chat, hacker, particulas, poderes, baus, mobs, telaForja, telaAlfaiate,
       minimapa,

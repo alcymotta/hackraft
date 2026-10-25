@@ -5,6 +5,37 @@
 // Mude um valor, salve e recarregue a página para ver o efeito.
 // =====================================================================
 
+// ---------------------------------------------------------------------
+// Modo toque (celular e tablet) - Fase 12
+// ---------------------------------------------------------------------
+// MODO_TOQUE é true quando o jogo deve usar os controles na tela (joystick e
+// botões) no lugar do teclado, do mouse e do "mouse preso" (pointer lock,
+// que não existe no celular).
+//
+// Como decidimos:
+//   - '(pointer: coarse)' é a pergunta "o dedo é o jeito principal de
+//     apontar?". É true no celular e no tablet, e false no PC (mesmo num
+//     notebook com tela de toque, porque lá o principal é o touchpad/mouse).
+//   - Na barra de endereço, ?toque=1 (ou ?touch=1) liga o modo toque à força,
+//     para testar no PC. ?toque=0 (ou ?touch=0) desliga à força (por exemplo,
+//     num tablet com teclado e mouse).
+// Fica aqui (e não num módulo próprio) porque a distância de visão abaixo
+// precisa mudar ANTES de qualquer outro módulo ler o CONFIG.
+function detectarModoToque() {
+  try {
+    if (typeof location !== 'undefined') {
+      const p = new URLSearchParams(location.search);
+      const forcar = p.get('toque') ?? p.get('touch');
+      if (forcar === '1') return true;
+      if (forcar === '0') return false;
+    }
+    return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  } catch (e) {
+    return false; // navegador estranho: fica no modo PC
+  }
+}
+export const MODO_TOQUE = detectarModoToque();
+
 export const CONFIG = {
   // ----- Dia e noite -----
   DIA_SEGUNDOS: 180,        // duração do dia (3 minutos)
@@ -168,7 +199,31 @@ export const CONFIG = {
   REANIMAR_TOLERANCIA: 1.5,      // folga extra que o anfitrião aceita (atraso da rede)
   REANIMAR_TEMPO_S: 4,           // segundos segurando o botão direito
   REANIMAR_VIDA: 0.5,            // fração da vida máxima com que o jogador volta
+
+  // ----- Controles de toque: celular e tablet (Fase 12) -----
+  // Só valem quando MODO_TOQUE é true (veja lá em cima).
+  TOQUE: {
+    ZONA_MORTA: 0.15,            // joystick: abaixo desta fração do raio, o boneco não anda (evita andar sozinho com o dedo tremendo)
+    LIMIAR_CORRER: 0.9,          // joystick: empurrado além desta fração do raio = correr
+    RAIO_JOYSTICK_PX: 60,        // raio do joystick, em pixels da tela
+    SENSIBILIDADE_OLHAR: 0.006,  // radianos por pixel ao arrastar o dedo para olhar (o mouse usa SENSIBILIDADE_MOUSE)
+    TEMPO_TOQUE_LONGO_MS: 400,   // segurar o dedo num espaço do inventário por isso = clique com o botão direito
+    PIXEL_RATIO_MAX: 1.25,       // nitidez máxima da imagem (menos pixels = mais quadros por segundo no celular)
+    DISTANCIA_RENDER: 4,         // chunks visíveis no celular (no PC é DISTANCIA_RENDER, lá em cima)
+    CHUNKS_POR_QUADRO: 2,        // chunks montados por quadro no celular
+    ORCAMENTO_CHUNKS_MS: 6,      // milissegundos por quadro montando chunks no celular
+    TELA_CHEIA: true,            // ao entrar no jogo, pede tela cheia e tenta travar na horizontal
+  },
 };
+
+// No celular, troca os números de desempenho pelos do TOQUE. Precisa ser
+// aqui: o world.js e o mobs.js guardam a distância de visão em constantes
+// assim que são carregados, antes mesmo do main.js começar a rodar.
+if (MODO_TOQUE) {
+  CONFIG.DISTANCIA_RENDER = CONFIG.TOQUE.DISTANCIA_RENDER;
+  CONFIG.CHUNKS_POR_QUADRO = CONFIG.TOQUE.CHUNKS_POR_QUADRO;
+  CONFIG.ORCAMENTO_CHUNKS_MS = CONFIG.TOQUE.ORCAMENTO_CHUNKS_MS;
+}
 
 // Duração total de um dia completo (dia + noite), em segundos
 export const CICLO_SEGUNDOS = CONFIG.DIA_SEGUNDOS + CONFIG.NOITE_SEGUNDOS;

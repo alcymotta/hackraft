@@ -722,3 +722,261 @@ img { image-rendering: pixelated; }
 }
 #barra-reanimar .trilho { margin-top: 6px; height: 12px; background: rgba(0,0,0,0.6); border: 2px solid #000; }
 #barra-reanimar .enchimento { height: 100%; width: 0%; background: #5bd13a; }
+
+/* =====================================================================
+   Fase 12: celular e tablet (controles de toque)
+   ===================================================================== */
+
+/* Sem puxar-para-atualizar, sem zoom por toque duplo, canvas não rola */
+html, body { overscroll-behavior: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+#tela { touch-action: none; }
+.preview-boneco { touch-action: none; }   /* arrastar gira o boneco (pointer events) */
+
+/* Aviso "gire o celular": só em retrato e só no modo toque (a classe vem do main.js) */
+#aviso-retrato {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 24px;
+  background: #111;
+  color: #fff;
+  text-align: center;
+  font-family: var(--fonte-pixel);
+  font-size: 14px;
+  line-height: 1.7;
+}
+#aviso-retrato .aviso-celular {
+  width: 40px;
+  height: 72px;
+  border: 4px solid #fff;
+  border-radius: 8px;
+  animation: girar-celular 2.4s ease-in-out infinite;
+}
+@keyframes girar-celular {
+  0%, 20% { transform: rotate(0deg); }
+  60%, 100% { transform: rotate(-90deg); }
+}
+@media (orientation: portrait) {
+  /* Só dentro do jogo (classe jogando-toque, do touch.js): a tela inicial continua usável em pé */
+  body.modo-toque.jogando-toque #aviso-retrato { display: flex; }
+}
+
+/* Botões que só existem no celular */
+.so-toque { display: none; }
+body.modo-toque .so-toque { display: inline-block; }
+.botao.ligado { background: #4c8f3a; color: #ffff80; }
+
+/* ---------- Controles na tela (touch.js) ---------- */
+#toque { display: contents; }
+.toque-joy-zona, .toque-joy-dica, .toque-acoes, .toque-topo, .toque-mais, .toque-fechar { display: none; }
+.toque-joy-zona {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: 42vw;
+  height: 62vh;
+  z-index: 5;
+  touch-action: none;
+}
+.toque-joy-dica {
+  position: fixed;
+  left: calc(env(safe-area-inset-left, 0px) + 34px);
+  bottom: 28px;
+  width: 110px;
+  height: 110px;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+  z-index: 5;
+}
+.toque-joy-base {
+  display: none;
+  position: fixed;
+  width: 120px;
+  height: 120px;
+  margin: -60px 0 0 -60px;
+  border: 3px solid rgba(255, 255, 255, 0.55);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  pointer-events: none;
+  z-index: 7;
+}
+.toque-joy-base.ativo { display: block; }
+.toque-joy-base.ativo ~ .toque-joy-dica { display: none !important; }
+.toque-joy-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  transform: translate(-50%, -50%);
+}
+
+.toque-btn {
+  position: fixed;
+  z-index: 7;
+  padding: 0;
+  border: 3px solid rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font: bold 13px var(--fonte-texto);
+  text-shadow: 1px 1px 0 #000;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.toque-btn.ativo { background: rgba(255, 255, 255, 0.4); }
+.toque-quebrar { right: calc(env(safe-area-inset-right, 0px) + 14px); bottom: 90px; width: 78px; height: 78px; }
+.toque-usar    { right: calc(env(safe-area-inset-right, 0px) + 14px); bottom: 178px; width: 64px; height: 64px; }
+.toque-pular   { right: calc(env(safe-area-inset-right, 0px) + 104px); bottom: 34px; width: 72px; height: 72px; }
+.toque-descer  { right: calc(env(safe-area-inset-right, 0px) + 104px); bottom: 116px; width: 56px; height: 56px; }
+
+/* Botões pequenos (barra de cima, painel Mais, Fechar) */
+.toque-btn.toque-mini {
+  position: static;
+  min-width: 46px;
+  height: 40px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.toque-topo {
+  position: fixed;
+  top: max(6px, env(safe-area-inset-top, 0px));
+  right: calc(env(safe-area-inset-right, 0px) + 8px);
+  gap: 6px;
+  z-index: 7;
+}
+.toque-mais {
+  position: fixed;
+  top: calc(max(6px, env(safe-area-inset-top, 0px)) + 46px);
+  right: calc(env(safe-area-inset-right, 0px) + 8px);
+  flex-direction: column;
+  gap: 6px;
+  z-index: 8;
+}
+.toque-mais .toque-mini { width: 100%; }
+.toque-btn.toque-fechar {
+  position: fixed;
+  top: 8px;
+  right: calc(env(safe-area-inset-right, 0px) + 8px);
+  z-index: 45;
+  min-width: 70px;
+  height: 44px;
+  background: rgba(150, 30, 30, 0.85);
+}
+
+/* O que aparece em cada modo (o atributo data-modo é do touch.js) */
+#toque[data-modo="1"] .toque-joy-zona { display: block; }
+#toque[data-modo="1"] .toque-joy-dica { display: block; }
+#toque[data-modo="1"] .toque-acoes { display: contents; }
+#toque[data-modo="1"] .toque-topo,
+#toque[data-modo="2"] .toque-topo { display: flex; }
+#toque[data-modo="1"] .toque-mais { display: flex; }
+#toque[data-modo="2"] .toque-atalho { display: none; }
+#toque[data-modo="3"] .toque-fechar { display: block; }
+.toque-mais.oculto, .toque-btn.oculto { display: none !important; }
+
+/* ---------- Telas e interface no celular (só no modo toque; o PC não muda) ---------- */
+body.modo-toque { --tam-espaco: 44px; }
+body.modo-toque .espaco img { width: 28px; height: 28px; }
+body.modo-toque .espaco .qtd { font-size: 12px; }
+
+/* Sem menu de "copiar/salvar imagem" no toque longo (iPhone) e sem selecionar texto */
+body.modo-toque, body.modo-toque #tela, body.modo-toque .espaco {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Inventário e baú: coluna que rola */
+body.modo-toque .painel-inventario {
+  max-width: 98vw;
+  max-height: 100vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  padding: 10px 12px 12px;
+}
+body.modo-toque .inv-colunas { flex-direction: column; align-items: center; gap: 12px; }
+body.modo-toque .inv-criar { width: 100%; max-width: 420px; }
+body.modo-toque #criar-lista { max-height: 220px; touch-action: pan-y; }
+body.modo-toque .equip-corpo { flex-wrap: wrap; justify-content: center; }
+
+/* Botões, volume e sala cabem em telas estreitas */
+body.modo-toque .botao { min-width: 0; width: min(320px, 88vw); padding: 12px 14px; font-size: 13px; }
+body.modo-toque .botao-pequeno { width: auto; font-size: 12px; }
+body.modo-toque .caixa-sala .botao { width: 100%; }
+body.modo-toque .linha-codigo .botao { width: auto; }
+body.modo-toque .aparencia-botoes .botao { min-width: 0; width: auto; flex: 1; }
+body.modo-toque .linha-volume { flex-wrap: wrap; justify-content: center; }
+body.modo-toque .linha-volume label { font-size: 12px; }
+body.modo-toque .linha-volume input[type=range] { width: min(180px, 40vw); flex: 1 1 120px; }
+body.modo-toque .area-sala { min-width: 0; width: min(300px, 90vw); }
+body.modo-toque .codigo-grande { font-size: clamp(22px, 8vw, 34px); letter-spacing: 4px; }
+body.modo-toque .lista-controles { grid-template-columns: 1fr; font-size: 13px; }
+
+/* Fontes de pelo menos 12px */
+body.modo-toque .titulo-painel { font-size: 12px; }
+body.modo-toque .rotulo-campo, body.modo-toque .paleta-titulo, body.modo-toque .frase-modo,
+body.modo-toque .frase-morte, body.modo-toque .subtitulo { font-size: 12px; }
+body.modo-toque .linha-modos .botao { font-size: 12px; }
+body.modo-toque .equip-rotulo, body.modo-toque .receita-nome, body.modo-toque .lixeira,
+body.modo-toque .caixa-controles h3 { font-size: 12px; }
+body.modo-toque #mensagem { font-size: 12px; white-space: normal; max-width: 70vw; text-align: center; }
+body.modo-toque #nome-item { font-size: 12px; }
+
+/* Hotbar menor, para sobrar lugar para o joystick e os botões */
+body.modo-toque #hud-inferior { --tam-espaco: 38px; bottom: max(6px, env(safe-area-inset-bottom, 0px)); }
+body.modo-toque #hud-inferior .espaco img { width: 24px; height: 24px; }
+body.modo-toque #vida .coracao { width: 16px; height: 16px; }
+body.modo-toque #vida { height: 16px; }
+@media (max-width: 440px) {
+  body.modo-toque { --tam-espaco: 34px; }
+  body.modo-toque .espaco img { width: 22px; height: 22px; }
+}
+
+/* Interface reorganizada para não cobrir os controles */
+body.modo-toque #hotbar { pointer-events: auto; touch-action: none; }
+/* Chat: logo abaixo da barra de atalhos (que fica no topo, à direita) */
+body.modo-toque #chat {
+  top: calc(max(6px, env(safe-area-inset-top, 0px)) + 50px);
+  bottom: auto;
+  left: 112px;
+  width: max(240px, calc(100vw - 112px - 130px));
+  max-width: none;
+  font-size: 13px;
+}
+body.modo-toque #chat .chat-lista { max-height: 24vh; }
+body.modo-toque #chat.aberto .chat-lista { max-height: 20vh; }
+body.modo-toque .chat-campo { font-size: 16px; }   /* 16px evita o zoom automático do iPhone */
+body.modo-toque #debug { top: 140px; left: 8px; font-size: 12px; }
+/* Selo da sala: canto de cima à esquerda, estreito para não chegar nos atalhos */
+body.modo-toque #selo-sala {
+  top: max(6px, env(safe-area-inset-top, 0px));
+  right: auto;
+  left: 8px;
+  max-width: calc(100vw - 420px);
+  font-size: 12px;
+  line-height: 1.4;
+}
+body.modo-toque #minimapa { right: auto; left: 8px; top: 44px; transform: scale(0.6); transform-origin: top left; }
+body.modo-toque .campo { font-size: 16px; }
+body.modo-toque .preview-boneco { cursor: default; }
+/* Rodapé do inventário/baú: só aparece se tiver algum botão visível (no PC fica vazio) */
+.inv-rodape:not(:has(.botao:not(.so-toque))) { display: none; }
+body.modo-toque .inv-rodape { display: flex; }/* Tela inicial em telas estreitas: botões de modo quebram em linhas e o campo do código encolhe */
+body.modo-toque .linha-modos { flex-wrap: wrap; }
+body.modo-toque .linha-modos .botao { flex: 1 1 40%; padding: 8px 4px; }
+body.modo-toque .campo-codigo { min-width: 0; flex: 1; letter-spacing: 2px; }
+body.modo-toque .linha-codigo .botao { flex: none; padding: 10px 8px; }

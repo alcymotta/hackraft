@@ -51,6 +51,7 @@ js/forja.js         forja: fundir, forjar, melhorar, especiais (Fase 9)
 js/alfaiate.js      mesa do alfaiate: costurar e loja (Fase 10)
 js/minimapa.js      minimapa (tecla N)
 js/meteoro.js       /armageddon
+js/touch.js         ControlesToque: joystick, botões e atalhos na tela do celular (Fase 12)
 assets/textures/    PNGs opcionais que substituem as texturas geradas (ver texturas.json)
 assets/sounds/      sons opcionais (ver sons.json)
 CONTRATOS.md        APIs entre módulos, mensagens de rede e formato do save (por fase)
@@ -85,6 +86,7 @@ Os contratos (APIs de cada módulo, mensagens de rede, formato do save, decisõe
 - [x] Fase 9: armas, armaduras, minérios e forja
 - [x] Fase 10: roupas como itens e camadas de equipamento (alfaiate)
 - [x] Fase 11: montarias (e pet)
+- [ ] Fase 12: controles de toque (celular e tablet): base e js/touch.js prontos, falta testar em celular de verdade
 
 ## Pendências técnicas
 - Com a aba do anfitrião escondida, o loop do jogo dele para, e o horário dos clientes para junto.

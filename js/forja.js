@@ -482,10 +482,14 @@ export class TelaForja {
       else if (e.code === 'Escape') this.fechar(false);
     });
 
-    // Quando abrimos soltando o mouse, a UI mostraria a pausa: escondemos
-    document.addEventListener('pointerlockchange', () => {
+    // Quando abrimos soltando o mouse, a UI mostraria a pausa: escondemos.
+    // ui.aoMudarTravamento avisa no PC e no celular (lá não existe
+    // 'pointerlockchange'), sempre depois de a UI mostrar a pausa.
+    const esconderPausa = () => {
       if (this.aberta && this.ui?.pausaAberta && typeof this.ui._esconderPausa === 'function') this.ui._esconderPausa();
-    });
+    };
+    if (typeof ui?.aoMudarTravamento === 'function') ui.aoMudarTravamento(esconderPausa);
+    else document.addEventListener('pointerlockchange', esconderPausa);
   }
 
   // ------------------------------------------------------------------

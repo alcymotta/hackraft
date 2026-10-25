@@ -6,7 +6,7 @@
 // =====================================================================
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js';
+import { CONFIG, MODO_TOQUE } from './config.js';
 import * as MODULO_ITENS from './items.js';
 import { obterItem } from './items.js';
 import { som } from './audio.js';
@@ -87,7 +87,26 @@ const CONTROLES = [
   ['Esc', 'pausa'],
 ];
 
-const TEMPO_NOME_ITEM = 1500;   // ms que o nome do item fica na tela
+// Mesma lista, mas para o celular (modo toque)
+const CONTROLES_TOQUE = [
+  ['Joystick', 'andar (empurre até o fim para correr)'],
+  ['Arrastar', 'olhar ao redor'],
+  ['Quebrar', 'segurar para quebrar ou atacar'],
+  ['Usar', 'colocar bloco, abrir baú ou porta'],
+  ['Pular', 'pular, nadar e subir'],
+  ['Descer', 'descer (voando ou montado)'],
+  ['Hotbar', 'tocar ou deslizar para escolher o item'],
+  ['Inv.', 'inventário e equipamento'],
+  ['Segurar', 'num espaço: dividir pilha (botão direito)'],
+  ['Mover tudo', 'liga o "Shift" no inventário e no baú'],
+  ['Chat', 'conversar e usar comandos'],
+  ['Poder', 'usar cristal de poder'],
+  ['Montar', 'montar ou desmontar'],
+  ['Mais', 'aparência, câmera, largar item, minimapa e som'],
+  ['Pausa', 'pausar o jogo'],
+];
+
+const TEMPO_NOME_ITEM = 1500;  // ms que o nome do item fica na tela
 const TEMPO_MENSAGEM = 3000;    // ms que um aviso fica na tela
 const TEMPO_CONFIRMAR = 3000;   // ms do "Tem certeza?" do Novo mundo
 // Tipos de mundo: nome na tela e explicação curta (tela inicial)
@@ -137,17 +156,22 @@ class PreviewBoneco {
 
     // Arrastar com o mouse gira o boneco
     let ultimoX = 0;
-    canvas.addEventListener('mousedown', (e) => {
+    // (pointer events: funcionam igual com mouse e com o dedo no celular)
+    let idDedo = -1;
+    canvas.addEventListener('pointerdown', (e) => {
       this.arrastando = true;
+      idDedo = e.pointerId;
       ultimoX = e.clientX;
       e.preventDefault();
     });
-    window.addEventListener('mousemove', (e) => {
-      if (!this.arrastando) return;
+    window.addEventListener('pointermove', (e) => {
+      if (!this.arrastando || e.pointerId !== idDedo) return;
       this.giro += (e.clientX - ultimoX) * SENSIBILIDADE_GIRO;
       ultimoX = e.clientX;
     });
-    window.addEventListener('mouseup', () => { this.arrastando = false; });
+    const soltarGiro = (e) => { if (e.pointerId === idDedo) this.arrastando = false; };
+    window.addEventListener('pointerup', soltarGiro);
+    window.addEventListener('pointercancel', soltarGiro);
   }
 
   aplicar(aparencia) {
@@ -195,7 +219,13 @@ export class InterfaceJogo {
     this.aparenciaOrigem = 'jogo';      // 'jogo' ou 'inicial' (de onde a tela C foi aberta)
     this.pausaAberta = false;
     this.inicialAberta = false;
-    this.debugLigado = false;
+    this.debugLigado = false;           // F3 (começa desligado no PC e no celular)
+    // Celular (modo toque, Fase 12): não existe "mouse preso". Esta flag faz o
+    // papel dele: true = jogando, false = numa tela/pausa. Veja travarMouse().
+    this.emJogoToque = false;
+    this.moverTudoToque = false;        // botão "Mover tudo" (faz o papel do Shift no celular)
+    this._temporizadorDicaToque = 0;
+    this._ouvintesTravamento = [];      // funções de aoMudarTravamento
     this.mao = null;                    // pilha "na mão": { item, qtd } ou null
     this.aoNovoMundo = null;            // guardado em mostrarTelaInicial
     this.aoSair = null;                 // idem: "Sair para o menu" da pausa
@@ -254,6 +284,7 @@ export class InterfaceJogo {
     this.previewAparencia = null;
 
     this._montarEspacos();
+    if (MODO_TOQUE) this._ligarHotbarToque();
     this._montarBau();
     this._montarReceitas();
     this._montarEquipamento();
@@ -300,7 +331,10 @@ export class InterfaceJogo {
       el.appendChild(ghost);
     }
     el.append(img, qtd);
-    if (aoClicar) {
+    if (aoClicar && MODO_TOQUE) {
+      // Celular: toque curto = clique esquerdo; segurar = clique direito
+      this._ligarEspacoToque(el, id, aoClicar, fonteDica);
+    } else if (aoClicar) {
       el.addEventListener('mousedown', (e) => {
         e.preventDefault();
         aoClicar(id, e.button, e);
@@ -317,6 +351,105 @@ export class InterfaceJogo {
     }
     // Guardamos o que está desenhado, para só mexer no DOM quando mudar
     return { el, img, qtd, ghost, chave: '' };
+  }
+
+  // ------------------------------------------------------------------
+  // Toque (Fase 12): espaços do inventário/baú e hotbar da tela
+  // ------------------------------------------------------------------
+  // Num espaço do inventário/baú: toque curto = clique esquerdo; segurar
+  // CONFIG.TOQUE.TEMPO_TOQUE_LONGO_MS = clique direito (dividir/colocar 1).
+  // O botão "Mover tudo" (this.moverTudoToque) faz o papel do Shift.
+  // Se o dedo andar (rolar o painel) ou o sistema cancelar, nada acontece.
+  _ligarEspacoToque(el, id, aoClicar, fonteDica) {
+    const tempoLongo = CONFIG.TOQUE.TEMPO_TOQUE_LONGO_MS;
+    let temporizador = 0;
+    let idDedo = -1;
+    let x0 = 0;
+    let y0 = 0;
+    let foiLongo = false;
+    const evFalso = { shiftKey: false };   // reaproveitado: o clique só lê o shiftKey
+
+    const cancelar = () => {
+      clearTimeout(temporizador);
+      temporizador = 0;
+      idDedo = -1;
+    };
+    const agir = (botao) => {
+      evFalso.shiftKey = this.moverTudoToque;
+      aoClicar(id, botao, evFalso);
+      this._mostrarDica(fonteDica);
+    };
+
+    el.addEventListener('pointerdown', (e) => {
+      clearTimeout(this._temporizadorDicaToque);
+      this.fonteDicaAtual = fonteDica;
+      this._mostrarDica(fonteDica);
+      this._moverDicaEMao(e.clientX, e.clientY);
+      if (e.pointerType === 'mouse') {
+        // Testando o modo toque no PC: o mouse age na hora, com o botão e o Shift de verdade
+        e.preventDefault();
+        evFalso.shiftKey = e.shiftKey || this.moverTudoToque;
+        aoClicar(id, e.button, evFalso);
+        this._mostrarDica(fonteDica);
+        return;
+      }
+      if (idDedo !== -1) return;
+      idDedo = e.pointerId;
+      x0 = e.clientX;
+      y0 = e.clientY;
+      foiLongo = false;
+      temporizador = setTimeout(() => {
+        temporizador = 0;
+        foiLongo = true;
+        agir(2);
+      }, tempoLongo);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== idDedo || foiLongo) return;
+      const dx = e.clientX - x0;
+      const dy = e.clientY - y0;
+      if (dx * dx + dy * dy > 144) cancelar();   // andou mais de 12 px: é rolagem, não toque
+    });
+    el.addEventListener('pointerup', (e) => {
+      if (e.pointerId !== idDedo) return;
+      const eraLongo = foiLongo;
+      cancelar();
+      if (!eraLongo) agir(0);
+      // O nome do item some sozinho um pouco depois de levantar o dedo
+      this.fonteDicaAtual = null;
+      clearTimeout(this._temporizadorDicaToque);
+      this._temporizadorDicaToque = setTimeout(() => this._esconderDica(), 1200);
+    });
+    el.addEventListener('pointercancel', cancelar);
+  }
+
+  // Hotbar da tela no celular: tocar num espaço o escolhe; deslizar o dedo
+  // na horizontal vai trocando de espaço
+  _ligarHotbarToque() {
+    const el = this.elHotbar;
+    let idDedo = -1;
+    const escolher = (x) => {
+      const r = el.getBoundingClientRect();
+      if (!r.width) return;   // hotbar escondida: evita conta com zero (NaN)
+      const n = CONFIG.ESPACOS_HOTBAR;
+      let i = Math.floor((x - r.left) / r.width * n);
+      if (i < 0) i = 0;
+      if (i > n - 1) i = n - 1;
+      if (i !== this.inventario.selecionado) this.inventario.selecionar(i);
+    };
+    el.addEventListener('pointerdown', (e) => {
+      if (!this.mouseTravado || this.menuAberto) return;
+      e.preventDefault();
+      idDedo = e.pointerId;
+      try { el.setPointerCapture(e.pointerId); } catch (erro) { /* tudo bem */ }
+      escolher(e.clientX);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (e.pointerId === idDedo) escolher(e.clientX);
+    });
+    const soltar = (e) => { if (e.pointerId === idDedo) idDedo = -1; };
+    el.addEventListener('pointerup', soltar);
+    el.addEventListener('pointercancel', soltar);
   }
 
   _montarEspacos() {
@@ -598,7 +731,7 @@ export class InterfaceJogo {
       el.addEventListener('mousedown', (e) => {
         e.preventDefault();
         if (e.button !== 0) return;
-        this._criarReceita(receita, e.shiftKey);
+        this._criarReceita(receita, e.shiftKey || this.moverTudoToque);
         this._mostrarDica(this.fonteDicaAtual);
       });
       el.addEventListener('mouseenter', () => { this.fonteDicaAtual = fonte; this._mostrarDica(fonte); });
@@ -916,9 +1049,11 @@ export class InterfaceJogo {
   }
 
   _montarControles() {
+    // No celular mostra os controles de toque; no PC, os de teclado e mouse
+    const lista_ = MODO_TOQUE ? CONTROLES_TOQUE : CONTROLES;
     for (const lista of document.querySelectorAll('.lista-controles')) {
       lista.innerHTML = '';
-      for (const [tecla, acao] of CONTROLES) {
+      for (const [tecla, acao] of lista_) {
         const li = document.createElement('li');
         const b = document.createElement('b');
         b.textContent = tecla;
@@ -1419,9 +1554,28 @@ export class InterfaceJogo {
   }
 
   // ------------------------------------------------------------------
-  // Pointer lock
+  // Pointer lock (e o "modo jogo" do celular)
   // ------------------------------------------------------------------
+  // No PC, "jogando" = mouse preso na tela (pointer lock). Quando ele prende
+  // ou solta, o navegador dispara o evento 'pointerlockchange' e
+  // _travamentoMudou() esconde ou mostra a pausa.
+  //
+  // No celular (MODO_TOQUE) não existe mouse preso. Então travarMouse() e
+  // soltarMouse() só ligam/desligam a flag emJogoToque e chamam o MESMO
+  // _travamentoMudou(). Assim o resto do jogo (jogador, chat, forja,
+  // alfaiate) continua perguntando só `ui.mouseTravado` e funciona igual
+  // nos dois. Uma diferença: no PC o evento chega um pouco depois; aqui a
+  // mudança acontece na hora (todas as telas já marcam "aberta" ANTES de
+  // chamar soltarMouse, então tanto faz).
   travarMouse() {
+    if (MODO_TOQUE) {
+      this._pedirTelaCheia();
+      this.emJogoToque = true;
+      // Sempre avisa (mesmo se já estava true): garante que a pausa some
+      // mesmo se alguém a abriu sem passar por soltarMouse().
+      this._travamentoMudou();
+      return;
+    }
     try {
       const p = this.canvas.requestPointerLock();
       // Alguns navegadores devolvem uma Promise; se recusar, mantemos a pausa
@@ -1438,11 +1592,77 @@ export class InterfaceJogo {
   }
 
   soltarMouse() {
+    if (MODO_TOQUE) {
+      // Como no PC: se já estava solto, não acontece nada (nem pausa)
+      if (!this.emJogoToque) return;
+      this.emJogoToque = false;
+      this._travamentoMudou();
+      return;
+    }
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
+  /** true = jogando (PC: mouse preso; celular: flag emJogoToque) */
   get mouseTravado() {
+    if (MODO_TOQUE) return this.emJogoToque;
     return document.pointerLockElement === this.canvas;
+  }
+
+  /**
+   * Registra fn(travado) chamada sempre que o "mouse preso" muda, nos dois
+   * modos (no PC vem do 'pointerlockchange'; no celular, de travarMouse e
+   * soltarMouse). Roda DEPOIS de a UI mostrar/esconder a pausa, na ordem em
+   * que os ouvintes foram registrados. Use no lugar de escutar
+   * 'pointerlockchange' direto, que no celular nunca acontece.
+   */
+  aoMudarTravamento(fn) {
+    if (typeof fn === 'function') this._ouvintesTravamento.push(fn);
+  }
+
+  // O "mouse preso" mudou: esconde ou mostra a pausa e avisa os ouvintes
+  _travamentoMudou() {
+    const travado = this.mouseTravado;
+    if (travado) {
+      // Tira o foco de qualquer campo/controle, para as teclas voltarem ao jogo
+      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+      this._esconderPausa();
+    } else if (!this.inventarioAberto && !this.bauAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta &&
+               this.elCarregando.classList.contains('oculto')) {
+      this._mostrarPausa();
+    }
+    for (let i = 0; i < this._ouvintesTravamento.length; i++) {
+      try { this._ouvintesTravamento[i](travado); } catch (e) { console.error(e); }
+    }
+  }
+
+  /**
+   * Celular: pede tela cheia e tenta deixar a tela deitada (paisagem).
+   * Os navegadores só deixam fazer isso logo depois de um toque do jogador,
+   * e o iPhone nem tem tela cheia para páginas. Por isso tudo fica dentro de
+   * try/catch e os "nãos" do navegador são ignorados: o jogo segue sem.
+   */
+  _pedirTelaCheia() {
+    if (!CONFIG.TOQUE.TELA_CHEIA) return;
+    // A trava de orientação só funciona com a tela cheia ligada (Android)
+    const deitar = () => {
+      try {
+        const o = screen.orientation;
+        if (o && typeof o.lock === 'function') {
+          const p = o.lock('landscape');
+          if (p && typeof p.catch === 'function') p.catch(() => { /* recusou: tudo bem */ });
+        }
+      } catch (e) { /* sem suporte */ }
+    };
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement) { deitar(); return; }
+      // A página inteira (e não só o canvas), para os botões e o HUD aparecerem junto
+      const raiz = document.documentElement;
+      const pedir = raiz.requestFullscreen || raiz.webkitRequestFullscreen;
+      if (typeof pedir !== 'function') return;
+      const p = pedir.call(raiz, { navigationUI: 'hide' });
+      if (p && typeof p.then === 'function') p.then(deitar, () => { /* recusou: segue sem tela cheia */ });
+      else deitar(); // o webkit antigo não devolve Promise
+    } catch (e) { /* navegador recusou: segue sem tela cheia */ }
   }
 
   get menuAberto() {
@@ -1523,6 +1743,9 @@ export class InterfaceJogo {
       campoApelido.value = apelido;
       this._salvarApelido(apelido);
       som.iniciar();
+      // Celular: a tela cheia só é aceita logo depois do toque no botão, e
+      // montar o mundo pode demorar mais que isso. Então pedimos já.
+      if (MODO_TOQUE) this._pedirTelaCheia();
       mostrarStatus('Conectando...');
       ocupar(true);
       try {
@@ -1706,6 +1929,16 @@ export class InterfaceJogo {
       this.limparInventario();
       if (this.aoLimparInventario) this.aoLimparInventario();
     });
+    // Celular: botão "Mover tudo" = Shift + clique (vale para os dois botões, inventário e baú)
+    for (const btn of document.querySelectorAll('.btn-mover-tudo')) {
+      btn.addEventListener('click', () => {
+        this.moverTudoToque = !this.moverTudoToque;
+        for (const b of document.querySelectorAll('.btn-mover-tudo')) {
+          b.classList.toggle('ligado', this.moverTudoToque);
+          b.textContent = this.moverTudoToque ? 'Mover tudo: sim' : 'Mover tudo: não';
+        }
+      });
+    }
     // Lixeira do baú: soltar aqui o item da mão apaga o item
     $('bau-lixeira').addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -1738,18 +1971,24 @@ export class InterfaceJogo {
   // Teclado, mouse e pointer lock
   // ------------------------------------------------------------------
   _ligarEventos() {
-    document.addEventListener('pointerlockchange', () => {
-      if (this.mouseTravado) {
-        // Tira o foco de qualquer campo/controle, para as teclas voltarem ao jogo
-        if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-        this._esconderPausa();
-      } else if (!this.inventarioAberto && !this.bauAberto && !this.aparenciaAberta && !this.inicialAberta && !this.morteAberta &&
-                 this.elCarregando.classList.contains('oculto')) {
-        this._mostrarPausa();
-      }
-    });
+    // PC: o navegador avisa quando o mouse prende/solta (no celular nunca acontece)
+    document.addEventListener('pointerlockchange', () => this._travamentoMudou());
+
+    // Celular: trocar de aplicativo ou apagar a tela = pausa (no PC isso já
+    // acontece sozinho, porque o navegador solta o mouse preso)
+    if (MODO_TOQUE) {
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden && this.emJogoToque) this.soltarMouse();
+      });
+    }
 
     window.addEventListener('mousemove', (e) => this._moverDicaEMao(e.clientX, e.clientY));
+    // Celular: a pilha "na mão" segue o dedo (o mouse falso do toque não manda mousemove)
+    if (MODO_TOQUE) {
+      window.addEventListener('pointermove', (e) => {
+        if (e.pointerType !== 'mouse' && this.mao) this._moverDicaEMao(e.clientX, e.clientY);
+      });
+    }
 
     window.addEventListener('wheel', (e) => {
       if (!this.mouseTravado || this.menuAberto) return;
@@ -1825,6 +2064,10 @@ export class InterfaceJogo {
           if (this.aparenciaAberta) this.fecharAparencia('pausa');
           else if (this.bauAberto) { this.fecharBau(false); this._mostrarPausa(); }
           else if (this.inventarioAberto && this.fecharInventario(false)) this._mostrarPausa();
+          // Celular: sem mouse preso, o navegador não "solta" nada no Esc.
+          // Então o Esc (ou o botão Pausa da tela, que manda um Esc) solta à
+          // mão e cai na mesma pausa do PC. Com o chat aberto, ele fecha junto.
+          else if (MODO_TOQUE && this.emJogoToque) this.soltarMouse();
           break;
       }
     });

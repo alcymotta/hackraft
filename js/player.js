@@ -27,7 +27,7 @@
 // =====================================================================
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js';
+import { CONFIG, MODO_TOQUE } from './config.js';
 import { B, BLOCOS, SOLIDO, LIQUIDO } from './blocks.js';
 import { obterItem, TABELA_PRESENTE } from './items.js';
 import { MaoPrimeiraPessoa } from './character.js';
@@ -137,6 +137,10 @@ export class Jogador {
     // Entrada
     this.teclas = {};                  // event.code → true se apertada
     this.botoes = [false, false, false];
+    // Joystick do celular (Fase 12, definirMovimentoToque): somam com o WASD
+    this._toqueFrente = 0;             // -1 (para trás) a 1 (para frente)
+    this._toqueLado = 0;               // -1 (esquerda) a 1 (direita)
+    this._toqueCorrer = false;         // joystick empurrado até o fim
 
     // Quebrar e colocar
     this.alvoX = 0; this.alvoY = 0; this.alvoZ = 0;
@@ -415,6 +419,81 @@ export class Jogador {
     return !this.morto && this.ui.mouseTravado && !this.ui.menuAberto;
   }
 
+  // ----- Entradas que o mouse e os controles de toque (touch.js) usam -----
+  // O mouse do PC e os dedos do celular chegam aqui pelos mesmos métodos,
+  // para os dois jogarem exatamente igual.
+
+  /**
+   * Gira a câmera: dx/dy = quanto o mouse (ou o dedo) andou, em pixels.
+   * `sensibilidade` = radianos por pixel (o toque passa CONFIG.TOQUE.SENSIBILIDADE_OLHAR).
+   * O pitch (olhar para cima/baixo) para um pouquinho antes da vertical,
+   * senão a câmera "vira de cabeça para baixo". Devolve false se o jogador
+   * não pode agir agora (menu aberto, morto, pausa).
+   */
+  girar(dx, dy, sensibilidade = CONFIG.SENSIBILIDADE_MOUSE) {
+    if (!this.ativo) return false;
+    this.yaw -= dx * sensibilidade;
+    this.pitch -= dy * sensibilidade;
+    if (this.pitch > LIMITE_PITCH) this.pitch = LIMITE_PITCH;
+    if (this.pitch < -LIMITE_PITCH) this.pitch = -LIMITE_PITCH;
+    return true;
+  }
+
+  /**
+   * Segura (true) ou solta (false) o "botão de quebrar/atacar" (o esquerdo
+   * do mouse). Apertar só vale com o jogador ativo; soltar vale sempre,
+   * para o botão nunca ficar preso. Devolve false se o aperto foi ignorado.
+   */
+  apertarQuebrar(apertado) {
+    if (!apertado) { this.botoes[0] = false; return true; }
+    if (!this.ativo) return false;
+    this.botoes[0] = true;
+    return true;
+  }
+
+  /**
+   * Segura (true) ou solta (false) o "botão de colocar/usar" (o direito do
+   * mouse): coloca bloco, abre baú/porta, come, doma... Ao apertar, coloca
+   * na hora (tempoColocar = 0) e marca o clique (_cliqueDireito), porque
+   * portas e baús só reagem ao clique, não a segurar. Soltar vale sempre.
+   */
+  apertarUsar(apertado) {
+    if (!apertado) { this.botoes[2] = false; return true; }
+    if (!this.ativo) return false;
+    this.botoes[2] = true;
+    this.tempoColocar = 0;        // coloca na hora
+    this._cliqueDireito = true;
+    return true;
+  }
+
+  /**
+   * Solta todas as teclas e botões (o touch.js chama ao pausar ou quando a
+   * janela perde o foco, para o boneco não ficar andando sozinho).
+   * Não cria objeto novo: só marca tudo como false.
+   */
+  soltarControles() {
+    for (const codigo in this.teclas) this.teclas[codigo] = false;
+    this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
+    this._toqueFrente = 0;
+    this._toqueLado = 0;
+    this._toqueCorrer = false;
+  }
+
+  /**
+   * Joystick do celular: direção "de verdade" (qualquer ângulo, não só as 8
+   * do WASD). frente e lado vão de -1 a 1 (frente > 0 = para frente,
+   * lado > 0 = para a direita). Empurrar só um pouco anda mais devagar
+   * (o tamanho do vetor, até 1, é a fração da velocidade). `correr` = true
+   * corre sem usar o Shift (no PC o Shift também desce voando e muda o
+   * clique direito no baú; por isso o joystick não deve usar o Shift para
+   * correr). Chame com (0, 0) ao soltar o dedo.
+   */
+  definirMovimentoToque(frente, lado, correr = false) {
+    this._toqueFrente = Number.isFinite(frente) ? frente : 0;
+    this._toqueLado = Number.isFinite(lado) ? lado : 0;
+    this._toqueCorrer = !!correr;
+  }
+
   // ------------------------------------------------------------------
   // Vida (Fase 5)
   // ------------------------------------------------------------------
@@ -584,24 +663,24 @@ export class Jogador {
       this.botoes[0] = this.botoes[1] = this.botoes[2] = false;
     });
 
+    // Mouse do PC. No modo toque ele é ignorado: o celular cria eventos de
+    // mouse "de mentira" a cada toque (com um movementX enorme, do último
+    // toque até este), que fariam a câmera pular e quebrar blocos sozinha.
+    // Lá quem chama girar/apertarQuebrar/apertarUsar é o touch.js.
     document.addEventListener('mousemove', (e) => {
-      if (!this.ativo) return;
-      this.yaw -= e.movementX * CONFIG.SENSIBILIDADE_MOUSE;
-      this.pitch -= e.movementY * CONFIG.SENSIBILIDADE_MOUSE;
-      if (this.pitch > LIMITE_PITCH) this.pitch = LIMITE_PITCH;
-      if (this.pitch < -LIMITE_PITCH) this.pitch = -LIMITE_PITCH;
+      if (MODO_TOQUE) return;
+      this.girar(e.movementX, e.movementY);
     });
 
     document.addEventListener('mousedown', (e) => {
-      if (!this.ativo || e.button > 2) return;
-      this.botoes[e.button] = true;
-      if (e.button === 2) {
-        this.tempoColocar = 0; // coloca na hora
-        this._cliqueDireito = true;
-      }
+      if (MODO_TOQUE) return;
+      if (e.button === 0) this.apertarQuebrar(true);
+      else if (e.button === 2) this.apertarUsar(true);
+      else if (e.button === 1 && this.ativo) this.botoes[1] = true;
     });
 
     document.addEventListener('mouseup', (e) => {
+      if (MODO_TOQUE) return;
       if (e.button <= 2) this.botoes[e.button] = false;
     });
   }
@@ -830,15 +909,21 @@ export class Jogador {
       if (t.KeyS) frente -= 1;
       if (t.KeyD) lado += 1;
       if (t.KeyA) lado -= 1;
+      // Joystick do celular (no PC fica sempre 0)
+      frente += this._toqueFrente;
+      lado += this._toqueLado;
       pulando = !!t.Space;
-      correndo = !!(t.ShiftLeft || t.ShiftRight);
+      correndo = !!(t.ShiftLeft || t.ShiftRight) || this._toqueCorrer;
     }
     const sen = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);
     let dx = -sen * frente + cos * lado;
     let dz = -cos * frente - sen * lado;
+    // Só encurta quando passa de 1 (duas teclas juntas, na diagonal). Com
+    // teclas o tamanho é sempre 0, 1 ou 1.41, então no PC nada muda; com o
+    // joystick, empurrar só um pouco (tamanho < 1) anda mais devagar.
     const comp = Math.hypot(dx, dz);
-    if (comp > 0) { dx /= comp; dz /= comp; }
+    if (comp > 1) { dx /= comp; dz /= comp; }
 
     // Montado (Fase 11): a velocidade, o pulo e a caixa são os da montaria
     const mont = this.montaria ? this.montaria.p : null;
