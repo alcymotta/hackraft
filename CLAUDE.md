@@ -86,7 +86,7 @@ Os contratos (APIs de cada módulo, mensagens de rede, formato do save, decisõe
 - [x] Fase 9: armas, armaduras, minérios e forja
 - [x] Fase 10: roupas como itens e camadas de equipamento (alfaiate)
 - [x] Fase 11: montarias (e pet)
-- [ ] Fase 12: controles de toque (celular e tablet): base e js/touch.js prontos, falta testar em celular de verdade
+- [x] Fase 12: controles de toque (celular e tablet): base e js/touch.js prontos, falta testar em celular de verdade
 
 ## Pendências técnicas
 - Com a aba do anfitrião escondida, o loop do jogo dele para, e o horário dos clientes para junto.
